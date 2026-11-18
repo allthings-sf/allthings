@@ -47,6 +47,10 @@ export interface VisibilityChange {
   readonly guestsOnly: boolean;
 }
 
+/**
+ * What a run did: skipped (no LUMA_API_KEY, with why), or the evenings it
+ * asked about and what it found and wrote.
+ */
 export type VenueVisibility =
   | { readonly _tag: "Skipped"; readonly reason: string }
   | {
@@ -63,6 +67,7 @@ export type VenueVisibility =
       readonly written: number | null;
     };
 
+/** How one run asks and writes. */
 export interface VenueVisibilityOptions {
   /** Plan only: ask Luma, write nothing. */
   readonly dryRun: boolean;
@@ -70,6 +75,7 @@ export interface VenueVisibilityOptions {
   readonly maxEvents?: number;
 }
 
+/** The service: one run of the venue visibility check. */
 export interface LumaVenueVisibilityShape {
   /** Asks Luma and, unless `dryRun`, writes what changed, all or nothing. */
   readonly run: (
@@ -181,6 +187,10 @@ const make = Effect.gen(function* () {
   return LumaVenueVisibility.of({ run });
 });
 
+/**
+ * Keeps `events.venue_guests_only` to Luma's setting for every published
+ * evening not over (see the top of this file).
+ */
 export class LumaVenueVisibility extends Context.Service<
   LumaVenueVisibility,
   LumaVenueVisibilityShape
