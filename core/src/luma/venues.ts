@@ -23,6 +23,11 @@ import { type EventRow, venueColumns } from "./sync.ts";
  * so a venue name an organizer typed stays. A venue written meanwhile is
  * never replaced: the write checks again that it is missing.
  *
+ * With the address it writes Luma's guests-only setting from the same
+ * answer (`events.venue_guests_only`, src/luma/venue-visibility.ts), so an
+ * address it fills is never public before the setting is known, though the
+ * visibility step failed this run or didn't ask about the evening.
+ *
  * Every event written gets the Clock's now as its updated_at. All of Luma's
  * answers are read before the database is written, in one statement: a
  * failure anywhere writes nothing. Without LUMA_API_KEY it does nothing.
@@ -116,6 +121,7 @@ const make = Effect.gen(function* () {
         street_address: fill.venue.streetAddress,
         short_location: fill.venue.shortLocation,
         full_address: fill.venue.fullAddress,
+        guests_only: fill.guestsOnly,
       })),
     );
     const at = DateTime.formatIso(now);
@@ -133,10 +139,11 @@ const make = Effect.gen(function* () {
           street_address = ${fill("street_address")},
           short_location = ${fill("short_location")},
           full_address = ${fill("full_address")},
+          venue_guests_only = c.guests_only,
           updated_at = ${at}::timestamptz
         FROM jsonb_to_recordset(${rows}::jsonb) AS c(
           event_id uuid, street_address text, short_location text,
-          full_address text)
+          full_address text, guests_only boolean)
         WHERE e.id = c.event_id
           AND ${missing("street_address")} AND ${missing("full_address")}
         RETURNING 1

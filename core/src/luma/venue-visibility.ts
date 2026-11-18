@@ -17,7 +17,9 @@ import { LumaApi, type LumaApiError } from "./api.ts";
  * says nothing of the setting, an organizer's venue (`venue_by_organizer`)
  * is still Luma's to hide, and a venue that was public may be hidden later,
  * or shown. An evening over keeps what was last read; its venue shows
- * again whatever it says. Luma alone decides it: nothing else writes it.
+ * again whatever it says. Luma alone decides it: nothing else writes it
+ * but the venue fill (src/luma/venues.ts), which writes Luma's setting
+ * from the same answer as each address it fills.
  *
  * Only evenings whose stored setting differs from Luma's are written, each
  * with the Clock's now as its updated_at. All of Luma's answers are read

@@ -534,8 +534,10 @@ link, no neighborhood. Once the evening is over, its venue shows again in
 full. `src/luma/venue-visibility.ts` keeps Luma's setting in
 `events.venue_guests_only`: the hourly sync asks Luma's API about every
 published evening not over with a Luma page, whatever venue is stored, and
-writes the ones that changed, before the venue fill runs, so a guests-only
-venue it fills in is never shown. Luma alone decides it: an organizer's
+writes the ones that changed, before the venue fill runs; and the fill
+writes Luma's setting with each address it fills, from the same answer, so
+a guests-only venue it fills in is never shown, though the visibility step
+failed or didn't ask about it. Luma alone decides it: an organizer's
 venue (`venue_by_organizer`) is still Luma's to hide. The city is read from
 the address as Luma writes one ("201 Spear St, San Francisco, CA 94105,
 USA"): the part before the state, only when it has no digit and the part

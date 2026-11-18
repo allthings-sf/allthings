@@ -229,6 +229,31 @@ describe("the fill", () => {
     expect((await fill(db)).asked).toEqual([]);
   });
 
+  /** Whether `slug`'s venue is stored as shown to guests only. */
+  const guestsOnly = async (db: PGlite, slug = "2026-11-05-upcoming") =>
+    (
+      await db.query<{ venue_guests_only: boolean }>(
+        "SELECT venue_guests_only FROM events WHERE slug = $1",
+        [slug],
+      )
+    ).rows[0]?.venue_guests_only;
+
+  test("writes Luma's guests-only setting with the address, from the same answer", async () => {
+    const hidden = await database();
+    expect(await guestsOnly(hidden)).toBe(false);
+    await fill(hidden);
+    expect(await guestsOnly(hidden)).toBe(true);
+
+    const shown = await database();
+    await shown.exec(
+      `UPDATE events SET venue_guests_only = true WHERE slug = '2026-11-05-upcoming'`,
+    );
+    await fill(shown, {
+      "evt-upcoming": [answer("evt-upcoming", coderabbit, "public")],
+    });
+    expect(await guestsOnly(shown)).toBe(false);
+  });
+
   test("never fills a venue the organizers keep", async () => {
     const db = await database();
     await db.exec(
@@ -261,6 +286,7 @@ describe("the fill", () => {
     expect(result).toMatchObject({ written: null, asked: 1 });
     expect(formatVenues(result)).toContain("Would fill 1 venue (dry run");
     expect(await venue(db)).toEqual(before);
+    expect(await guestsOnly(db)).toBe(false);
   });
 
   test("lists the events Luma has no address for, or doesn't show us, and writes nothing for them", async () => {
