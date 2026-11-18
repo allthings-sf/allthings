@@ -11,6 +11,7 @@ import {
 } from "allthings-core/src/ingest/media-bucket.ts";
 import { PictureError, Pictures } from "allthings-core/src/ingest/pictures.ts";
 import { LumaApi } from "allthings-core/src/luma/api.ts";
+import { LumaCompanyHosts } from "allthings-core/src/luma/company-hosts.ts";
 import { LumaDescriptions } from "allthings-core/src/luma/descriptions.ts";
 import { Luma } from "allthings-core/src/luma/luma.ts";
 import { LumaSync } from "allthings-core/src/luma/sync.ts";
@@ -29,8 +30,9 @@ import { runSync, syncLimits } from "../src/sync/run.ts";
  * database at DATABASE_URL and Luma itself. It writes nothing. The event
  * sync is rehearsed in a transaction that rolls back, the venue visibility
  * lists which evenings ahead it would mark as keeping their venue to
- * guests, the venue fill lists the venues it would write, the short links
- * it would give are listed, the
+ * guests, the venue fill lists the venues it would write, the hosting
+ * companies it would attach (to the evenings as the rehearsed sync would
+ * leave them) and the short links it would give are listed, the
  * image phases list what they would fetch, so the bucket and the Images
  * binding are never touched (here they refuse), and the description import
  * lists what it would change. It prints a JSON line per step, as the Worker
@@ -83,6 +85,7 @@ const report = await Effect.runPromise(
         LumaVenueVisibility.layer,
         LumaVenues.layer,
         LumaDrafts.layer,
+        LumaCompanyHosts.layer,
         ShortSlugs.layer,
         LumaDescriptions.layer,
         ImageIngest.layer,

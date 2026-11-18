@@ -13,11 +13,14 @@ import {
   mcpPath,
   personPath,
   socials,
+  yearPath,
 } from "../links.ts";
+import { coachPath } from "./coach.tsx";
 import { Document } from "./document.tsx";
 import { gatheringTitle, siteDescription } from "./metadata.tsx";
 import { Portrait } from "./people.tsx";
 import type { ImageMode } from "./picture.tsx";
+import { proposePath } from "./propose.tsx";
 import type { Theme } from "./theme.ts";
 import { ogCards } from "../og/cards.ts";
 import { fullDate, simpleDate } from "./time.ts";
@@ -97,6 +100,18 @@ function SoFar({ about }: { readonly about: AboutView }) {
             <time datetime={DateTime.formatIso(about.first.startsAt)} safe>
               {fullDate(about.first.startsAt)}
             </time>
+            {about.latestYear === undefined ? (
+              ""
+            ) : (
+              <>
+                {" · "}
+                {/* No-break spaces: the link wraps whole, never its arrow alone. */}
+                <a href={yearPath(about.latestYear)}>
+                  {"year by year "}
+                  <span aria-hidden="true">→</span>
+                </a>
+              </>
+            )}
           </p>
         )}
       </>
@@ -318,8 +333,12 @@ export function aboutPage({
                 room takes home, not by who gives it.
               </p>
               <p class="fact-links">
-                <a href={discord}>
-                  pitch a talk on discord <span aria-hidden="true">→</span>
+                <a href={proposePath}>
+                  propose a talk <span aria-hidden="true">→</span>
+                </a>
+                {" · "}
+                <a href={coachPath}>
+                  coach your talk <span aria-hidden="true">→</span>
                 </a>
               </p>
             </>

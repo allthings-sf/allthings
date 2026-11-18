@@ -12,6 +12,8 @@ import { PeopleDirectory } from "allthings-core/src/people-directory.ts";
 import { Portraits } from "allthings-core/src/portraits.ts";
 import { Redirects } from "allthings-core/src/redirects.ts";
 import { Speakers } from "allthings-core/src/speakers.ts";
+import { TalksLibrary } from "allthings-core/src/talks-library.ts";
+import { Year } from "allthings-core/src/year.ts";
 import { Context, Effect, Layer, Option, Redacted } from "effect";
 import { FeedData } from "./seo/data.ts";
 import { V1Data } from "./v1/data.ts";
@@ -30,7 +32,9 @@ export type Repositories =
   | Portraits
   | Redirects
   | Speakers
-  | V1Data;
+  | TalksLibrary
+  | V1Data
+  | Year;
 
 /** What the Worker reads from a Hyperdrive binding. */
 export interface HyperdriveBinding {
@@ -116,7 +120,9 @@ export const repositories: Layer.Layer<Repositories, DataSourceError> =
         Portraits.layer,
         Redirects.layer,
         Speakers.layer,
+        TalksLibrary.layer,
         V1Data.layer,
+        Year.layer,
       ).pipe(Layer.provide(pool)),
     ).pipe(Effect.mapError((cause) => new DataSourceError({ cause }))),
   );

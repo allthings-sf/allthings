@@ -1,15 +1,28 @@
+import { readGuide, toGuide } from "allthings-core/src/guide.ts";
+import {
+  publishedLetters,
+  toLetter,
+  toLetters,
+} from "allthings-core/src/letter.ts";
+import { Year, yearContract } from "allthings-core/src/year.ts";
 import { type Cause, Effect, Layer, Option } from "effect";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { CacheControl } from "../cache.ts";
 import { repositories } from "../database.ts";
+import { mediaOrigin } from "../links.ts";
+import { Site } from "../site.ts";
 import { V1Data } from "./data.ts";
 import { eventDetailsJson, eventJson, speakersJson } from "./json.ts";
 import { isPostgresUuid } from "./uuid.ts";
 
 /**
  * The public v1 API, answering as app/src/app/api/v1/{events,speakers} do:
- * the same paths, status codes, error bodies and response bodies.
+ * the same paths, status codes, error bodies and response bodies. The
+ * years (/api/v1/years and /api/v1/years/:year) are the Worker's own, in
+ * the contract's shape (core's src/contract.ts), as get_year answers, and
+ * so are the letter's (/api/v1/letters and /api/v1/letters/:month), as
+ * get_letter answers.
  */
 
 const respond = (body: unknown, status: number, cacheControl: CacheControl) =>
@@ -97,4 +110,128 @@ const speakers = HttpRouter.add(
   ),
 );
 
-export const v1Routes = Layer.mergeAll(events, eventById, speakers);
+/**
+ * The allthings guide, as the public contract has it (core's src/guide.ts
+ * and src/contract.ts), the same body get_guide answers with. It is new,
+ * so it has no app shape to keep; it reads no database.
+ */
+const guide = HttpRouter.add(
+  "GET",
+  "/api/v1/guide",
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    return yield* respond(
+      toGuide(yield* readGuide, origin),
+      200,
+      CacheControl.publicData,
+    );
+  }),
+);
+
+/**
+ * The letter's published issues, newest first, as the public contract has
+ * them (core's src/letter.ts and src/contract.ts): only those Erik
+ * approved, exactly as he read them. It reads no database.
+ */
+const letters = HttpRouter.add(
+  "GET",
+  "/api/v1/letters",
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    return yield* respond(
+      toLetters(yield* publishedLetters, origin),
+      200,
+      CacheControl.publicData,
+    );
+  }),
+);
+
+const letterNotFound = respond(
+  { error: "Letter not found" },
+  404,
+  CacheControl.notFound,
+);
+
+/**
+ * One published issue by its month, YYYY-MM (`Contract.Letter`), the body
+ * get_letter answers with: not found for a draft, a month without an
+ * issue, or what isn't a month, alike.
+ */
+const letterByMonth = HttpRouter.add(
+  "GET",
+  "/api/v1/letters/:month",
+  Effect.gen(function* () {
+    const { month = "" } = yield* HttpRouter.params;
+    const letter = (yield* publishedLetters).find(
+      (each) => each.month === month,
+    );
+    if (letter === undefined) return yield* letterNotFound;
+    const { origin } = yield* Site;
+    return yield* respond(
+      { letter: toLetter(letter, origin) },
+      200,
+      CacheControl.publicData,
+    );
+  }),
+);
+
+/** Every year with an evening of ours held, latest first. */
+const years = HttpRouter.add(
+  "GET",
+  "/api/v1/years",
+  Effect.gen(function* () {
+    const held = yield* Year.use((year) => year.years);
+    return yield* respond({ years: held }, 200, CacheControl.publicData);
+  }).pipe(
+    Effect.provide(repositories),
+    Effect.catchCause(
+      failure("Error fetching years:", "Failed to fetch years"),
+    ),
+  ),
+);
+
+const yearNotFound = respond(
+  { error: "Year not found" },
+  404,
+  CacheControl.notFound,
+);
+
+/**
+ * A year of our evenings (core's src/year.ts) as the contract has it
+ * (`Contract.Year`): not found for a year without one held, or what isn't
+ * a year.
+ */
+const yearById = HttpRouter.add(
+  "GET",
+  "/api/v1/years/:year",
+  Effect.gen(function* () {
+    const { year: asked = "" } = yield* HttpRouter.params;
+    if (!/^[1-9][0-9]{3}$/.test(asked)) return yield* yearNotFound;
+    const { origin } = yield* Site;
+    const found = yield* Year.use((year) =>
+      year.read(Number(asked), mediaOrigin),
+    );
+    if (Option.isNone(found)) return yield* yearNotFound;
+    return yield* respond(
+      { year: yearContract(found.value, origin) },
+      200,
+      CacheControl.publicData,
+    );
+  }).pipe(
+    Effect.provide(repositories),
+    Effect.catchCause(
+      failure("Error fetching a year:", "Failed to fetch year"),
+    ),
+  ),
+);
+
+export const v1Routes = Layer.mergeAll(
+  events,
+  eventById,
+  speakers,
+  guide,
+  letters,
+  letterByMonth,
+  years,
+  yearById,
+);

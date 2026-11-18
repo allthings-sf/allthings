@@ -78,7 +78,10 @@ export const EventSummary = Schema.Struct({
   }),
   name: Schema.String,
   tagline: Schema.String,
-  url: HttpUrl.annotate({ description: "Event page on allthings.dev." }),
+  url: HttpUrl.annotate({
+    description:
+      "Event page on allthings.dev, at its short link when it has one.",
+  }),
   status: EventStatus,
   startsAt: IsoInstant.annotate({
     description: "Start time as an ISO 8601 UTC instant.",
@@ -116,6 +119,36 @@ export const TalkSpeaker = Schema.Struct({
   links: PersonLinks,
 });
 
+/** A talk's own recording, from where the talk starts. */
+export const TalkRecording = Schema.Struct({
+  url: HttpUrl.annotate({
+    description:
+      "The recording, at the talk's start where the host supports it (YouTube's t parameter).",
+  }),
+  startSeconds: Schema.NullOr(
+    Schema.Int.check(
+      Schema.isGreaterThanOrEqualTo(0),
+      Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+    ),
+  ).annotate({
+    description:
+      "Where the talk starts in a recording of the whole evening, in seconds; null when it starts at the beginning.",
+  }),
+});
+
+/** Something a talk left behind: its slides, code, site or another link. */
+export const TalkArtifact = Schema.Struct({
+  kind: Schema.Literals(["recording", "slides", "repo", "site", "other"]),
+  url: HttpUrl,
+  label: Schema.NullOr(Schema.String).annotate({
+    description: "What the link is, where its kind doesn't say enough.",
+  }),
+  elsewhere: Schema.NullOr(Schema.String).annotate({
+    description:
+      "Where the same talk was given, when the link comes from there and not from our evening.",
+  }),
+});
+
 export const Event = Schema.Struct({
   ...EventSummary.fields,
   talks: Schema.Array(
@@ -123,6 +156,14 @@ export const Event = Schema.Struct({
       title: Schema.String,
       description: Schema.String.annotate({ description: "Plain text." }),
       speakers: Schema.Array(TalkSpeaker),
+      recording: Schema.NullOr(TalkRecording).annotate({
+        description:
+          "The talk's own recording, or null. The evening's recording is recordingUrl.",
+      }),
+      artifacts: Schema.Array(TalkArtifact).annotate({
+        description:
+          "The talk's slides, code, site and other links, in order, including recordings of the same talk given elsewhere.",
+      }),
     }),
   ),
   hosts: Schema.Array(
@@ -161,10 +202,200 @@ export const Community = Schema.Struct({
   }),
 });
 
+const isoDay = new RegExp(`^${isoDate}$`);
+
+/** A day on the calendar, YYYY-MM-DD, as `z.iso.date()` accepts. */
+export const IsoDay = Schema.String.check(
+  Schema.isPattern(isoDay, {
+    expected: "an ISO 8601 calendar day",
+    toJsonSchema: () => ({ format: "date", pattern: isoDay.source }),
+  }),
+);
+
+/** How far a happening in the guide is worth going, as Michelin's stars say it. */
+export const Stars = Schema.Literals([1, 2, 3]).annotate({
+  description:
+    "3: worth a special journey. 2: worth a detour. 1: worth a stop.",
+});
+
+export const GuideEntry = Schema.Struct({
+  id: Schema.String.annotate({
+    description: "Stable identifier; the guide page's anchor.",
+  }),
+  name: Schema.String,
+  stars: Stars,
+  meaning: Schema.String.annotate({
+    description:
+      "What its stars mean: worth a special journey, a detour or a stop.",
+  }),
+  city: Schema.String,
+  organizer: Schema.String.annotate({ description: "Who runs it." }),
+  url: HttpUrl.annotate({ description: "Its official site." }),
+  why: Schema.String.annotate({
+    description: "Why it's worth the trip, in one sentence.",
+  }),
+  next: Schema.NullOr(Schema.Struct({ from: IsoDay, to: IsoDay })).annotate({
+    description:
+      "The next edition's days where it happens, both included, once its organizers announce them and until it ends; null otherwise.",
+  }),
+  guideUrl: HttpUrl.annotate({
+    description: "Its entry in the guide on allthings.dev.",
+  }),
+});
+
+export const Guide = Schema.Struct({
+  about: Schema.String,
+  url: HttpUrl.annotate({ description: "The guide on allthings.dev." }),
+  entries: Schema.Array(GuideEntry).annotate({
+    description:
+      "Three stars first, then two, then one; within each, dated entries soonest first, then the rest by name.",
+  }),
+});
+
+/** A year's tally, as /about counts its own, at that year's evenings. */
+export const YearTally = Schema.Struct({
+  evenings: Schema.Int.annotate({ description: "Our evenings held." }),
+  speakers: Schema.Int.annotate({
+    description: "Distinct people on stage at them.",
+  }),
+  hostingCompanies: Schema.Int.annotate({
+    description: "Distinct companies that hosted them.",
+  }),
+  guests: Schema.Int.annotate({
+    description:
+      "Guests as Luma counted them, at evenings with at least 20; smaller counts are artifacts.",
+  }),
+});
+
+/** One evening of a year, as the year's page shows it. */
+export const YearEvening = Schema.Struct({
+  slug: Schema.String.annotate({
+    description: "Its address on allthings.dev; pass it to get_event.",
+  }),
+  name: Schema.String,
+  topic: Schema.NullOr(Schema.String).annotate({
+    description: "The slot in allthings/<topic>, when it has one.",
+  }),
+  url: HttpUrl.annotate({ description: "Evening page on allthings.dev." }),
+  startsAt: IsoInstant.annotate({
+    description: "Start time as an ISO 8601 UTC instant.",
+  }),
+  neighborhood: Schema.NullOr(Schema.String).annotate({
+    description:
+      "The San Francisco neighborhood, as locals name it, when the venue is a known one.",
+  }),
+  hosts: Schema.Array(Schema.String).annotate({
+    description: "The hosting companies' names, as attached.",
+  }),
+  onStage: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      url: HttpUrl.annotate({ description: "Their page on allthings.dev." }),
+    }),
+  ).annotate({
+    description:
+      "Everyone on stage, each once, in the order they first came on.",
+  }),
+  guests: Schema.NullOr(Schema.Int).annotate({
+    description:
+      "Guests as Luma counted them; null under 20, where a count is an artifact.",
+  }),
+  photo: Schema.NullOr(
+    Schema.Struct({
+      url: HttpUrl,
+      alt: Schema.String,
+      width: Schema.Int,
+      height: Schema.Int,
+    }),
+  ).annotate({
+    description: "The photo that stands for the evening, when it has one.",
+  }),
+});
+
+/** A year of our evenings, looked back on: get_year and /api/v1/years/:year. */
+export const Year = Schema.Struct({
+  year: Schema.Int,
+  url: HttpUrl.annotate({ description: "The year's page on allthings.dev." }),
+  timeZone: Schema.Literal("America/Los_Angeles").annotate({
+    description:
+      "The calendar the year is counted on: an evening belongs to the year it started in there.",
+  }),
+  tally: YearTally,
+  evenings: Schema.Array(YearEvening).annotate({
+    description: "Every evening of ours held in the year, in the order held.",
+  }),
+  years: Schema.Array(Schema.Int).annotate({
+    description: "Every year with an evening of ours held, latest first.",
+  }),
+});
+
+/** One thing a section of the letter tells about. */
+export const LetterItem = Schema.Struct({
+  name: Schema.String,
+  text: Schema.String.annotate({
+    description:
+      "A paragraph on it. Links are written as Markdown links, [words](https://…).",
+  }),
+  url: HttpUrl.annotate({
+    description:
+      "What it is about: an evening's or a talk's page on allthings.dev, a guide entry's official site, or a page elsewhere.",
+  }),
+});
+
+/** One section of the letter, in the letter's order. */
+export const LetterSection = Schema.Struct({
+  key: Schema.Literals([
+    "evenings",
+    "happenings",
+    "openSource",
+    "papers",
+    "jobs",
+  ]),
+  title: Schema.String.annotate({ description: "Its heading." }),
+  items: Schema.Array(LetterItem),
+});
+
+/** An issue of the allthings letter, as Erik approved it: get_letter and /api/v1/letters. */
+export const Letter = Schema.Struct({
+  month: Schema.String.annotate({ description: "The issue's month, YYYY-MM." }),
+  title: Schema.String,
+  url: HttpUrl.annotate({ description: "The issue's page on allthings.dev." }),
+  sections: Schema.Array(LetterSection).annotate({
+    description:
+      "In the letter's order: our next evenings, worth your time, new open source, papers, jobs. A section with nothing in it is left out.",
+  }),
+  closing: Schema.NullOr(Schema.String).annotate({
+    description:
+      "The closing paragraph, with Markdown links; null without one.",
+  }),
+  approvedOn: IsoDay.annotate({
+    description: "The day Erik approved it, in San Francisco.",
+  }),
+});
+
+/** Every published issue of the letter: /api/v1/letters. */
+export const Letters = Schema.Struct({
+  about: Schema.String,
+  url: HttpUrl.annotate({
+    description: "The letter's archive on allthings.dev.",
+  }),
+  letters: Schema.Array(Letter).annotate({
+    description:
+      "Every issue Erik approved, newest first; drafts are never here.",
+  }),
+});
+
 export type EventStatus = typeof EventStatus.Type;
+export type Stars = typeof Stars.Type;
+export type GuideEntry = typeof GuideEntry.Type;
+export type Guide = typeof Guide.Type;
+export type Letter = typeof Letter.Type;
+export type Letters = typeof Letters.Type;
 export type PersonLinks = typeof PersonLinks.Type;
 export type EventSummary = typeof EventSummary.Type;
 export type TalkSpeaker = typeof TalkSpeaker.Type;
 export type Event = typeof Event.Type;
 export type Speaker = typeof Speaker.Type;
 export type Community = typeof Community.Type;
+export type YearEvening = typeof YearEvening.Type;
+export type Year = typeof Year.Type;

@@ -1,6 +1,8 @@
 import { describe, expect } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { apcaContrast, wcagContrast } from "allthings-brand/src/contrast.ts";
+import { guideEntries } from "allthings-core/src/guide.ts";
+import { everyIssue, publishedLetters } from "allthings-core/src/letter.ts";
 import {
   colors,
   contrastRequirements,
@@ -10,7 +12,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Test from "alchemy/Test/Bun";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import { immutable } from "../scripts/build.ts";
+import { immutable, installers } from "../scripts/build.ts";
 import {
   CacheControl,
   PrivateCacheControl,
@@ -450,6 +452,9 @@ describe("links within the site", () => {
   for (const path of [
     "/",
     "/events",
+    "/talks",
+    "/guide",
+    "/year/2025",
     "/people",
     "/people/ada-lovelace",
     "/people/erik-thorelli",
@@ -564,6 +569,85 @@ describe("/about", () => {
       }
     });
   }
+});
+
+describe("/talks", () => {
+  it("lists the talks given at our evenings, cached like public data, each with its speakers, evening and recording", async (url) => {
+    const response = await fetch(`${url}/talks`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.publicData);
+    // The upcoming evening's fireside chat hasn't been given yet.
+    expect(
+      [...html.matchAll(/class="talk-title">([^<]*)</g)].map(([, t]) => t),
+    ).toEqual(["Compilers, together"]);
+    expect(html).toContain(
+      '<a href="/people/grace-hopper">Grace Hopper</a>, <a href="/people/ada-lovelace">Ada Lovelace</a>',
+    );
+    expect(html).toContain(`<a href="/${slugs.past}">`);
+    expect(html).toContain(
+      '<span class="talk-links at-type-meta"><a href="https://youtu.be/sanity">',
+    );
+  });
+
+  it("says plainly when the talks can't be read, and is never cached", async (_, noDatabase) => {
+    const response = await fetch(`${noDatabase}/talks`);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.failure);
+    expect(await htmlProblems(await response.text())).toEqual([]);
+  });
+});
+
+describe("/guide", () => {
+  it("lists every happening in the guide, cached like public data", async (url) => {
+    const response = await fetch(`${url}/guide`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.publicData);
+    const ids = [...html.matchAll(/<li class="guide-entry" id="([^"]+)">/g)];
+    expect(new Set(ids.map(([, id]) => id))).toEqual(
+      new Set(guideEntries.map((entry) => entry.id)),
+    );
+    expect(ids.length).toBe(guideEntries.length);
+  });
+
+  it("is shown without the database, since it reads none, but never stored", async (_, noDatabase) => {
+    const response = await fetch(`${noDatabase}/guide`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.failure);
+    expect(await response.text()).toContain('class="guide-entry"');
+  });
+});
+
+describe("/year/<yyyy>", () => {
+  it("looks back on a year that held one of ours, cached like public data, each evening with who was on stage", async (url) => {
+    const response = await fetch(`${url}/year/2025`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.publicData);
+    expect(html).toContain("<title>2025 in evenings · allthings/_</title>");
+    // Sanity's evening, then the hackathon, in the order they were held.
+    const linked = [
+      ...html.matchAll(/class="year-evening-name"><a href="([^"]+)"/g),
+    ].map(([, href]) => href);
+    expect(linked).toEqual([`/${slugs.past}`, `/${slugs.hackathon}`]);
+    expect(html).toContain('<a href="/people/grace-hopper">Grace Hopper</a>');
+  });
+
+  it("is not found for a year without one of ours held, or what isn't a year", async (url) => {
+    for (const path of ["/year/2099", "/year/1999", "/year/25", "/year/x"]) {
+      const response = await fetch(`${url}${path}`);
+      expect(response.status).toBe(404);
+      expect(response.headers.get("cache-control")).toBe(CacheControl.notFound);
+    }
+  });
+
+  it("says plainly when the year can't be read, and is never cached", async (_, noDatabase) => {
+    const response = await fetch(`${noDatabase}/year/2025`);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.failure);
+    expect(await htmlProblems(await response.text())).toEqual([]);
+  });
 });
 
 describe("names on event pages", () => {
@@ -699,6 +783,21 @@ describe("static assets", () => {
     );
   });
 
+  it("serve the CLI's installers as the repository holds them, as plain text", async (url) => {
+    for (const [published, source] of installers) {
+      const response = await fetch(`${url}/${published}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(
+        "text/plain; charset=utf-8",
+      );
+      expect(response.headers.get("cache-control")).toBe(CacheControl.page);
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await response.text()).toBe(
+        await Bun.file(new URL(`../../${source}`, import.meta.url)).text(),
+      );
+    }
+  });
+
   it("answer a file that isn't there with 404, through the Worker", async (url) => {
     const response = await fetch(`${url}/assets/site.0000000000000000.css`);
     expect(response.status).toBe(404);
@@ -708,10 +807,14 @@ describe("static assets", () => {
 
 describe("every kind of page", () => {
   /** One of each: home, the index, evenings of every kind, people, about,
-   * the brand, the code of conduct, a page that isn't, and one that is gone. */
+   * the brand, the code of conduct, privacy, coaching, proposing a talk, the
+   * letter, a page that isn't, and one that is gone. */
   const paths = [
     "/",
     "/events",
+    "/talks",
+    "/guide",
+    "/year/2025",
     `/${slugs.upcoming}`,
     `/${slugs.live}`,
     `/${slugs.past}`,
@@ -723,6 +826,10 @@ describe("every kind of page", () => {
     "/about",
     "/brand",
     "/code-of-conduct",
+    "/privacy",
+    "/coach",
+    "/propose",
+    "/letter",
     "/no-such-page",
     "/logos/logo-1.91x1.png",
   ];
@@ -740,11 +847,44 @@ describe("every kind of page", () => {
   }
 });
 
+describe("the letter", () => {
+  it("lists only the issues Erik approved, and a draft or an issue that isn't one is not found", async (url) => {
+    const published = await Effect.runPromise(publishedLetters);
+    const index = await (await fetch(`${url}/letter`)).text();
+    expect(
+      [...index.matchAll(/href="\/letter\/(\d{4}-\d{2})"/g)].map(
+        ([, month]) => month,
+      ),
+    ).toEqual(published.map((letter) => letter.month));
+    // A draft is found nowhere: not its page, not the index, not the sitemap.
+    const drafts = everyIssue
+      .map((issue) => issue.month)
+      .filter((month) => !published.some((letter) => letter.month === month));
+    const sitemap = await (await fetch(`${url}/sitemap.xml`)).text();
+    for (const month of drafts) {
+      expect(index).not.toContain(`/letter/${month}`);
+      expect(sitemap).not.toContain(`/letter/${month}`);
+    }
+    for (const path of [
+      "/letter/2026-13",
+      "/letter/nothing",
+      "/letter/1999-01",
+      ...drafts.map((month) => `/letter/${month}`),
+    ]) {
+      const response = await fetch(url + path);
+      expect({ path, status: response.status }).toEqual({ path, status: 404 });
+      await response.arrayBuffer();
+    }
+  });
+});
+
 describe("simple dates", () => {
   /** Every page that dates something: the pages above and the home lab's. */
   const dated = [
     "/",
     "/events",
+    "/talks",
+    "/year/2025",
     `/${slugs.upcoming}`,
     `/${slugs.live}`,
     `/${slugs.past}`,
@@ -756,6 +896,9 @@ describe("simple dates", () => {
     "/about",
     "/brand",
     "/code-of-conduct",
+    "/privacy",
+    "/coach",
+    "/letter",
     labPath,
     ...variants.map(({ name }) => variantPath(name)),
   ];

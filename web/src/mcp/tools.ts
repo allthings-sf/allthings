@@ -4,22 +4,35 @@ import type {
   StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
 import { asOf } from "allthings-core/src/clock.ts";
+import * as Coaching from "allthings-core/src/coaching.ts";
 import * as Contract from "allthings-core/src/contract.ts";
 import type { DataSourceError } from "allthings-core/src/errors.ts";
 import { Events } from "allthings-core/src/events.ts";
+import { readGuide, toGuide } from "allthings-core/src/guide.ts";
+import { publishedLetters, toLetter } from "allthings-core/src/letter.ts";
 import * as Mappers from "allthings-core/src/mappers.ts";
 import { Speakers } from "allthings-core/src/speakers.ts";
-import { Effect, Schema } from "effect";
+import { Year, yearContract } from "allthings-core/src/year.ts";
+import { Effect, Option, Schema } from "effect";
 import { z } from "zod";
 import { type Repositories, repositories } from "../database.ts";
+import { mediaOrigin } from "../links.ts";
 import { Site } from "../site.ts";
 import { community } from "./community.ts";
+import {
+  proposeDescription,
+  proposeInput,
+  proposeToolName,
+} from "./propose.ts";
 import { transientMark } from "./endpoint.ts";
 
 /**
  * The public MCP tools, as app/src/lib/mcp/tools.ts declares them: the same
  * names, titles, descriptions, annotations, input schemas and error texts,
- * because agents and the CLI (cli/, `allthings`) rely on them.
+ * because agents and the CLI (cli/, `allthings`) rely on them. get_year,
+ * a year of our evenings looked back on, get_letter, the letter's
+ * published issues, and coach_talk are the Worker's own: the app never had
+ * them.
  *
  * Input schemas stay in zod, the MCP SDK's own schema library and so already
  * in the bundle: they are what clients see in tools/list and they word the
@@ -33,7 +46,13 @@ export type ToolProgram = Effect.Effect<CallToolResult, never, Site>;
 /** Runs a tool's program with the isolate's services. */
 export type RunTool = (program: ToolProgram) => Promise<CallToolResult>;
 
-/** The four public tools' inputs, as MCP clients send them. */
+const goals = Coaching.Goal.literals;
+
+/** coach_talk's text fields: each optional, at most its limit. */
+const material = (max: number, description: string) =>
+  z.string().max(max).optional().describe(description);
+
+/** The public tools' inputs, as MCP clients send them. */
 export const toolInputs = {
   list_events: z.object({
     when: z
@@ -50,12 +69,101 @@ export const toolInputs = {
     limit: z.number().int().min(1).max(200).default(50),
   }),
   get_community: z.object({}),
+  get_guide: z.object({}),
+  get_year: z.object({
+    year: z
+      .number()
+      .int()
+      .min(1000)
+      .max(9999)
+      .optional()
+      .describe(
+        "The year, on San Francisco's calendar. Leave it out for the latest year with an evening held.",
+      ),
+  }),
+  get_letter: z.object({
+    month: z
+      .string()
+      .regex(/^\d{4}-(?:0[1-9]|1[0-2])$/)
+      .optional()
+      .describe(
+        "The issue's month, YYYY-MM. Leave it out for the latest issue.",
+      ),
+  }),
+  coach_talk: z.object({
+    format: z
+      .enum(Coaching.SlotFormat.literals)
+      .default("open-floor")
+      .describe(
+        "open-floor: a short slot anyone can take at an open floor. talk: a talk in an evening's lineup.",
+      ),
+    minutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(Coaching.maxSlotMinutes)
+      .optional()
+      .describe(
+        `The slot's length in minutes: ${Coaching.defaultMinutes["open-floor"]} for an open floor and ${Coaching.defaultMinutes.talk} for a talk unless given.`,
+      ),
+    title: material(Coaching.limits.title, "The talk's title."),
+    abstract: material(
+      Coaching.limits.abstract,
+      "The talk's abstract, as people will read it.",
+    ),
+    outline: material(
+      Coaching.limits.outline,
+      "An outline or the slides' text. Slides separated by lines of --- are counted as slides.",
+    ),
+    transcript: material(
+      Coaching.limits.transcript,
+      "A rehearsal's transcript: plain text, or WebVTT or SRT with timestamps.",
+    ),
+    goals: z
+      .array(z.enum(goals))
+      .max(Coaching.limits.goals)
+      .optional()
+      .describe("What the speaker wants from the talk."),
+  }),
 } as const;
 
 export type ToolName = keyof typeof toolInputs;
 
 export const isToolName = (name: string): name is ToolName =>
   Object.hasOwn(toolInputs, name);
+
+/**
+ * Whether the page store may keep a tool's answers (endpoint.ts), and why
+ * not when it may not.
+ */
+export type Keeping =
+  | { readonly kept: true }
+  | { readonly kept: false; readonly why: string };
+
+const kept: Keeping = { kept: true };
+
+/**
+ * Every tool's keeping, by name: a tool that reads public data is kept, so
+ * a call already answered never reads the database again; one that isn't
+ * says why. The type asks for every tool in `toolInputs`, so a new tool
+ * doesn't typecheck until it says which it is.
+ */
+export const toolKeeping: { readonly [Name in ToolName]: Keeping } = {
+  list_events: kept,
+  get_event: kept,
+  list_speakers: kept,
+  get_community: kept,
+  get_guide: kept,
+  get_year: kept,
+  get_letter: kept,
+  coach_talk: {
+    kept: false,
+    why: "It reads only what a speaker sends: its calls never reach the store, so nothing sent is kept or put in a URL.",
+  },
+};
+
+export const isKeptTool = (name: string): name is ToolName =>
+  isToolName(name) && toolKeeping[name].kept;
 
 /**
  * How a tool call is answered: by name, with its input as the tool's schema
@@ -194,6 +302,78 @@ const getCommunity: ToolProgram = Site.useSync(({ origin }) =>
   succeed(community(origin)),
 );
 
+/** The guide as of the clock (core's src/guide.ts): it reads no database. */
+const getGuide: ToolProgram = Effect.gen(function* () {
+  const { origin } = yield* Site;
+  return succeed(toGuide(yield* readGuide, origin));
+});
+
+/**
+ * A year of our evenings (core's src/year.ts), the latest with one held
+ * when none is asked for. A year without one is an answer, not a failure.
+ */
+const getYear = (asked: number | undefined) =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const year = asked ?? (yield* Year.use((years) => years.years)).at(0);
+    if (year === undefined) {
+      return fail("No allthings evening has been held yet.");
+    }
+    const found = yield* Year.use((years) => years.read(year, mediaOrigin));
+    return Option.match(found, {
+      onNone: () => fail(`No allthings evening was held in ${year}.`),
+      onSome: (view) => succeed(yearContract(view, origin)),
+    });
+  }).pipe(withDataSource("get_year", "years"));
+
+/**
+ * An issue of the letter Erik approved (core's src/letter.ts), the latest
+ * when none is asked for: it reads no database. A month without a
+ * published issue, a draft's included, is an answer, not a failure.
+ */
+const getLetter = (month: string | undefined): ToolProgram =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const letters = yield* publishedLetters;
+    const letter =
+      month === undefined
+        ? letters.at(0)
+        : letters.find((each) => each.month === month);
+    if (letter === undefined) {
+      return fail(
+        month === undefined
+          ? "No allthings letter has been published yet."
+          : `No allthings letter was published for ${month}.`,
+      );
+    }
+    return succeed(toLetter(letter, origin));
+  });
+
+/**
+ * Coaching for the talk in `input` (core/src/coaching.ts): a pure function
+ * of what was sent, which is neither stored nor logged.
+ */
+const coachTalk = (
+  input: z.infer<(typeof toolInputs)["coach_talk"]>,
+): ToolProgram =>
+  Effect.sync(() =>
+    succeed(
+      Coaching.coach({
+        slot: {
+          format: input.format,
+          minutes: input.minutes ?? Coaching.defaultMinutes[input.format],
+        },
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.abstract === undefined ? {} : { abstract: input.abstract }),
+        ...(input.outline === undefined ? {} : { outline: input.outline }),
+        ...(input.transcript === undefined
+          ? {}
+          : { transcript: input.transcript }),
+        ...(input.goals === undefined ? {} : { goals: input.goals }),
+      }),
+    ),
+  );
+
 /**
  * The program that answers `name` with `input` (untrusted: it is parsed
  * with the tool's schema first), or undefined for input the tool refuses.
@@ -223,13 +403,36 @@ export function toolProgram(
       return toolInputs.get_community.safeParse(input).success
         ? getCommunity
         : undefined;
+    case "get_guide":
+      return toolInputs.get_guide.safeParse(input).success
+        ? getGuide
+        : undefined;
+    case "get_year": {
+      const parsed = toolInputs.get_year.safeParse(input);
+      return parsed.success ? getYear(parsed.data.year) : undefined;
+    }
+    case "get_letter": {
+      const parsed = toolInputs.get_letter.safeParse(input);
+      return parsed.success ? getLetter(parsed.data.month) : undefined;
+    }
+    case "coach_talk": {
+      const parsed = toolInputs.coach_talk.safeParse(input);
+      return parsed.success ? coachTalk(parsed.data) : undefined;
+    }
     default:
       return undefined;
   }
 }
 
-/** Registers the four public tools on `server`; `call` answers them. */
-export function registerTools(server: McpServer, call: CallTool): void {
+/**
+ * Registers the public tools on `server`: propose_talk (propose.ts), which
+ * `propose` answers, and every other, which `call` answers.
+ */
+export function registerTools(
+  server: McpServer,
+  call: CallTool,
+  propose: (input: Record<string, unknown>) => Promise<CallToolResult>,
+): void {
   server.registerTool(
     "list_events",
     {
@@ -284,5 +487,78 @@ export function registerTools(server: McpServer, call: CallTool): void {
       annotations: readOnly,
     },
     () => call("get_community", {}),
+  );
+
+  server.registerTool(
+    "get_guide",
+    {
+      title: "The allthings guide",
+      description:
+        "Conferences and happenings beyond allthings' own evenings worth going to, starred as the Michelin guide stars restaurants: 3 stars are worth a special journey, 2 a detour, 1 a stop. Each with its city, why, who runs it, its official site, and its next edition's dates once announced.",
+      inputSchema: toolInputs.get_guide,
+      outputSchema: outputSchema(Schema.Struct(Contract.Guide.fields)),
+      annotations: readOnly,
+    },
+    () => call("get_guide", {}),
+  );
+
+  server.registerTool(
+    "get_year",
+    {
+      title: "Get a year",
+      description:
+        "A year of allthings evenings, looked back on: every evening of ours held that year in order, with its neighborhood, hosting companies, who was on stage, Luma's guest count and its photo, and the year's tally of evenings, people on stage, hosting companies and guests.",
+      inputSchema: toolInputs.get_year,
+      outputSchema: outputSchema(Schema.Struct(Contract.Year.fields)),
+      annotations: readOnly,
+    },
+    (input) => call("get_year", input),
+  );
+
+  server.registerTool(
+    "get_letter",
+    {
+      title: "Get the letter",
+      description:
+        "An issue of the allthings letter, one a month: our next evenings, happenings worth your time, new open source, papers and jobs, each item with what it links to, then a closing paragraph. Only issues the organizers approved are published. Leave out the month for the latest.",
+      inputSchema: toolInputs.get_letter,
+      outputSchema: outputSchema(Schema.Struct(Contract.Letter.fields)),
+      annotations: readOnly,
+    },
+    (input) => call("get_letter", input),
+  );
+
+  server.registerTool(
+    "coach_talk",
+    {
+      title: "Coach a talk",
+      description:
+        "Coach a talk for an allthings stage. Send the slot (an open floor is 3 minutes, and the timer is hard) and any of a title, an abstract, an outline or slide text, a rehearsal's transcript (plain, WebVTT or SRT) and goals. Returns findings, most pressing first (must, should, consider), each with what was measured and one line of advice, what's already working, and what more could be checked. The checks are deterministic, and nothing sent is stored or logged.",
+      inputSchema: toolInputs.coach_talk,
+      outputSchema: outputSchema(Schema.Struct(Coaching.Coaching.fields)),
+      annotations: readOnly,
+    },
+    (input) => call("coach_talk", input),
+  );
+
+  server.registerTool(
+    proposeToolName,
+    {
+      title: "Propose a talk",
+      description: proposeDescription,
+      inputSchema: proposeInput,
+      outputSchema: outputSchema(
+        Schema.Struct({ received: Schema.Boolean, message: Schema.String }),
+      ),
+      // It adds a proposal and changes nothing else; the same one sent
+      // again while the first waits is kept once.
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    (input) => propose(input),
   );
 }

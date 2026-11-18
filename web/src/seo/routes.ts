@@ -1,4 +1,6 @@
 import { ourAccount } from "allthings-core/src/social/account.ts";
+import { publishedLetters } from "allthings-core/src/letter.ts";
+import { Year } from "allthings-core/src/year.ts";
 import { Effect, Layer } from "effect";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -79,25 +81,36 @@ const document = (
     events: ReadonlyArray<FeedEvent>,
     origin: string,
     people: ReadonlyArray<FeedPerson>,
+    years: ReadonlyArray<number>,
+    letters: ReadonlyArray<string>,
   ) => string,
-  withPeople = false,
+  withPages = false,
 ) =>
   HttpRouter.add(
     "GET",
     path,
     Effect.gen(function* () {
       const { origin } = yield* Site;
-      const [events, people] = yield* FeedData.use((data) =>
-        Effect.all(
-          [
-            data.listPublished,
-            withPeople ? data.listPeople : Effect.succeed([]),
-          ],
-          { concurrency: "unbounded" },
-        ),
+      // With the pages people, years and letters have: who took part,
+      // every year an evening of ours was held in (core's src/year.ts),
+      // and every issue of the letter Erik approved (core's src/letter.ts).
+      const [events, people, years, letters] = yield* Effect.all(
+        [
+          FeedData.use((data) => data.listPublished),
+          withPages
+            ? FeedData.use((data) => data.listPeople)
+            : Effect.succeed([]),
+          withPages ? Year.use((year) => year.years) : Effect.succeed([]),
+          withPages
+            ? Effect.map(publishedLetters, (published) =>
+                published.map((letter) => letter.month),
+              )
+            : Effect.succeed([]),
+        ],
+        { concurrency: "unbounded" },
       );
       return text(
-        render(events, origin, people),
+        render(events, origin, people, years, letters),
         contentType,
         CacheControl.publicData,
       );

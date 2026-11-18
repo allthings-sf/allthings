@@ -1,6 +1,13 @@
 import { styleText } from "node:util";
 import type { AuxStatus, Track } from "./aux.ts";
-import type { Community, Event, EventSummary, Speaker } from "./schemas.ts";
+import type {
+  Coaching,
+  Community,
+  Event,
+  EventSummary,
+  Guide,
+  Speaker,
+} from "./schemas.ts";
 
 type Style = Parameters<typeof styleText>[0];
 
@@ -46,33 +53,35 @@ function withTimeZone(event: EventSummary): string {
   return `${parts["weekday"]}, ${parts["month"]} ${parts["day"]}, ${parts["year"]}, ${parts["hour"]}:${parts["minute"]} ${parts["dayPeriod"]} ${parts["timeZoneName"]}`;
 }
 
+/** One evening in a list: its name and status, when and where, and its slug. */
+export function formatEventSummary(
+  event: EventSummary,
+  color: boolean,
+): string {
+  const style = createStyler(color);
+  const status =
+    event.status === "past" ? "" : ` ${style("yellow", `[${event.status}]`)}`;
+  const where = formatWhere(event);
+  const shared = sharedBy(event);
+  return [
+    `${style("bold", event.name)}${status}${shared ? ` ${style("dim", shared)}` : ""}`,
+    `  ${withTimeZone(event)}${where ? ` · ${where}` : ""}`,
+    event.rsvpUrl && event.status !== "past"
+      ? `  ${style("dim", "rsvp")}  ${event.rsvpUrl}`
+      : null,
+    `  ${style("dim", "slug")}  ${event.slug}`,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
 export function formatEventList(
   events: EventSummary[],
   color: boolean,
 ): string {
-  const style = createStyler(color);
   if (events.length === 0) return "No events found.\n";
   return (
-    events
-      .map((event) => {
-        const status =
-          event.status === "past"
-            ? ""
-            : ` ${style("yellow", `[${event.status}]`)}`;
-        const where = formatWhere(event);
-        const shared = sharedBy(event);
-        return [
-          `${style("bold", event.name)}${status}${shared ? ` ${style("dim", shared)}` : ""}`,
-          `  ${withTimeZone(event)}${where ? ` · ${where}` : ""}`,
-          event.rsvpUrl && event.status !== "past"
-            ? `  ${style("dim", "rsvp")}  ${event.rsvpUrl}`
-            : null,
-          `  ${style("dim", "slug")}  ${event.slug}`,
-        ]
-          .filter((line): line is string => line !== null)
-          .join("\n");
-      })
-      .join("\n\n") + "\n"
+    events.map((event) => formatEventSummary(event, color)).join("\n\n") + "\n"
   );
 }
 
@@ -153,6 +162,51 @@ export function formatCommunity(community: Community, color: boolean): string {
   ].join("\n");
 }
 
+/**
+ * "2027.04.29–30": an edition's days as the site writes them, year first,
+ * each part said once: "2027.04.29–05.02" across a month,
+ * "2027.12.30–2028.01.02" across a year, "2027.04.29" for one day.
+ */
+export function formatDays(from: string, to: string): string {
+  const dotted = (day: string) => day.replaceAll("-", ".");
+  if (from === to) return dotted(from);
+  if (from.slice(0, 4) !== to.slice(0, 4)) {
+    return `${dotted(from)}–${dotted(to)}`;
+  }
+  if (from.slice(5, 7) !== to.slice(5, 7)) {
+    return `${dotted(from)}–${dotted(to.slice(5))}`;
+  }
+  return `${dotted(from)}–${to.slice(8)}`;
+}
+
+/**
+ * The guide, as its page shows it: each star count under what it means,
+ * then each happening's name, where and when, why, and who runs it with its
+ * site.
+ */
+export function formatGuide(guide: Guide, color: boolean): string {
+  const style = createStyler(color);
+  const lines: string[] = [];
+  let stars: number | undefined;
+  for (const entry of guide.entries) {
+    if (entry.stars !== stars) {
+      stars = entry.stars;
+      lines.push("", style("bold", `${"★".repeat(stars)} ${entry.meaning}`));
+    }
+    const when =
+      entry.next === null
+        ? "dates not announced yet"
+        : formatDays(entry.next.from, entry.next.to);
+    lines.push(
+      "",
+      `${style("bold", entry.name)}  ${style("dim", `${entry.city} · ${when}`)}`,
+      entry.why,
+      style("dim", `by ${entry.organizer} · ${entry.url}`),
+    );
+  }
+  return [guide.about, ...lines, "", guide.url, ""].join("\n");
+}
+
 /** aux_status, for a person: the holder, your place in line and cooldown. */
 export function formatAuxStatus(status: AuxStatus, color: boolean): string {
   const style = createStyler(color);
@@ -180,4 +234,85 @@ export function formatTracks(tracks: Track[], color: boolean): string {
       )
       .join("\n") + "\n"
   );
+}
+
+/** "find-contributors" as a person reads it: "find contributors". */
+const words = (id: string) => id.replaceAll("-", " ");
+
+/**
+ * coach_talk's answer, for a person: what to do first, then each finding
+ * by how much it matters with what was measured and what to do, what's
+ * already working, and what more it could check. `guide` is the page that
+ * explains every check.
+ */
+export function formatCoaching(
+  coaching: Coaching,
+  color: boolean,
+  guide: string,
+): string {
+  const style = createStyler(color);
+  const { slot } = coaching;
+  const head = [
+    slot.format === "open-floor" ? "open floor" : "talk",
+    `${slot.minutes} minute${slot.minutes === 1 ? "" : "s"}`,
+    ...(coaching.goals.length === 0
+      ? []
+      : [coaching.goals.map(words).join(", ")]),
+  ].join(" · ");
+  const width = Math.max(
+    0,
+    ...[...coaching.findings, ...coaching.strengths, ...coaching.unchecked].map(
+      (item) => item.id.length,
+    ),
+  );
+  const label = (id: string) => style("dim", id.padEnd(width));
+  const indent = " ".repeat(width + 4);
+  const severities = [
+    ["must", "Must", "red"],
+    ["should", "Should", "yellow"],
+    ["consider", "Consider", "cyan"],
+  ] as const;
+  const sections = [
+    [
+      style("bold", "First"),
+      ...coaching.summary.map((line, index) => `  ${index + 1}. ${line}`),
+    ].join("\n"),
+    ...severities.flatMap(([severity, title, hue]) => {
+      const found = coaching.findings.filter(
+        (finding) => finding.severity === severity,
+      );
+      return found.length === 0
+        ? []
+        : [
+            [
+              style(["bold", hue], title),
+              ...found.map(
+                (finding) =>
+                  `  ${label(finding.id)}  ${finding.observed}\n${indent}${finding.advice}`,
+              ),
+            ].join("\n"),
+          ];
+    }),
+    ...(coaching.strengths.length === 0
+      ? []
+      : [
+          [
+            style(["bold", "green"], "Working"),
+            ...coaching.strengths.map(
+              (strength) => `  ${label(strength.id)}  ${strength.observed}`,
+            ),
+          ].join("\n"),
+        ]),
+    ...(coaching.unchecked.length === 0
+      ? []
+      : [
+          [
+            style("bold", "Not checked"),
+            ...coaching.unchecked.map(
+              (check) => `  ${label(check.id)}  needs ${check.needs}`,
+            ),
+          ].join("\n"),
+        ]),
+  ];
+  return `${style("bold", "Coaching")} ${style("dim", `· ${head}`)}\n\n${sections.join("\n\n")}\n\n${style("dim", `Every check, and why: ${guide}`)}\n`;
 }

@@ -17,50 +17,22 @@ import {
 import type { FeedEvent } from "../src/seo/data.ts";
 import { isProductionHost, robotsTxt } from "../src/seo/robots.ts";
 import { rssXml } from "../src/seo/rss.ts";
-import { sitemapXml, sitePages } from "../src/seo/sitemap.ts";
+import { sitemapXml } from "../src/seo/sitemap.ts";
 import { escapeXml } from "../src/seo/xml.ts";
 import { ogCards } from "../src/og/cards.ts";
 import { htmlProblems } from "./support/pages.ts";
 
 /**
  * robots.txt, the sitemap, the RSS feed and the pages' structured data, as
- * pure functions of fixed data. The feeds are also held to the app's own
- * (app/src/lib/event-feeds.ts) wherever subscribers would notice a change.
+ * pure functions of fixed data. The feeds also keep what the retired app's
+ * (app/src/lib/event-feeds.ts) gave these events wherever subscribers would
+ * notice a change: each event's URL and date in the sitemap, and each item's
+ * guid, link and date in the RSS feed.
  */
 
 const origin = "https://allthings.dev";
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 const char = (code: number) => String.fromCodePoint(code);
-
-/** What the app's feeds read of an event. */
-interface AppFeedEvent {
-  readonly id: string;
-  readonly name: string;
-  readonly tagline: string;
-  readonly slug: string;
-  readonly startDate: Date;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
-
-// Loaded at runtime, as tests/support/app.ts loads the app: the app's own
-// compiler checks it.
-const app = (await import(
-  new URL("../../app/src/lib/event-feeds.ts", import.meta.url).href
-)) as {
-  readonly generateRSS: (events: Array<AppFeedEvent>, origin: string) => string;
-  readonly generateSiteMap: (
-    events: Array<AppFeedEvent>,
-    origin: string,
-  ) => string;
-};
-
-const toApp = (event: FeedEvent): AppFeedEvent => ({
-  ...event,
-  startDate: DateTime.toDateUtc(event.startDate),
-  createdAt: DateTime.toDateUtc(event.createdAt),
-  updatedAt: DateTime.toDateUtc(event.updatedAt),
-});
 
 /** Parses the way feed readers do: text stays text, items stay a list. */
 const parser = new XMLParser({
@@ -196,9 +168,14 @@ describe("the sitemap", () => {
     expect(urlsOf(xml)).toEqual([
       { loc: "https://allthings.dev/" },
       { loc: "https://allthings.dev/events" },
+      { loc: "https://allthings.dev/talks" },
+      { loc: "https://allthings.dev/guide" },
       { loc: "https://allthings.dev/people" },
       { loc: "https://allthings.dev/about" },
       { loc: "https://allthings.dev/code-of-conduct" },
+      { loc: "https://allthings.dev/privacy" },
+      { loc: "https://allthings.dev/coach" },
+      { loc: "https://allthings.dev/letter" },
       { loc: "https://allthings.dev/brand" },
       {
         loc: "https://allthings.dev/2026-11-05-all-things-effect",
@@ -211,16 +188,6 @@ describe("the sitemap", () => {
     ]);
   });
 
-  test("names each event at the URL, and with the date, the app's sitemap does", () => {
-    const pairs = (urls: ReadonlyArray<UrlEntry>) =>
-      urls.map(({ loc, lastmod }) => [loc, lastmod]);
-    const appUrls = urlsOf(app.generateSiteMap(events.map(toApp), origin));
-    // The app's own pages differ: these are this site's.
-    expect(pairs(urlsOf(xml).slice(sitePages.length))).toEqual(
-      pairs(appUrls.slice(-events.length)),
-    );
-  });
-
   test("is the same bytes for the same events, and valid with none", () => {
     expect(sitemapXml(events, origin)).toBe(xml);
     const empty = sitemapXml([], origin);
@@ -228,9 +195,14 @@ describe("the sitemap", () => {
     expect(urlsOf(empty).map((url) => url.loc)).toEqual([
       "https://allthings.dev/",
       "https://allthings.dev/events",
+      "https://allthings.dev/talks",
+      "https://allthings.dev/guide",
       "https://allthings.dev/people",
       "https://allthings.dev/about",
       "https://allthings.dev/code-of-conduct",
+      "https://allthings.dev/privacy",
+      "https://allthings.dev/coach",
+      "https://allthings.dev/letter",
       "https://allthings.dev/brand",
     ]);
   });
@@ -268,17 +240,12 @@ describe("the RSS feed", () => {
     );
   });
 
-  test("keeps each item's guid, link and date exactly as the app's feed has them", () => {
+  test("keeps each item's guid, link and date as the app's feed had them", () => {
     const ours = channelOf(xml).item ?? [];
-    const theirs = channelOf(app.generateRSS(events.map(toApp), origin)).item;
-    const fields = (item: Item) => ({
-      title: item.title,
-      description: item.description,
-      link: item.link,
-      guid: item.guid,
-      pubDate: item.pubDate,
-    });
-    expect(ours.map(fields)).toEqual((theirs ?? []).map(fields));
+    expect(ours.map((item) => item.link)).toEqual([
+      "https://allthings.dev/2026-11-05-all-things-effect",
+      "https://allthings.dev/a%20slug%20%26%20a%20%23fragment%3F",
+    ]);
     expect(ours.map((item) => item.guid)).toEqual([
       {
         "#text": "urn:uuid:e0000000-0000-4000-8000-000000000101",

@@ -1,4 +1,5 @@
 import {
+  artifactsOf,
   hostsOf,
   latestFirst,
   publicVenue,
@@ -6,6 +7,10 @@ import {
   talkAppearances,
   talksOf,
 } from "allthings-core/src/catalog.ts";
+import {
+  ArtifactRow,
+  artifactJson,
+} from "allthings-core/src/talk-artifacts.ts";
 import { asOf } from "allthings-core/src/clock.ts";
 import * as Rows from "allthings-core/src/rows.ts";
 import { DataSourceError } from "allthings-core/src/errors.ts";
@@ -96,6 +101,8 @@ export const EventDetailsRow = Schema.Struct({
       /** Editor HTML as stored. */
       description: Schema.String,
       speakers: Schema.Array(SpeakerRow),
+      /** What it left behind, read with the catalog's `artifactsOf`. */
+      artifacts: Schema.Array(ArtifactRow),
     }),
   ),
   hosts: Schema.Array(
@@ -213,7 +220,8 @@ const make = Effect.gen(function* () {
     execute: ({ id, now }) => sql`
       SELECT ${eventColumns(now)},
         ${talksOf(sql, "e", {
-          talk: sql`'id', t.id, 'title', t.title, 'description', t.description`,
+          talk: sql`'id', t.id, 'title', t.title, 'description', t.description,
+            'artifacts', ${artifactsOf(sql, artifactJson(sql))}`,
           speaker: sql`json_build_object(
             'id', p.id, 'name', p.name, 'title', p.title, 'bio', p.bio,
             ${sql.literal(handleColumns)},

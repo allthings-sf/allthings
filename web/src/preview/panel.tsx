@@ -26,7 +26,8 @@ const roleNames: Readonly<Record<string, string>> = {
   organizer: "organizer",
 };
 
-const roleName = (role: string) => roleNames[role] ?? role;
+/** A role as the pages name it. */
+export const roleName = (role: string) => roleNames[role] ?? role;
 
 /**
  * The forms a signer who may write sees: where they post, the comment
@@ -191,7 +192,7 @@ function RoundForm({
         ""
       ) : (
         <form
-          class="collab-form collab-round"
+          class="form collab-round"
           method="post"
           action={forms.roundAction}
         >
@@ -278,7 +279,7 @@ function CommentBox({
   readonly label: string;
 }) {
   return (
-    <form class="collab-form" method="post" action={forms.action}>
+    <form class="form" method="post" action={forms.action}>
       <input type="hidden" name="token" value={forms.commentToken} />
       <input type="hidden" name="on" value={on} />
       <label>
@@ -405,11 +406,7 @@ function Logistics({
             </p>
           )}
           {answering && forms !== undefined ? (
-            <form
-              class="collab-form"
-              method="post"
-              action={forms.logisticsAction}
-            >
+            <form class="form" method="post" action={forms.logisticsAction}>
               <input type="hidden" name="token" value={forms.logisticsToken} />
               <input type="hidden" name="item" value={item.id} />
               <label>
@@ -447,9 +444,12 @@ export function CollabPanel({
   panel,
   forms,
   opened = [],
+  briefHref,
 }: {
   readonly panel: Panel;
   readonly forms?: PanelForms;
+  /** Where the brief is as one document (brief-document.tsx), linked above its sections. */
+  readonly briefHref?: string;
   /** The rounds' latest saves the signer may see, opened. */
   readonly opened?: ReadonlyArray<OpenedRound>;
 }) {
@@ -577,6 +577,15 @@ export function CollabPanel({
               </Fact>
             ))
           : ""}
+        {panel.brief.length === 0 || briefHref === undefined ? (
+          ""
+        ) : (
+          <Fact label="The brief">
+            <p>
+              <a href={briefHref}>read it as one document, or print it →</a>
+            </p>
+          </Fact>
+        )}
         {panel.brief.map((section) => {
           const safeBody = briefHtml(section.body);
           return (

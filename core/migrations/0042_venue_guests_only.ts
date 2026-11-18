@@ -8,8 +8,6 @@ import { statements } from "./statements.ts";
  * over, every public surface shows only the venue's city (src/catalog.ts,
  * `publicVenue`); once the evening is over, the venue shows again. Every
  * evening starts as public; the sync's next run reads each one ahead.
- * Ships with the app's drizzle migration 0049_venue_guests_only, which
- * makes the same schema.
  *
  * site_sync, the role the hourly sync writes as, may read and write it
  * where the role exists (infra/scripts/site-sync.ts); site_reader and the

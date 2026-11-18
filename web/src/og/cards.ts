@@ -24,10 +24,32 @@ export const ogCards = {
   home: card(cards.home, `allthings/_ · ${sentences}`),
   events: card(cards.events, `every evening · allthings/_ · ${sentences}`),
   people: card(cards.people, `people · allthings/_ · ${sentences}`),
+  talks: card(cards.talks, `every talk · allthings/_ · ${sentences}`),
+  guide: card(
+    cards.guide,
+    "the guide · allthings/_ · Happenings worth the trip: three stars are worth a special journey, two a detour, one a stop.",
+  ),
+  year: card(cards.year, `the year in evenings · allthings/_ · ${sentences}`),
   about: card(cards.about, `about · allthings/_ · ${sentences}`),
   codeOfConduct: card(
     cards.codeOfConduct,
     "code of conduct · allthings/_ · How we treat each other at every evening, and how to report a concern.",
+  ),
+  privacy: card(
+    cards.privacy,
+    "privacy · allthings/_ · What this site keeps about you, and how to have it taken down.",
+  ),
+  coach: card(
+    cards.coach,
+    "coach · allthings/_ · What a good talk looks like on our stage, and how to check yours.",
+  ),
+  propose: card(
+    cards.propose,
+    "propose a talk · allthings/_ · Anyone may propose a talk for an evening. We pick the ones people will still talk about.",
+  ),
+  letter: card(
+    cards.letter,
+    "the letter · allthings/_ · One letter a month: our next evenings, and what's worth your time beyond them.",
   ),
   brand: card(
     cards.brand,

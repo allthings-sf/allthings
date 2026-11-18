@@ -2,8 +2,19 @@ import { describe, expect } from "bun:test";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Test from "alchemy/Test/Bun";
+import { Guide } from "allthings-core/src/contract.ts";
+import { guideEntries } from "allthings-core/src/guide.ts";
+import {
+  everyIssue,
+  publishedLetters,
+  toLetter,
+  toLetters,
+} from "allthings-core/src/letter.ts";
 import { seededDatabase } from "allthings-core/tests/support/database.ts";
+import * as Contract from "allthings-core/src/contract.ts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { coach } from "allthings-core/src/coaching.ts";
 import { CacheControl } from "../src/cache.ts";
 import { maxRequestBodySize, maxToolInputElements } from "../src/mcp/server.ts";
 import { loadApp } from "./support/app.ts";
@@ -16,15 +27,17 @@ import {
 } from "./support/http.ts";
 import { normalizeJsonSchema } from "./support/json-schema.ts";
 import { ignoringAttachOrder, type Json } from "./support/order.ts";
-import { budgetProblems } from "./support/bundle.ts";
+import { built } from "../src/assets.ts";
+import { buildId } from "../src/build-id.ts";
+import { budgetProblems, startupContributors } from "./support/bundle.ts";
 import { bundleBudgets, hyperdriveTo, testStack } from "./support/stack.ts";
 
 /**
  * The Worker, bundled as it deploys and running in workerd, against the app
- * it replaced. Both read one database: the production schema (core's
- * migrations) with core's seed, in PGlite. The app reads it in process; the
- * Worker connects over TCP with @effect/sql-pg through its Hyperdrive
- * binding, as it deploys.
+ * it replaced. It reads the production schema (core's migrations) with
+ * core's seed, in PGlite, over TCP with @effect/sql-pg through its
+ * Hyperdrive binding, as it deploys. The app answered the same database;
+ * its answers are recorded (support/app.ts).
  *
  * The app is legacy and no longer the reference for the contract: it never
  * says whose an evening is (`curation`, `organizer`). The Worker's MCP
@@ -37,7 +50,7 @@ const origin = "https://allthingsweb.dev";
 const db = await seededDatabase();
 const postgres = new PGLiteSocketServer({ db, port: 0, maxConnections: 8 });
 await postgres.start();
-const app = await loadApp(db, { origin });
+const app = await loadApp(db);
 
 const Stack = testStack("allthings-web-test", {
   Web: {
@@ -106,8 +119,7 @@ const it = (name: string, run: (urls: Workers) => Promise<void>) =>
 
 /** The Worker's answer to a GET, next to the app's. */
 async function get(url: string, path: string): Promise<[Answer, Answer]> {
-  // The app first: it shares the database, and the two never query at once.
-  const expected = await answer(await app.v1(path));
+  const expected = app.v1(path);
   return [await answer(await fetch(new URL(path, url))), expected];
 }
 
@@ -117,8 +129,10 @@ async function mcp(
   message: unknown,
   headers?: Readonly<Record<string, string>>,
 ): Promise<[Answer, Answer]> {
-  const expected = await answer(
-    await app.mcp(mcpRequest(`${origin}/mcp`, message, headers)),
+  const expected = app.mcp(
+    "POST",
+    headers ?? mcpHeaders,
+    JSON.stringify(message),
   );
   return [
     await answer(await fetch(mcpRequest(`${url}/mcp`, message, headers))),
@@ -126,12 +140,40 @@ async function mcp(
   ];
 }
 
-/** A v1 body's JSON text, an event's attached lists in canonical order. */
+/** What a talk has that the legacy app's talks never had: its own links. */
+const talkLinksSinceTheApp = ["recording", "artifacts"];
+
+/** `event` with its talks as the app had them, without {@link talkLinksSinceTheApp}. */
+function talksAsTheAppHasThem(event: Json): Json {
+  if (event === null || typeof event !== "object" || Array.isArray(event))
+    return event;
+  const talks = event["talks"];
+  if (!Array.isArray(talks)) return event;
+  return {
+    ...event,
+    talks: talks.map((talk) =>
+      talk === null || typeof talk !== "object" || Array.isArray(talk)
+        ? talk
+        : Object.fromEntries(
+            Object.entries(talk).filter(
+              ([key]) => !talkLinksSinceTheApp.includes(key),
+            ),
+          ),
+    ),
+  };
+}
+
+/**
+ * A v1 body's JSON text, an event's attached lists in canonical order and
+ * its talks as the app had them.
+ */
 function v1Body(body: string): string {
   const json = JSON.parse(body) as Record<string, Json>;
   const event = json["event"];
   return JSON.stringify(
-    event === undefined ? json : { ...json, event: ignoringAttachOrder(event) },
+    event === undefined
+      ? json
+      : { ...json, event: talksAsTheAppHasThem(ignoringAttachOrder(event)) },
   );
 }
 
@@ -142,12 +184,15 @@ type ToolMessage = {
   };
 };
 
-/** The fields the contract has and the legacy app never had. */
-const sinceTheApp = ["curation", "organizer"];
+/**
+ * The fields the contract has and the legacy app never had: whose an
+ * evening is, and a talk's own links.
+ */
+const sinceTheApp = ["curation", "organizer", "recording", "artifacts"];
 
 /** Where an event's page is: the contract names allthings.dev, the legacy app its own host. */
 const eventPage = {
-  contract: "Event page on allthings.dev.",
+  contract: "Event page on allthings.dev, at its short link when it has one.",
   app: "Event page on allthingsweb.dev.",
 };
 
@@ -299,6 +344,34 @@ describe("v1 API", () => {
     ]);
   });
 
+  it("lists the years with an evening of ours held, and answers each as get_year does", async ({
+    Web,
+  }) => {
+    const list = await fetch(`${Web}/api/v1/years`);
+    expect(list.status).toBe(200);
+    expect(list.headers.get("cache-control")).toBe(CacheControl.publicData);
+    expect(await list.json()).toEqual({ years: [2026, 2025] });
+    const response = await fetch(`${Web}/api/v1/years/2025`);
+    expect(response.status).toBe(200);
+    const { year } = (await response.json()) as { year: unknown };
+    const decoded = Schema.decodeUnknownSync(Contract.Year)(year);
+    expect(decoded.evenings.map((evening) => evening.slug)).toEqual([
+      "2025-12-02-café-night",
+    ]);
+    const tool = rpcMessage(
+      await (
+        await fetch(mcpRequest(`${Web}/mcp`, call("get_year", { year: 2025 })))
+      ).text(),
+    ) as { result: { structuredContent: unknown } };
+    expect(year).toEqual(tool.result.structuredContent);
+    for (const path of ["/api/v1/years/2024", "/api/v1/years/25"]) {
+      const missing = await fetch(`${Web}${path}`);
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ error: "Year not found" });
+      expect(missing.headers.get("cache-control")).toBe(CacheControl.notFound);
+    }
+  });
+
   for (const id of [
     "not-a-uuid",
     "2026-08-12-react-at-acme",
@@ -335,6 +408,32 @@ describe("v1 API", () => {
       const failed = await fetch(`${Unreachable}${path}`);
       expect(failed.headers.get("cache-control")).toBe(CacheControl.failure);
     }
+  });
+
+  it("GET /api/v1/guide answers the guide, as get_guide does, with no database", async ({
+    Web,
+    Unconfigured,
+  }) => {
+    const response = await fetch(`${Web}/api/v1/guide`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe(CacheControl.publicData);
+    const body = await response.json();
+    const guide = Schema.decodeUnknownSync(Guide)(body);
+    expect(guide.url).toBe(`${origin}/guide`);
+    expect(new Set(guide.entries.map((entry) => entry.id))).toEqual(
+      new Set(guideEntries.map((entry) => entry.id)),
+    );
+    for (const entry of guide.entries) {
+      expect(entry.guideUrl).toBe(`${origin}/guide#${entry.id}`);
+    }
+    const tool = await fetch(mcpRequest(`${Web}/mcp`, call("get_guide", {})));
+    const { result } = rpcMessage(await tool.text()) as {
+      result: { structuredContent: unknown };
+    };
+    expect(result.structuredContent).toEqual(body);
+    const bare = await fetch(`${Unconfigured}/api/v1/guide`);
+    expect(bare.status).toBe(200);
+    expect(await bare.json()).toEqual(body);
   });
 
   for (const [path, error] of [
@@ -375,7 +474,7 @@ describe("MCP", () => {
     ).toBe("allthings");
   });
 
-  it("lists the same tools, with the same input and output schemas", async ({
+  it("lists the same tools, with the same input and output schemas, then get_letter and coach_talk", async ({
     Web,
   }) => {
     const [actual, expected] = await mcp(Web, {
@@ -387,14 +486,33 @@ describe("MCP", () => {
     type Tool = { outputSchema: unknown } & Record<string, unknown>;
     const tools = (body: string) =>
       (rpcMessage(body) as { result: { tools: Array<Tool> } }).result.tools;
-    const served = tools(actual.body);
+    const all = tools(actual.body);
     const today = tools(expected.body);
-    expect(served.map((tool) => tool["name"])).toEqual([
+    expect(all.map((tool) => tool["name"])).toEqual([
       "list_events",
       "get_event",
       "list_speakers",
       "get_community",
+      "get_guide",
+      "get_year",
+      "get_letter",
+      "coach_talk",
+      "propose_talk",
     ]);
+    // get_guide, get_year, get_letter, coach_talk and propose_talk are new:
+    // the app never had them (core's contract holds the first three;
+    // web/tests/coach-tool.test.ts, coach_talk; web/tests/propose-tool.test.ts,
+    // propose_talk).
+    const newTools = [
+      "get_guide",
+      "get_year",
+      "get_letter",
+      "coach_talk",
+      "propose_talk",
+    ];
+    const served = all.filter(
+      (tool) => !newTools.includes(String(tool["name"])),
+    );
     // Names, titles, descriptions, annotations and input schemas, exactly,
     // but for one deliberate difference: the Worker writes the name as one
     // word, allthings, where the app still writes "all things".
@@ -525,6 +643,53 @@ describe("MCP", () => {
     expect(message.result.structuredContent.events).toHaveLength(5);
   });
 
+  it("coaches a talk with no database, its answer matching its output schema", async ({
+    Unconfigured,
+  }) => {
+    const transcript = [
+      "WEBVTT",
+      "",
+      "00:00.000 --> 00:10.000",
+      "Hi, I'm Sam, and I built a queue.",
+      "",
+      "00:10.000 --> 03:20.000",
+      "Book a demo, it's 20% off this week.",
+    ].join("\n");
+    const response = await fetch(
+      mcpRequest(
+        `${Unconfigured}/mcp`,
+        call("coach_talk", { title: "A queue", transcript }),
+      ),
+    );
+    const { result } = rpcMessage(await response.text()) as {
+      result: {
+        isError?: boolean;
+        structuredContent: unknown;
+      };
+    };
+    // The SDK checks structured content against the output schema, and
+    // answers an error when they differ.
+    expect(result.isError).toBeUndefined();
+    const coaching = coach({
+      slot: { format: "open-floor", minutes: 3 },
+      title: "A queue",
+      transcript,
+    });
+    expect(result.structuredContent).toEqual(coaching);
+    expect(coaching.findings.map((finding) => finding.id)).toEqual(
+      expect.arrayContaining(["length", "no-pitch"]),
+    );
+  });
+
+  /**
+   * Headers for a request the Worker answers before reading its whole body.
+   * workerd then closes the connection rather than read the rest, but Bun's
+   * fetch keeps it for the next request, which is reset when it goes out
+   * on it (ECONNRESET, with no answer). Closing it with the exchange keeps
+   * the next request on a fresh connection.
+   */
+  const refusedHeaders = { ...mcpHeaders, connection: "close" };
+
   it("refuses a body over its size limit before reading it", async ({
     Web,
   }) => {
@@ -532,6 +697,7 @@ describe("MCP", () => {
       mcpRequest(
         `${Web}/mcp`,
         call("get_event", { slug: "x".repeat(maxRequestBodySize) }),
+        refusedHeaders,
       ),
     );
     await response.body?.cancel();
@@ -560,13 +726,111 @@ describe("MCP", () => {
     });
     const request = new Request(`${Web}/mcp`, {
       method: "POST",
-      headers: mcpHeaders,
+      headers: refusedHeaders,
       body,
     });
     expect(request.headers.get("content-length")).toBeNull();
     const response = await fetch(request);
     await response.body?.cancel();
     expect(response.status).toBe(413);
+  });
+
+  it("serves only the letters Erik approved, from /api/v1/letters as get_letter does", async ({
+    Web,
+  }) => {
+    const published = await Effect.runPromise(publishedLetters);
+    const list = await fetch(`${Web}/api/v1/letters`);
+    expect(list.status).toBe(200);
+    expect(list.headers.get("cache-control")).toBe(CacheControl.publicData);
+    const body = Schema.decodeUnknownSync(Contract.Letters)(await list.json());
+    expect(body).toEqual(toLetters(published, origin));
+    const ask = async (args: Record<string, unknown>) =>
+      (
+        rpcMessage(
+          await (
+            await fetch(mcpRequest(`${Web}/mcp`, call("get_letter", args)))
+          ).text(),
+        ) as {
+          result: {
+            isError?: boolean;
+            structuredContent?: unknown;
+            content: Array<{ text: string }>;
+          };
+        }
+      ).result;
+    const latest = await ask({});
+    if (published[0] === undefined) {
+      expect(latest.isError).toBe(true);
+      expect(latest.content[0]?.text).toBe(
+        "No allthings letter has been published yet.",
+      );
+    } else {
+      expect(latest.structuredContent).toEqual(toLetter(published[0], origin));
+    }
+    // A month without a published issue is not found, whether or not a
+    // draft is written for it.
+    const drafts = everyIssue
+      .map((issue) => issue.month)
+      .filter((month) => !published.some((letter) => letter.month === month));
+    for (const month of ["1999-01", ...drafts]) {
+      const missing = await fetch(`${Web}/api/v1/letters/${month}`);
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ error: "Letter not found" });
+      const none = await ask({ month });
+      expect(none.isError).toBe(true);
+      expect(none.content[0]?.text).toBe(
+        `No allthings letter was published for ${month}.`,
+      );
+    }
+    expect((await ask({ month: "2026-13" })).isError).toBe(true);
+  });
+
+  it("get_year looks back on a year of our evenings in the contract's shape, the latest when none is asked for", async ({
+    Web,
+  }) => {
+    type YearAnswer = {
+      result: {
+        isError?: boolean;
+        structuredContent?: Contract.Year;
+        content: Array<{ text: string }>;
+      };
+    };
+    const ask = async (args: Record<string, unknown>) =>
+      (
+        rpcMessage(
+          await (
+            await fetch(mcpRequest(`${Web}/mcp`, call("get_year", args)))
+          ).text(),
+        ) as YearAnswer
+      ).result;
+    const latest = await ask({});
+    expect(latest.isError).toBeUndefined();
+    const year = Schema.decodeUnknownSync(Contract.Year)(
+      latest.structuredContent,
+    );
+    expect(year.year).toBe(2026);
+    expect(year.years).toEqual([2026, 2025]);
+    expect(year.url).toBe(`${origin}/year/2026`);
+    // In the order held; the Worker reads the seed at today's clock, when
+    // every evening of it is over. The draft is never one.
+    expect(year.evenings.map((evening) => evening.slug)).toEqual([
+      "2026-08-12-react-at-acme",
+      "2026-10-03-ends-now",
+      "2026-10-03-hack-day",
+      "2026-11-05-upcoming",
+    ]);
+    expect(year.evenings[0]?.onStage[0]).toEqual({
+      name: "Linus",
+      url: `${origin}/people/linus`,
+    });
+    expect(year.tally.guests).toBe(118);
+    expect((await ask({ year: 2025 })).structuredContent?.year).toBe(2025);
+    const none = await ask({ year: 2024 });
+    expect(none.isError).toBe(true);
+    expect(none.content[0]?.text).toBe(
+      "No allthings evening was held in 2024.",
+    );
+    expect((await ask({ year: 26 })).isError).toBe(true);
   });
 
   it("answers a call whose arguments hold too many elements with an error, and still serves", async ({
@@ -618,7 +882,11 @@ describe("MCP", () => {
           headers,
           ...(message === undefined ? {} : { body: JSON.stringify(message) }),
         });
-      const expected = await answer(await app.mcp(init(`${origin}/mcp`)));
+      const expected = app.mcp(
+        method,
+        headers,
+        message === undefined ? null : JSON.stringify(message),
+      );
       const actual = await answer(await fetch(init(`${Web}/mcp`)));
       expect(actual.status).toBe(expected.status);
       expect(actual.body).toBe(expected.body);
@@ -661,6 +929,7 @@ describe("MCP", () => {
     for (const message of [
       { jsonrpc: "2.0", id: 1, method: "tools/list" },
       call("get_community", {}),
+      call("get_guide", {}),
     ]) {
       const response = await fetch(mcpRequest(`${Unconfigured}/mcp`, message));
       const { result } = rpcMessage(await response.text()) as {
@@ -679,5 +948,15 @@ describe("bundle", () => {
       bundleBudgets,
     );
     expect(problems).toBeUndefined();
+  });
+
+  it("starts from the build's id alone, never the whole manifest", async () => {
+    expect(buildId).toBe(built.build);
+    const startup = await startupContributors(
+      new URL("../.alchemy/bundles/Web", import.meta.url).pathname,
+    );
+    const names = startup.map((contributor) => contributor.name);
+    expect(names).toContain("src/build-id.ts");
+    expect(names).not.toContain("src/assets.ts");
   });
 });

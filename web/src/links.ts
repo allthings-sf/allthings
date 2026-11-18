@@ -34,6 +34,24 @@ export const homePath = "/";
 /** Every evening, listed: this site's evenings index (pages/events.tsx). */
 export const everyEvening = "/events";
 
+/** Every talk given at our evenings, listed: the talks library (pages/talks.tsx). */
+export const everyTalk = "/talks";
+
+/** Happenings beyond our evenings worth going to: the allthings guide (pages/guide.tsx). */
+export const guidePath = "/guide";
+/**
+ * A year of our evenings looked back on (pages/year.tsx): /year/2026. Not
+ * /2026, which may be an evening's own short link.
+ */
+export const yearPath = (year: number): `/${string}` => `/year/${year}`;
+
+/** The allthings letter's archive: every issue Erik approved (pages/letter.tsx). */
+export const letterPath = "/letter";
+
+/** One issue of the letter, by its month: /letter/2026-12. */
+export const issuePath = (month: string): `/${string}` =>
+  `${letterPath}/${month}`;
+
 /** What allthings is, where it came from and who organizes it. */
 export const aboutPath = "/about";
 
@@ -79,13 +97,13 @@ export const cliPackage = "https://www.npmjs.com/package/allthings";
 
 /**
  * The commands that get the CLI, as cli/README.md gives them: one run with
- * Bun, and the installer (pages/install.bash, on GitHub Pages), which puts
- * `allthings` in ~/.allthings/bin.
+ * Bun, and the installer (cli/install.bash, which this site serves at
+ * /install.bash: see web/scripts/build.ts), which puts `allthings` in
+ * ~/.allthings/bin.
  */
 export const cliCommands = {
-  bunx: "bunx allthings events",
-  install:
-    "curl -fsSL https://allthingsweb-dev.github.io/allthingsweb/install.bash | bash",
+  bunx: "bunx allthings",
+  install: "curl -fsSL https://allthings.dev/install.bash | bash",
 } as const;
 
 export interface Social {
@@ -98,8 +116,8 @@ export interface Social {
 export const socials: ReadonlyArray<Social> = [
   { name: "luma", href: lumaCalendar },
   { name: "discord", href: discord },
-  { name: "youtube", href: "https://www.youtube.com/@allthingsweb-dev" },
-  { name: "github", href: "https://github.com/allthingsweb-dev/allthingsweb" },
+  { name: "youtube", href: "https://www.youtube.com/@allthings-sf" },
+  { name: "github", href: "https://github.com/allthings-sf/allthings" },
   { name: "x", href: `https://x.com/${xHandle}` },
   { name: "bluesky", href: `https://bsky.app/profile/${ourAccount.handle}` },
   {

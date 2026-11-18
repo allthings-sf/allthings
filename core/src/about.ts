@@ -6,10 +6,12 @@ import type * as Statement from "effect/sql/Statement";
 import type * as Contract from "./contract.ts";
 import {
   ended,
+  inYear,
   ours,
   published,
   soonestFirst,
   talkAppearances,
+  yearOf,
 } from "./catalog.ts";
 import { DataSourceError } from "./errors.ts";
 import { guestCountFloor } from "./event-page.ts";
@@ -81,18 +83,27 @@ export const TallyFields = {
 
 /**
  * Our evenings held as of `now` (published and ended), for a statement's
- * `WITH held AS (…)`: what {@link tally} counts.
+ * `WITH held AS (…)`: what {@link tally} counts. Given a `year`, only
+ * those that started in it in San Francisco (`inYear`), for a year's
+ * tally (src/year.ts).
  */
 export const held = (
   sql: SqlClient,
   now: DateTime.Utc | Date,
+  year?: number,
 ): Statement.Fragment =>
   sql`SELECT e.* FROM events e
-    WHERE ${sql.and([published(sql, "e"), ended(sql, "e", now), ours(sql, "e")])}`;
+    WHERE ${sql.and([
+      published(sql, "e"),
+      ended(sql, "e", now),
+      ours(sql, "e"),
+      ...(year === undefined ? [] : [inYear(sql, "e", year)]),
+    ])}`;
 
 /**
  * The tally as four columns of a SELECT under `WITH held AS (…)`
- * ({@link held}), each counted from the data; nothing is typed in.
+ * ({@link held}), each counted from the data at the evenings `held`
+ * holds; nothing is typed in.
  */
 export const tally = (
   sql: SqlClient,
@@ -102,6 +113,7 @@ export const tally = (
     (
       SELECT count(DISTINCT a.profile_id)::int
       FROM ${talkAppearances(sql, { whose: "ours", when: { ended: now } })} a
+      WHERE a.event_id IN (SELECT id FROM held)
     ) AS speakers,
     (
       SELECT count(DISTINCT es.sponsor_id)::int
@@ -117,6 +129,11 @@ export const tally = (
 export interface AboutView extends Tally {
   /** The first published evening, if there has been one. */
   readonly first: Evening | undefined;
+  /**
+   * The latest year one of ours was held in, in San Francisco (`yearOf`),
+   * whose page (src/year.ts) the tally leads to; none before the first.
+   */
+  readonly latestYear: number | undefined;
   /** The first evening under each former name, oldest first. */
   readonly formerNames: ReadonlyArray<{
     readonly name: FormerName;
@@ -142,6 +159,7 @@ const OrganizerRow = Schema.Struct({
 export const AboutRow = Schema.Struct({
   ...TallyFields,
   first: Schema.NullOr(Rows.Listing),
+  latestYear: Schema.NullOr(Schema.Int),
   formerNames: Schema.Array(
     Schema.Struct({
       name: Schema.Literals(formerNames),
@@ -166,6 +184,7 @@ export function toAbout(row: AboutRow, now: DateTime.Utc): AboutView {
     hostingCompanies: row.hostingCompanies,
     guests: row.guests,
     first: row.first === null ? undefined : toEvening(row.first, now),
+    latestYear: row.latestYear ?? undefined,
     formerNames: row.formerNames.map(({ name, listing }) => ({
       name,
       evening: toEvening(listing, now),
@@ -220,6 +239,7 @@ const make = Effect.gen(function* () {
           ORDER BY ${soonestFirst(sql, "e")}
           LIMIT 1
         ) AS first,
+        (SELECT max(${yearOf(sql, "e")}) FROM held e) AS "latestYear",
         COALESCE((
           SELECT json_agg(json_build_object('name', f.name, 'listing', f.listing)
             ORDER BY f.position)

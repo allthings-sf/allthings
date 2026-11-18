@@ -1,3 +1,5 @@
+import type { Walkthrough } from "./walkthrough.ts";
+
 /** Everything the header shows about one pull request, already summarized. */
 export type PrState = {
   repo: { owner: string; name: string };
@@ -16,13 +18,15 @@ export type PrState = {
   diff: { additions: number; deletions: number; files: number };
   preview: {
     state: "ready" | "building" | "failed" | "none";
-    /** The PR's stable alias when one is set up, else the latest deployment. */
+    /** The latest preview deployment's address. */
     url: string | null;
   };
   coderabbit: {
     review:
       "approved" | "changes requested" | "reviewing" | "commented" | "none";
     findings: { resolved: number; open: number };
+    /** CodeRabbit's walkthrough comment, once it has posted one. */
+    walkthrough: Walkthrough | null;
   };
   checks: "passing" | "failing" | "running" | "none";
 };

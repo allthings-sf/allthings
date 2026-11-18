@@ -183,6 +183,8 @@ export const guessedWords: ReadonlySet<string> = new Set([
 export const slugRoots: ReadonlySet<string> = new Set([
   "events",
   "people",
+  "talks",
+  "year",
   "speakers",
   "about",
   "brand",
@@ -190,6 +192,9 @@ export const slugRoots: ReadonlySet<string> = new Set([
   "r",
   "api",
   "code-of-conduct",
+  "privacy",
+  "coach",
+  "letter",
 ]);
 
 /**

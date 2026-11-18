@@ -3,6 +3,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { asOf } from "./clock.ts";
 import {
+  artifactsOf,
   hostsOf,
   latestFirst,
   linkFirst,
@@ -19,7 +20,9 @@ import {
   imageJson,
   orDataSourceError,
   profileJson,
+  siteSlug,
 } from "./sql.ts";
+import { artifactJson } from "./talk-artifacts.ts";
 
 /**
  * Published events, as of the `Clock`'s now (src/clock.ts). Drafts never
@@ -48,7 +51,7 @@ const make = Effect.gen(function* () {
 
   /** The event's columns, its venue as public surfaces may say it at `now`. */
   const eventColumns = (now: Date) => sql`
-    e.id, e.slug, e.name, e.tagline,
+    e.id, e.slug, ${sql.literal(siteSlug("e"))} AS "siteSlug", e.name, e.tagline,
     e.start_date AS "startDate", e.end_date AS "endDate",
     ${publicVenue(sql, "e", now, "columns")},
     e.luma_event_id AS "lumaEventId",
@@ -80,7 +83,8 @@ const make = Effect.gen(function* () {
         e.luma_checked_in_count AS "lumaCheckedInCount",
         ${talksOf(sql, "e", {
           talk: sql`'id', t.id, 'title', t.title,
-            'description', t.description, 'format', t.format`,
+            'description', t.description, 'format', t.format,
+            'artifacts', ${artifactsOf(sql, artifactJson(sql))}`,
           speaker: sql`(${sql.literal(profileJson)})::jsonb
             || jsonb_build_object('role', ts.role)`,
         })} AS talks,

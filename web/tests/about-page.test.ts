@@ -5,6 +5,7 @@ import type { Evening } from "allthings-core/src/home.ts";
 import { DateTime } from "effect";
 import { cliCommands, discord, socials } from "../src/links.ts";
 import { aboutPage, count } from "../src/pages/about.tsx";
+import { coachPath } from "../src/pages/coach.tsx";
 import { headingLevels, htmlProblems } from "./support/pages.ts";
 
 /** The about page as a pure function of fixed data. */
@@ -63,6 +64,7 @@ const view = (overrides: Partial<AboutView> = {}): AboutView => ({
   hostingCompanies: 24,
   guests: 8215,
   first: remix,
+  latestYear: 2026,
   formerNames: [
     { name: "Remix Bay Area", evening: remix },
     { name: "React Bay Area", evening: react },
@@ -134,8 +136,17 @@ describe("the about page", () => {
       ["said “I’m in”", "8,215"],
     ]);
     expect(soFar).toContain(
-      'since <time datetime="2024-03-27T00:00:00.000Z">Tue Mar 26, 2024</time>',
+      'since <time datetime="2024-03-27T00:00:00.000Z">Tue Mar 26, 2024</time> · <a href="/year/2026">year\u00a0by\u00a0year\u00a0<span aria-hidden="true">→</span></a></p>',
     );
+  });
+
+  test("leads the all-time tally to the latest year's page, and nowhere before one", () => {
+    expect(part(render(view({ latestYear: 2025 })), "so-far")).toContain(
+      '<a href="/year/2025">year\u00a0by\u00a0year',
+    );
+    expect(
+      part(render(view({ latestYear: undefined })), "so-far"),
+    ).not.toContain("/year/");
   });
 
   test("leaves out a number that is nothing, and the whole tally before anything has happened", () => {
@@ -149,6 +160,7 @@ describe("the about page", () => {
         hostingCompanies: 0,
         guests: 0,
         first: undefined,
+        latestYear: undefined,
         formerNames: [],
       }),
     );
@@ -210,11 +222,12 @@ describe("the about page", () => {
     expect(part(render(view({ organizers: [] })), "organizers")).toBe("");
   });
 
-  test("asks companies to host and people to take the stage on the channels we have, with no form", () => {
+  test("asks companies to host on discord and people to propose a talk at /propose, with no form here", () => {
     const html = render(view());
     expect(part(html, "host")).toContain(`<a href="${discord}">ask on discord`);
+    expect(part(html, "stage")).toContain(`<a href="/propose">propose a talk`);
     expect(part(html, "stage")).toContain(
-      `<a href="${discord}">pitch a talk on discord`,
+      `<a href="${coachPath}">coach your talk`,
     );
     expect(html).not.toMatch(/<form|<input/);
     // The one button is the mode control.
@@ -249,8 +262,8 @@ describe("the about page", () => {
       ...terminal.matchAll(/<li><code>([^<]+)<\/code><\/li>/g),
     ].map(([, command]) => command);
     expect(commands).toEqual([
-      "bunx allthings events",
-      "curl -fsSL https://allthingsweb-dev.github.io/allthingsweb/install.bash | bash",
+      "bunx allthings",
+      "curl -fsSL https://allthings.dev/install.bash | bash",
     ]);
     const readme = await Bun.file(
       new URL("../../cli/README.md", import.meta.url),
@@ -326,7 +339,7 @@ describe("the about page's portraits as variants", () => {
       images: "variants",
     });
     expect(html).toContain(
-      '<img class="portrait" src="/img/168x168/jpeg/1767323045/profiles/erik.png" srcset="/img/168x168/jpeg/1767323045/profiles/erik.png 168w, /img/336x336/jpeg/1767323045/profiles/erik.png 336w" sizes="(max-width: 1023.98px) 96px, 168px" alt="" width="168" height="168" loading="lazy" decoding="async"/>',
+      '<img class="portrait" src="/img/168x168/jpeg/1767323045-q80/profiles/erik.png" srcset="/img/168x168/jpeg/1767323045-q80/profiles/erik.png 168w, /img/336x336/jpeg/1767323045-q80/profiles/erik.png 336w" sizes="(max-width: 1023.98px) 96px, 168px" alt="" width="168" height="168" loading="lazy" decoding="async"/>',
     );
     expect(html).not.toContain("media.allthings.dev");
   });

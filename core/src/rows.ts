@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ArtifactRow } from "./talk-artifacts.ts";
 
 /**
  * What the repositories read from Postgres, decoded at the boundary. Only the
@@ -48,7 +49,10 @@ export const Curation = Schema.Union([
  */
 export const Event = Schema.Struct({
   id: Schema.String,
+  /** Its long slug, which the API and the MCP tools look it up by. */
   slug: Schema.String,
+  /** Where its page is: its short link, or its long slug until it has one. */
+  siteSlug: Schema.String,
   name: Schema.String,
   tagline: Schema.String,
   startDate: Schema.DateTimeUtcFromDate,
@@ -112,6 +116,11 @@ export const Talk = Schema.Struct({
   description: Schema.String,
   format: TalkFormat,
   speakers: Schema.Array(TalkSpeaker),
+  /**
+   * What it left behind (src/talk-artifacts.ts), where the statement reads
+   * it with the catalog's `artifactsOf`.
+   */
+  artifacts: Schema.optionalKey(Schema.Array(ArtifactRow)),
 });
 
 /** A row of `event_people`: someone's part in the event, apart from its talks. */
@@ -155,6 +164,8 @@ export const DirectoryRow = Schema.Struct({
   eventId: Schema.String,
   eventName: Schema.String,
   eventSlug: Schema.String,
+  /** The event's `siteSlug`: where its page is. */
+  eventSiteSlug: Schema.String,
   eventStart: Schema.DateTimeUtcFromDate,
 });
 

@@ -382,6 +382,68 @@ describe("applying lineups", () => {
     );
   });
 
+  test("adds a hosting company on record, and only adds", async () => {
+    const db = await database();
+    const hosted: Lineups = {
+      people: {},
+      events: [
+        {
+          slug: "2026-10-03-hack-day",
+          name: "Hack day",
+          hosts: [
+            { company: "Acme", sources: source },
+            { company: "Globex", sources: source, hold: "needs Erik: test" },
+          ],
+          talks: [],
+          people: [],
+        },
+        {
+          lumaEventId: "evt-react",
+          name: "React at Acme",
+          hosts: [{ company: "Acme", sources: source }],
+          talks: [],
+          people: [],
+        },
+      ],
+    };
+    const hosts = async () =>
+      (
+        await db.query(
+          `SELECT e.slug, s.name FROM event_sponsors es
+           JOIN events e ON e.id = es.event_id JOIN sponsors s ON s.id = es.sponsor_id
+           ORDER BY e.slug, es.created_at`,
+        )
+      ).rows;
+    const exit = await apply(db, hosted);
+    expect(Exit.isSuccess(exit) ? exit.value.lines : []).toEqual([
+      "held: host Globex (Hack day): needs Erik: test",
+      "2026-10-03-hack-day Hack day",
+      "  host Acme: added",
+      "evt-react React at Acme",
+      "  host Acme: already there",
+    ]);
+    // React at Acme keeps both its hosts; the held Globex is never written.
+    expect(await hosts()).toEqual([
+      { slug: "2026-08-12-react-at-acme", name: "Globex" },
+      { slug: "2026-08-12-react-at-acme", name: "Acme" },
+      { slug: "2026-10-03-hack-day", name: "Acme" },
+    ]);
+    const unknown = await apply(db, {
+      people: {},
+      events: [
+        {
+          slug: "2026-10-03-hack-day",
+          name: "Hack day",
+          hosts: [{ company: "Initech", sources: source }],
+          talks: [],
+          people: [],
+        },
+      ],
+    });
+    expect(Exit.isFailure(unknown)).toBe(true);
+    expect(String(unknown)).toContain("no company named Initech");
+  });
+
   test("an event needs a Luma id or a slug", () => {
     const decode = Schema.decodeUnknownExit(Lineups);
     const event = { name: "Nameless", talks: [], people: [] };
@@ -708,7 +770,6 @@ describe("core/backfill/lineups.json", () => {
     expect(subset.events.filter(erikMcOnly).map((event) => event.name)).toEqual(
       [
         "React Bay Area at Sanity",
-        "React Bay Area at Mux",
         "React Bay Area at Cisco Meraki",
         "Open Source Hackathon",
         "Pre Next.js Conf Meetup",
@@ -718,7 +779,6 @@ describe("core/backfill/lineups.json", () => {
         "All Things Web at Sanity",
         "All Things Web at Sentry",
         "All Things Web Hack Evening",
-        "All Things Web at Convex",
         "AI x All Things Web",
         "Future of Web Hackathon",
         "All Things Web Show & Tell",
@@ -731,7 +791,6 @@ describe("core/backfill/lineups.json", () => {
         "All Things React Native",
         "After Party - All Things React Native",
         "TypeScript AI: The official conference after-party",
-        "All Things Sync",
         "All Things Agent Setups",
       ],
     );
@@ -773,6 +832,15 @@ describe("core/backfill/lineups.json", () => {
           "organizer andre-landgraf",
         ],
       ],
+      // Its running order, as the recording's chapters show it.
+      [
+        "React Bay Area at Mux",
+        [
+          "Implementing a shopping cart with React 19",
+          "Custom component-based media players",
+        ],
+        ["mc erik-thorelli"],
+      ],
       [
         "Effect San Francisco",
         [
@@ -809,10 +877,26 @@ describe("core/backfill/lineups.json", () => {
         ["co-host neha-varshneya"],
       ],
       ["NextDev.fm Live", ["NextDev.fm Live"], ["mc erik-thorelli"]],
+      // Its running order, as the recording's chapters show it.
+      [
+        "All Things Web at Convex",
+        [
+          "AI, IDEs, and the Future of Code Understanding",
+          "Technical Leadership in the world of AI Coding Agents",
+          "Build your own image optimizer",
+        ],
+        ["mc erik-thorelli"],
+      ],
       // The AI panel (Erik, 2026-10-10); its title is a placeholder.
       [
         "All Things Expo!",
         ["Panel: AI and the tools we build"],
+        ["mc erik-thorelli"],
+      ],
+      // Two of its talks wait for their titles; the panel had everyone.
+      [
+        "All Things Sync",
+        ["Four fresh ideas for local-first", "Panel discussion"],
         ["mc erik-thorelli"],
       ],
     ]);
@@ -829,6 +913,18 @@ describe("core/backfill/lineups.json", () => {
     ).toEqual([
       ["Effect San Francisco", ["Effect panel"], ["mc simon-farshid"]],
       ["DevTool AX Demos", [], ["mc erik-thorelli"]],
+    ]);
+    // Hosted at their offices, which Luma lists no company account for.
+    expect(
+      subset.events
+        .filter((event) => (event.hosts?.length ?? 0) > 0)
+        .map((event) => [
+          event.name,
+          (event.hosts ?? []).map((host) => host.company),
+        ]),
+    ).toEqual([
+      ["Dev Setup Demos - Show your agents.md!", ["WorkOS"]],
+      ["DevTool AX Demos", ["Mux"]],
     ]);
     const effect = subset.events.find(
       (event) => event.name === "Effect San Francisco",
@@ -875,6 +971,7 @@ describe("core/backfill/lineups.json", () => {
     expect(Object.keys(subset.people).toSorted()).toEqual([
       "abhi-aiyer",
       "andre-landgraf",
+      "anselm-eickhoff",
       "arthur-stockman",
       "dan-goosewin",
       "david-cusatis",
@@ -882,6 +979,9 @@ describe("core/backfill/lineups.json", () => {
       "evan-bacon",
       "greg-pstrucha",
       "ivan-burazin",
+      "james-arthur",
+      "james-cowling",
+      "james-grugett",
       "jeff-huber",
       "kevin-whinnery",
       "kiet-ho",
@@ -896,6 +996,7 @@ describe("core/backfill/lineups.json", () => {
       "neha-varshneya",
       "nicholas-pipitone",
       "nikhil-gupta",
+      "nipunn-koorapati",
       "oscar-newman",
       "rhys-sullivan",
       "rostislav-melkumyan",
@@ -903,8 +1004,10 @@ describe("core/backfill/lineups.json", () => {
       "sam-bhagwat",
       "sam-goodwin",
       "sebastian-lorenz",
+      "sebastien-morel",
       "shane-thomas",
       "simon-farshid",
+      "steve-heffernan",
       "ted-nyman",
       "tyler-slaton",
     ]);

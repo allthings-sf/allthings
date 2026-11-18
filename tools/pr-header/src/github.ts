@@ -1,4 +1,5 @@
 import type { PrState } from "./state.ts";
+import { isWalkthrough, parseWalkthrough } from "./walkthrough.ts";
 
 export type Repo = PrState["repo"];
 
@@ -55,6 +56,10 @@ export const pullRequestQuery = `
         number url state isDraft mergeStateStatus headRefOid body
         additions deletions changedFiles
         reviews(last: 20) { nodes { author { login } state body } }
+        comments(first: 20) {
+          pageInfo { hasNextPage endCursor }
+          nodes { author { login } url body }
+        }
         reviewThreads(first: 100) {
           pageInfo { hasNextPage endCursor }
           nodes { isResolved comments(first: 1) { nodes { author { login } } } }
@@ -107,6 +112,10 @@ export type PullRequestData = {
   reviews: {
     nodes: { author: { login: string } | null; state: string; body: string }[];
   };
+  comments: {
+    pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+    nodes: { author: { login: string } | null; url: string; body: string }[];
+  };
   reviewThreads: {
     pageInfo?: { hasNextPage: boolean; endCursor: string | null };
     nodes: ReviewThread[];
@@ -120,7 +129,7 @@ export type PullRequestData = {
   };
 };
 
-/** The newest Vercel preview deployment of the PR's head commit. */
+/** The newest preview deployment of the PR's head commit. */
 export type PreviewDeployment = {
   state: string;
   url: string | null;
@@ -146,7 +155,7 @@ function contextOutcome(context: Context): "passed" | "failed" | "running" {
 }
 
 // Shown in their own badges, or this workflow itself.
-const separateChecks = /^(CodeRabbit|Vercel|PR header)/;
+const separateChecks = /^(CodeRabbit|PR header)/;
 
 const mergeStates: Record<string, PrState["mergeState"]> = {
   CLEAN: "clean",
@@ -163,7 +172,6 @@ export function summarize(
   repo: Repo,
   pr: PullRequestData,
   deployment: PreviewDeployment,
-  stablePreviewUrl: string | null,
 ): PrState {
   const contexts =
     pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
@@ -200,6 +208,12 @@ export function summarize(
     latestReview && latestReview.state !== "APPROVED"
       ? outsideDiffFindings(latestReview.body)
       : 0;
+
+  // CodeRabbit posts its walkthrough once and edits it in place from then on.
+  const comment = pr.comments.nodes.find(isWalkthrough);
+  const walkthrough = comment
+    ? parseWalkthrough(comment.body, comment.url)
+    : null;
 
   const outcomes = contexts
     .filter((c) => !separateChecks.test(contextName(c)))
@@ -240,17 +254,18 @@ export function summarize(
     },
     preview: {
       state: previewState,
-      url: deployment ? (stablePreviewUrl ?? deployment.url) : null,
+      url: deployment?.url ?? null,
     },
     coderabbit: {
       review,
       findings: { resolved, open: threads.length - resolved + outsideDiff },
+      walkthrough,
     },
     checks,
   };
 }
 
-/** The newest preview deployment for a commit, from Vercel's GitHub records. */
+/** The newest preview deployment for a commit, as the Deploy workflow records it. */
 export async function previewDeployment(
   github: GitHub,
   repo: Repo,
@@ -294,13 +309,35 @@ const reviewThreadsQuery = `
   }
 `;
 
+const commentsQuery = `
+  query ($owner: String!, $name: String!, $number: Int!, $after: String!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        comments(first: 20, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes { author { login } url body }
+        }
+      }
+    }
+  }
+`;
+
+type CommentPage = {
+  repository: {
+    pullRequest: { comments: Required<PullRequestData["comments"]> };
+  };
+};
+
 type ThreadPage = {
   repository: {
     pullRequest: { reviewThreads: Required<PullRequestData["reviewThreads"]> };
   };
 };
 
-/** Loads a PR with all of its review threads, however many pages they span. */
+/**
+ * Loads a PR with all of its review threads, however many pages they span,
+ * and its comments up to CodeRabbit's walkthrough, wherever it falls.
+ */
 export async function fetchPullRequest(
   github: GitHub,
   repo: Repo,
@@ -320,6 +357,31 @@ export async function fetchPullRequest(
     const threads = next.repository.pullRequest.reviewThreads;
     pr.reviewThreads.nodes.push(...threads.nodes);
     page = threads.pageInfo;
+  }
+  let comments = pr.comments.pageInfo;
+  while (
+    !pr.comments.nodes.some(isWalkthrough) &&
+    comments?.hasNextPage &&
+    comments.endCursor
+  ) {
+    const after = comments.endCursor;
+    const next = await github.graphql<CommentPage>(commentsQuery, {
+      ...variables,
+      after,
+    });
+    const commentPage = next.repository.pullRequest.comments;
+    // A page that claims more but hands back the cursor it was asked for
+    // would be fetched forever.
+    if (
+      commentPage.pageInfo.hasNextPage &&
+      commentPage.pageInfo.endCursor === after
+    ) {
+      throw new Error(
+        `#${number}: comment pages stopped advancing at ${after}`,
+      );
+    }
+    pr.comments.nodes.push(...commentPage.nodes);
+    comments = commentPage.pageInfo;
   }
   return pr;
 }

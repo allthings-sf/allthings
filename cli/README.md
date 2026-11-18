@@ -3,7 +3,7 @@
 allthings from your terminal: what's coming up, who's on stage and how to get in. It reads the same public MCP server agents use, so what you see here is what they see.
 
 ```sh
-curl -fsSL https://allthingsweb-dev.github.io/allthingsweb/install.bash | bash
+curl -fsSL https://allthings.dev/install.bash | bash
 ```
 
 That installs the latest stable release, `allthings` 2, in `~/.allthings/bin`.
@@ -11,23 +11,63 @@ That installs the latest stable release, `allthings` 2, in `~/.allthings/bin`.
 It is also on npm as `allthings`, for Bun:
 
 ```sh
-bunx allthings events
+bunx allthings
 ```
 
 ## Use
 
 ```sh
+allthings                           # the next evening, and what to run from there
 allthings events                    # what's coming up
 allthings events --past --limit 5   # the five most recent evenings
-allthings event <slug>              # one evening: when, where, the talks
+allthings event next                # the next evening: when, where, the talks
+allthings event latest              # the last one, with its video when there is one
 allthings speakers react            # who has been on stage about react
-allthings rsvp <slug>               # open the evening's page to say you're in
+allthings rsvp next                 # open the next evening's page to say you're in
+allthings open latest               # open the last evening's page on allthings.dev
+allthings guide                     # conferences worth the trip, starred as Michelin stars restaurants
 allthings about                     # where to find everyone between evenings
+allthings coach slides.md talk.vtt  # coaching for your talk, before you give it
+allthings propose                   # propose a talk for an evening
 ```
 
-Add `--json` to any of them for the public contract, unformatted, for scripts and agents. Exit codes are part of that contract: 0 ok, 1 service error, 2 usage error, 3 no such evening.
+`event`, `rsvp` and `open` take an evening's slug, from `events`, or `next` and `latest`, so every line above runs as typed. With nothing on the calendar, `allthings` shows the last evening and where the next one is announced first, and `event next` exits 3.
+
+Add `--json` to any of them except `rsvp` and `open`, which print just the link, for the public contract, unformatted, for scripts and agents. On its own, `allthings --json` gives `{ next, latest }`, each an evening or `null`. Exit codes are part of that contract: 0 ok, 1 service error, 2 usage error, 3 no such evening.
 
 `ALLTHINGS_MCP_URL` points it at another server, such as a local Worker.
+
+## Coach your talk
+
+```sh
+allthings coach slides.md rehearsal.vtt                      # a 3-minute open-floor slot
+allthings coach outline.md --slot 20 --goal teach-a-technique
+allthings coach rehearsal.txt --goal first-talk --json
+```
+
+`coach` sends your talk to `coach_talk`, the MCP server's coaching, and prints what to change first, then each finding (must, should, consider) with what it measured and what to do, what already works, and what it couldn't check without more. Every check is explained at [allthings.dev/coach](https://allthings.dev/coach).
+
+A file's extension says what it is: `.md` is an outline, or slides split by lines of `---`, and its first heading is the title unless `--title` gives one; `.txt`, `.vtt` and `.srt` are a rehearsal's transcript, and with timestamps (`.vtt`, `.srt`) it also checks your pace. Send at most one of each. `--slot` is the slot in minutes: 3, an open floor's, unless given, or 20 with `--talk`, and a slot over 5 minutes is a talk in the lineup. `--goal` says what you want from the talk, as often as you like: `first-talk`, `teach-a-technique`, `find-contributors`, `show-a-launch` or `get-hired`. `--abstract` adds the abstract.
+
+The files are read only to send them; `coach_talk` keeps none of what it is sent. A file it can't read, one too long for `coach_talk`, or an unknown goal exits 2 before anything is sent.
+
+## Propose a talk
+
+```sh
+allthings propose                   # asks for each part, shows it, and sends it on your yes
+allthings propose --title "Effect in production" --abstract "What a year of Effect in a payments service taught us about errors." \
+  --name "Ada Lovelace" --email ada@example.com --format demo --link https://github.com/ada
+```
+
+An open door and a high bar: anyone may propose, and Erik and Andre read every proposal and reply by email. In a terminal it asks for whatever the options leave out (everything, with none), then shows the proposal and asks before sending; `--yes` skips that. Elsewhere, as in a script or an agent, `--title`, `--abstract` (at least 40 characters), `--name` and `--email` are required; `--format` (talk, lightning or demo), `--about`, `--link` (up to four) and `--notes` are not. With `--json` it prints the server's answer. It exits 2 with what to fix when the server finds a problem, and 1 when it can't take it (too many at once, or a stage that doesn't keep them). It sends through the MCP server's `propose_talk`, naming itself in its `User-Agent`, so the organizers see it came from the CLI. Nothing you send shows on allthings.dev unless you give the talk.
+
+## Agents
+
+```sh
+allthings mcp                       # a line to add allthings to Claude Code, Codex, Grok Build, VS Code or Cursor
+```
+
+It prints the server's URL, its tools and a line for each agent, for example `claude mcp add --transport http allthings https://allthings.dev/mcp`. It reads nothing, so it works offline. With `ALLTHINGS_MCP_URL` set, the lines name that server instead. `allthings mcp --json` gives `{ name, url, transport, tools }`. An agent with a shell can also just run this CLI with `--json`.
 
 ## aux
 

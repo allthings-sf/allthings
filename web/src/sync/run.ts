@@ -24,6 +24,11 @@ import {
   ShortSlugs,
 } from "allthings-core/src/slugs.ts";
 import { LumaDrafts } from "allthings-core/src/luma/drafts.ts";
+import {
+  LumaCompanyHosts,
+  type RehearsedEvening,
+  rehearsedEvenings,
+} from "allthings-core/src/luma/company-hosts.ts";
 import { LumaVenueVisibility } from "allthings-core/src/luma/venue-visibility.ts";
 import { LumaVenues } from "allthings-core/src/luma/venues.ts";
 import {
@@ -38,15 +43,16 @@ import { Clock, Context, DateTime, Duration, Effect, Exit } from "effect";
  * (app/src/app/api/cron/luma-sync/route.ts): events from Luma's calendar
  * first, then, from Luma's API, which evenings ahead keep their venue to
  * guests (before any venue is filled in, so a guests-only one is never
- * shown), the venues the calendar hides and the drafts it never carries,
- * then short links for the evenings without one, then the images still
- * missing (profile photos, post images, event covers), each image phase in
- * its own time window, then the events' descriptions from Luma's API, in a
- * window of their own, so slow answers from Luma never cost the images
- * theirs. (The app's cron does neither venues, links nor descriptions.)
- * Every step writes only what is missing or changed, so a run repeated, or
- * one cut short, leaves the database as consistent as before and the next
- * run carries on.
+ * shown), the venues the calendar hides, the drafts it never carries and
+ * the hosting companies Luma lists for recent evenings, then short links
+ * for the evenings without one, then the images still missing (profile
+ * photos, post images, event covers), each image phase in its own time
+ * window, then the events' descriptions from Luma's API, in a window of
+ * their own, so slow answers from Luma never cost the images theirs. (The
+ * app's cron does neither venues, links nor descriptions.) Every step
+ * writes only what is missing or changed, so a run repeated, or one cut
+ * short, leaves the database as consistent as before and the next run
+ * carries on.
  *
  * - `write` writes, as the app's cron does.
  * - `dry-run` writes nothing: the event sync is rehearsed (its statement in
@@ -92,6 +98,15 @@ export interface SyncLimits {
   readonly venues: { readonly maxEvents?: number };
   /** Drafts asked about, which the feed never carries; every one by default. */
   readonly drafts: { readonly maxEvents?: number };
+  /**
+   * Evenings asked for the hosting companies Luma lists
+   * (core/src/luma/company-hosts.ts): those that ended within `within`, at
+   * most `maxEvents` (every one by default).
+   */
+  readonly companyHosts: {
+    readonly within: Duration.Input;
+    readonly maxEvents?: number;
+  };
   readonly descriptions: {
     /** The import is cut off after this long, writing nothing. */
     readonly window: Duration.Input;
@@ -130,6 +145,7 @@ export const syncLimits = {
     venueVisibility: {},
     venues: {},
     drafts: {},
+    companyHosts: { within: "7 days" },
     // Luma can't say which changed: every evening not over a week ago each
     // hour, and two older ones in turn. With about 30 older ones now, each
     // is asked about again every 15 hourly runs; longer as they grow.
@@ -142,10 +158,11 @@ export const syncLimits = {
   },
   /**
    * Within 50 subrequests: the feed is one, each venue visibility, venue,
-   * draft and description one, and each image at most six (a cover lookup
-   * and its fallback, a download and three redirects), so two venue
-   * visibilities, two venues, a draft, two descriptions and two images of
-   * each kind are at most 44.
+   * draft, evening asked for its hosts and description one, and each image
+   * at most six (a cover lookup and its fallback, a download and three
+   * redirects), so two venue visibilities, two venues, a draft, an
+   * evening's hosts, two descriptions and two images of each kind are at
+   * most 45.
    */
   free: {
     startBefore: "35 seconds",
@@ -156,13 +173,14 @@ export const syncLimits = {
     venueVisibility: { maxEvents: 2 },
     venues: { maxEvents: 2 },
     drafts: { maxEvents: 1 },
+    companyHosts: { within: "7 days", maxEvents: 1 },
     descriptions: { window: "30 seconds", maxEvents: 2 },
     followers: { maxProfiles: 2, staleAfter: "7 days", window: "30 seconds" },
-    // What the 50 subrequests leave after the steps before it (44).
+    // What the 50 subrequests leave after the steps before it (45).
     postSearch: {
       within: "7 days",
       maxEvents: 1,
-      maxRequests: 5,
+      maxRequests: 4,
       window: "30 seconds",
     },
   },
@@ -328,6 +346,42 @@ const drafts = (
   });
 
 /**
+ * The company hosts step (core's src/luma/company-hosts.ts) within
+ * `limits`, as a step reports it: each company it attached, and the hosts
+ * whose Luma account we have no record of.
+ */
+const companyHosts = (
+  attacher: LumaCompanyHosts["Service"],
+  limits: SyncLimits,
+  dryRun: boolean,
+  rehearsed: ReadonlyArray<RehearsedEvening> = [],
+) =>
+  Effect.gen(function* () {
+    const { within, maxEvents } = limits.companyHosts;
+    const result = yield* attacher.run({
+      dryRun,
+      within,
+      rehearsed,
+      ...(maxEvents === undefined ? {} : { maxEvents }),
+    });
+    if (result._tag === "Skipped") return { skipped: result.reason };
+    return {
+      asked: result.asked,
+      written: result.written,
+      attached: result.plan.attach.map(({ slug, company }) => ({
+        slug,
+        company,
+      })),
+      unknown: result.plan.unknown.map(({ slug, lumaUserId, name }) => ({
+        slug,
+        lumaUserId,
+        name,
+      })),
+      unavailable: result.unavailable,
+    };
+  });
+
+/**
  * The description import (core's src/luma/descriptions.ts) within
  * `limits`, as a step reports it: which events it changed, each with its
  * summary.
@@ -395,6 +449,11 @@ const write = (limits: SyncLimits) =>
     steps["drafts"] = yield* step(
       "drafts",
       drafts(yield* LumaDrafts, limits, false),
+    );
+
+    steps["company-hosts"] = yield* step(
+      "company-hosts",
+      companyHosts(yield* LumaCompanyHosts, limits, false),
     );
 
     steps["slugs"] = yield* step(
@@ -575,11 +634,14 @@ const dryRun = (limits: SyncLimits) =>
     // rolls back: the links step lists theirs too.
     let created: ReadonlyArray<PendingEvening> = [];
     let published: ReadonlyArray<PublishedDraft> = [];
+    // The same evenings as the company hosts step would see them.
+    let rehearsed: ReadonlyArray<RehearsedEvening> = [];
     steps["events"] = yield* step(
       "events",
       Effect.map(sync.rehearse, (rehearsal) => {
         created = pendingEvenings(rehearsal.created);
         published = publishedDrafts(rehearsal.updated);
+        rehearsed = rehearsedEvenings(rehearsal);
         return {
           syncedCount: rehearsal.syncedCount,
           changedCount: rehearsal.changedCount,
@@ -606,6 +668,10 @@ const dryRun = (limits: SyncLimits) =>
     steps["drafts"] = yield* step(
       "drafts",
       drafts(yield* LumaDrafts, limits, true),
+    );
+    steps["company-hosts"] = yield* step(
+      "company-hosts",
+      companyHosts(yield* LumaCompanyHosts, limits, true, rehearsed),
     );
     steps["slugs"] = yield* step(
       "slugs",

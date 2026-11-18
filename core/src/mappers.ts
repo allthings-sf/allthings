@@ -5,6 +5,7 @@ import { htmlToPlainText, sanitizeRichText } from "./rich-text.ts";
 import type * as Rows from "./rows.ts";
 import type { SpeakerDirectory } from "./speakers.ts";
 import { sharedPrefix } from "./short-slugs.ts";
+import { talkLinks } from "./talk-artifacts.ts";
 
 /**
  * Repository rows to the public contract: a port of
@@ -92,7 +93,7 @@ export function toEventSummary(
     slug: event.slug,
     name: event.name,
     tagline: event.tagline,
-    url: eventUrl(origin, event.slug),
+    url: eventUrl(origin, event.siteSlug),
     status: eventStatus(event, now),
     startsAt: DateTime.formatIso(event.startDate),
     endsAt: DateTime.formatIso(event.endDate),
@@ -125,6 +126,7 @@ export const toEvent = (
       title: talk.title,
       description: htmlToPlainText(description),
       speakers: talk.speakers.map(talkSpeaker),
+      ...talkLinks(talk.artifacts ?? []),
     })),
   ).pipe(
     Effect.map((talks) => ({
@@ -156,7 +158,7 @@ export function toSpeakers(
         title: talk.title,
         eventName: talk.eventName,
         eventSlug: talk.eventSlug,
-        eventUrl: eventUrl(origin, talk.eventSlug),
+        eventUrl: eventUrl(origin, talk.eventSiteSlug),
         date: DateTime.formatIso(talk.eventStart),
       });
       talksBySpeaker.set(speakerId, talks);

@@ -11,7 +11,7 @@ import {
   tokens,
 } from "allthings-brand/src/tokens.ts";
 import { Marked, Renderer, type Tokens } from "marked";
-import { immutable } from "../src/cache.ts";
+import { CacheControl, immutable } from "../src/cache.ts";
 
 /**
  * Builds everything the Worker serves besides its own code, into web/dist:
@@ -21,12 +21,16 @@ import { immutable } from "../src/cache.ts";
  *   under `/assets/` is named by a hash of its content, so `_headers` lets
  *   browsers and the edge keep it for a year without asking again.
  * - `dist/build.json` tells the Worker those hashed paths. The Worker
- *   bundles it.
+ *   bundles it, and loads it with the app, never on a cold start.
+ * - `dist/build-id.json` is the build's hash alone, which a cold start
+ *   reads to keep pages by (page-store.ts).
  * - `dist/foundations.json` holds brand/foundations.md as HTML, for /brand
  *   alone: the Worker loads it with that page, never on a cold start.
  * - Files the current site serves under fixed names (its icons, /brand/*,
  *   /manifest.webmanifest) are written under those names too, so links to
  *   them keep working after the cutover (see fixedNames).
+ * - The CLI's installers, at /install.bash and /atw-install.bash (see
+ *   installers).
  *
  * The same sources always build the same files, byte for byte.
  */
@@ -300,24 +304,28 @@ export function siteTokens(file: TokenFile): TokenFile {
 }
 
 /**
- * The home lab's stylesheet (src/styles/lab.css), which only its pages load,
- * after the site's: its rules read the theme's custom properties from
- * there, and its breakpoints are the theme's custom media queries.
+ * A stylesheet only some pages load, after the site's (src/styles/<name>.css):
+ * the home lab's, and the depth field's, which a year's page and the lab
+ * load. Its rules read the theme's custom properties from the site's, and
+ * its breakpoints are the theme's custom media queries.
  */
-async function buildLabStylesheet(): Promise<string> {
-  const lab = await Bun.file(join(web, "src/styles/lab.css")).text();
+async function buildPageStylesheet(name: "lab" | "depth"): Promise<string> {
+  const rules = await Bun.file(join(web, `src/styles/${name}.css`)).text();
   const breakpoints = themeCss(tokens)
     .split("\n")
     .filter((line) => line.startsWith("@custom-media "));
-  const source = join(dist, "lab.css");
-  await Bun.write(source, expandCustomMedia([...breakpoints, lab].join("\n")));
+  const source = join(dist, `${name}.css`);
+  await Bun.write(
+    source,
+    expandCustomMedia([...breakpoints, rules].join("\n")),
+  );
   const result = await Bun.build({ entrypoints: [source], minify: true });
   const [output] = result.outputs;
   if (!result.success || output === undefined) {
-    throw new AggregateError(result.logs, "The lab's stylesheet didn't build");
+    throw new AggregateError(result.logs, `${name}.css didn't build`);
   }
   await rm(source);
-  return writeAsset("lab", "css", await output.text());
+  return writeAsset(name, "css", await output.text());
 }
 
 /**
@@ -430,7 +438,7 @@ export interface Marks {
   readonly appleTouchIcon: Image;
 }
 
-const generated = join(root, "app/public/brand");
+const generated = join(root, "brand/public");
 /** What brand/marks/og.py generates: link-preview cards and their fonts. */
 const og = join(root, "brand/og");
 
@@ -448,11 +456,11 @@ async function mark(file: string, from = generated): Promise<Image> {
 }
 
 /**
- * Files the current site serves under fixed names, which browsers, link
- * previews and other sites ask for by those names: its icons, now the
- * brand's (the names its pages linked; app/src/app/layout.tsx), and every
- * generated mark under /brand/, as app/public/brand serves them. They can't
- * be hashed, so the asset layer serves them as they are named.
+ * Files the site serves under fixed names, which browsers, link previews
+ * and other sites ask for by those names: its icons (the names the old
+ * site's pages linked), and every generated mark in brand/public under
+ * /brand/. They can't be hashed, so the asset layer serves them as they
+ * are named.
  */
 export const fixedNames: ReadonlyArray<readonly [string, string]> = [
   ["favicon.ico", "favicon.ico"],
@@ -508,6 +516,24 @@ async function buildFixedNames(): Promise<void> {
   );
 }
 
+/**
+ * The CLI's installers, by the path the site serves each at and its source
+ * from the repository's root. `curl -fsSL https://allthings.dev/install.bash
+ * | bash` runs the first (cli/README.md); /atw-install.bash, the old name's,
+ * runs it in turn. They are copied as they are: what curl gets is what the
+ * repository holds. The GitHub Pages copies in pages/ run these.
+ */
+export const installers: ReadonlyArray<readonly [string, string]> = [
+  ["install.bash", "cli/install.bash"],
+  ["atw-install.bash", "cli/atw-install.bash"],
+];
+
+async function buildInstallers(): Promise<void> {
+  for (const [published, source] of installers) {
+    await Bun.write(join(publicDir, published), Bun.file(join(root, source)));
+  }
+}
+
 async function buildMarks(): Promise<Marks> {
   await buildFixedNames();
   return {
@@ -530,8 +556,15 @@ export interface OgCards {
   readonly people: Image;
   /** The same as a JPEG: what a person's card falls back to. */
   readonly peopleJpeg: Image;
+  readonly talks: Image;
+  readonly guide: Image;
+  readonly year: Image;
   readonly about: Image;
   readonly codeOfConduct: Image;
+  readonly privacy: Image;
+  readonly coach: Image;
+  readonly propose: Image;
+  readonly letter: Image;
   readonly brand: Image;
   readonly notFound: Image;
   /** An event card's grounds, which the Worker sets its words on. */
@@ -623,8 +656,15 @@ async function buildOg(): Promise<{
       events: await mark("og-events.png", og),
       people: await mark("og-people.png", og),
       peopleJpeg: await mark("og-people.jpg", og),
+      talks: await mark("og-talks.png", og),
+      guide: await mark("og-guide.png", og),
+      year: await mark("og-year.png", og),
       about: await mark("og-about.png", og),
       codeOfConduct: await mark("og-code-of-conduct.png", og),
+      privacy: await mark("og-privacy.png", og),
+      coach: await mark("og-coach.png", og),
+      propose: await mark("og-propose.png", og),
+      letter: await mark("og-letter.png", og),
       brand: await mark("og-brand.png", og),
       notFound: await mark("og-not-found.png", og),
       eventNight: await mark("og-event-night.png", og),
@@ -641,7 +681,7 @@ async function buildOg(): Promise<{
 }
 
 function fail(name: string): never {
-  throw new Error(`app/public/brand/og-metrics.json has no ${name}`);
+  throw new Error(`brand/og/og-metrics.json has no ${name}`);
 }
 
 function escapeAttribute(value: string): string {
@@ -723,6 +763,8 @@ export interface BuildManifest {
   readonly stylesheet: string;
   /** The home lab's own stylesheet, which only its pages load. */
   readonly labStylesheet: string;
+  /** The depth field's and a year's page's, which they and the lab load. */
+  readonly depthStylesheet: string;
   /** The lab's script, which only its pages with an engine load. */
   readonly labScript: string;
   readonly fonts: ReadonlyArray<Font>;
@@ -732,6 +774,14 @@ export interface BuildManifest {
     readonly fonts: OgFonts;
     readonly personPhoto: PhotoBox;
   };
+}
+
+/**
+ * What the Worker reads from dist/build-id.json on a cold start: the
+ * build's hash alone, so starting never parses the rest of the manifest.
+ */
+export interface BuildId {
+  readonly build: string;
 }
 
 /** What the Worker reads from dist/foundations.json: the foundations as HTML. */
@@ -747,7 +797,18 @@ const headers = `# Content-hashed files never change under their name.
 # The web app manifest, by its registered type.
 /manifest.webmanifest
   Content-Type: application/manifest+json
-`;
+
+# The CLI's installers: plain text, which curl pipes to bash and a browser
+# shows as it is. They change only with deploys, as a page like /brand does.
+${installers
+  .map(
+    ([published]) => `/${published}
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: ${CacheControl.page}
+  X-Content-Type-Options: nosniff
+`,
+  )
+  .join("\n")}`;
 
 export async function build(): Promise<BuildManifest> {
   await rm(dist, { recursive: true, force: true });
@@ -755,7 +816,8 @@ export async function build(): Promise<BuildManifest> {
   const { css: fontFaces, fonts } = await buildFonts();
   const assets = {
     stylesheet: await buildStylesheet(fontFaces),
-    labStylesheet: await buildLabStylesheet(),
+    labStylesheet: await buildPageStylesheet("lab"),
+    depthStylesheet: await buildPageStylesheet("depth"),
     labScript: await buildLabScript(),
     fonts,
     marks: await buildMarks(),
@@ -774,11 +836,14 @@ export async function build(): Promise<BuildManifest> {
     build: contentHash(`${await buildHash()}${JSON.stringify(assets)}`),
     ...assets,
   };
+  await buildInstallers();
   await Bun.write(join(publicDir, "_headers"), headers);
   await Bun.write(
     join(dist, "build.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
+  const buildId: BuildId = { build: manifest.build };
+  await Bun.write(join(dist, "build-id.json"), `${JSON.stringify(buildId)}\n`);
   await Bun.write(
     join(dist, "foundations.json"),
     `${JSON.stringify(foundations)}\n`,

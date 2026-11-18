@@ -75,6 +75,24 @@ export const statusChanges = (
     (date_trunc('minute', ${column(sql, e, "end_date")}) + interval '1 minute')
   )`;
 
+/** Where our evenings are, whose calendar a year is counted on. */
+export const calendarZone = "America/Los_Angeles";
+
+/**
+ * The year the evening aliased `e` starts in, in San Francisco, as an
+ * integer: an evening at 11pm on December 31st there is that year's,
+ * though it is already the next in UTC.
+ */
+export const yearOf = (sql: SqlClient, e: EventAlias): Statement.Fragment =>
+  sql`extract(year FROM ${column(sql, e, "start_date")} AT TIME ZONE ${sql.literal(`'${calendarZone}'`)})::int`;
+
+/** Evenings that start in `year`, in San Francisco ({@link yearOf}). */
+export const inYear = (
+  sql: SqlClient,
+  e: EventAlias,
+  year: number,
+): Statement.Fragment => sql`${yearOf(sql, e)} = ${year}`;
+
 /** Our own evenings, not those we share. */
 export const ours = (sql: SqlClient, e: EventAlias): Statement.Fragment =>
   sql`${column(sql, e, "curation")} = 'ours'`;
@@ -227,6 +245,26 @@ export const hostOrder = "es.created_at, s.id";
 /** An evening's people: by role, then their position in it. */
 export const peopleOrder =
   "array_position(ARRAY['organizer', 'co-host', 'mc'], ep.role), ep.position, ep.created_at, p.id";
+
+/**
+ * A talk's links (its recording, slides, code), over `a`
+ * (talk_artifacts): by position, then as added.
+ */
+export const artifactOrder = "a.position, a.created_at, a.id";
+
+/**
+ * The links of the talk aliased `t`, each as `artifact` (an expression
+ * over `a`), as a JSON array in {@link artifactOrder}. A surface puts it
+ * among a talk's fields in {@link talksOf}.
+ */
+export const artifactsOf = (
+  sql: SqlClient,
+  artifact: Statement.Fragment,
+): Statement.Fragment => sql`COALESCE((
+    SELECT json_agg(${artifact} ORDER BY ${sql.literal(artifactOrder)})
+    FROM talk_artifacts a
+    WHERE a.talk_id = t.id
+  ), '[]'::json)`;
 
 /**
  * The talks of the evening aliased `e`, as a JSON array in running order.

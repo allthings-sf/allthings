@@ -11,8 +11,10 @@ import {
   launchXHandle,
   type NextEvening,
   nextEveningOf,
+  openDoor,
 } from "../src/promo/launch.ts";
 import { fits, type Platform } from "../src/promo/limits.ts";
+import { voice } from "../src/voice.ts";
 import {
   clockLayer,
   now,
@@ -21,8 +23,9 @@ import {
 } from "./support/database.ts";
 
 /**
- * The rebrand's launch kit (src/promo/launch.ts): placeholders until the X
- * handle and the next evening are settled, and the same drafts with both.
+ * The rebrand's launch kit (src/promo/launch.ts): without an X handle or a
+ * next evening (a placeholder for the handle, the Luma calendar for what's
+ * next), and the same drafts with both.
  * Each rendering is kept as a golden file in tests/fixtures/promo/; after
  * an intended change, regenerate them with
  * UPDATE_GOLDEN=1 bun test tests/promo-launch.test.ts and read the diff.
@@ -150,16 +153,13 @@ describe("every draft fits its platform", () => {
 });
 
 describe("diction", () => {
+  // Our voice (src/voice.ts), and the launch's own: an evening, never an
+  // event, and no sign-off before there's an evening to come to.
   const banned = [
-    /\brsvp/i,
-    /\bregister/i,
-    /\bsign(ed)? ?up\b/i,
-    /\bsponsor/i,
+    ...voice.map(({ pattern }) => pattern),
     /\bevents?\b/i,
     /\bjoin us\b/i,
     /see you/i,
-    /!/,
-    /\p{Extended_Pictographic}/u,
   ];
 
   test("drafts never use words the brand doesn't say", () => {
@@ -171,12 +171,12 @@ describe("diction", () => {
       ];
       for (const [name, text] of texts) {
         // The command is code, named as the CLI names it, not our voice.
-        const voice = text.replaceAll(cliTry, "");
+        const ours = text.replaceAll(cliTry, "");
         for (const pattern of banned) {
           expect({
             name,
             pattern: String(pattern),
-            says: pattern.test(voice),
+            says: pattern.test(ours),
           }).toEqual({ name, pattern: String(pattern), says: false });
         }
       }
@@ -203,6 +203,24 @@ describe("diction", () => {
       expect({ name, times }).toEqual({ name, times: expected });
     }
     expect(drafts.x[0]).toStartWith(`${formerName} is now allthings.`);
+  });
+});
+
+describe("the brand's line", () => {
+  test("every message but Bluesky's and /about's says it", () => {
+    const drafts = launchDrafts(settled);
+    for (const [name, text] of [
+      ["x thread", drafts.x.join("\n\n")],
+      ["linkedin", drafts.linkedin],
+      ["discord", drafts.discord],
+      ["luma", drafts.luma.body],
+      ...drafts.meetup.map(({ group, body }) => [group.name, body] as const),
+    ] as const) {
+      expect({ name, says: text.includes(openDoor) }).toEqual({
+        name,
+        says: true,
+      });
+    }
   });
 });
 
@@ -234,13 +252,30 @@ describe("the allthings command", () => {
 });
 
 describe("what isn't settled", () => {
-  test("each unsettled value is a gap, and a placeholder in the drafts", () => {
+  test("no handle is a gap, and a placeholder in the drafts", () => {
     const drafts = launchDrafts(placeholders);
-    expect(drafts.gaps).toHaveLength(2);
-    expect(drafts.gaps[0]).toContain("@allthings or @allthingsdev");
-    expect(drafts.gaps[1]).toContain("--next <slug>");
+    expect(drafts.gaps).toHaveLength(1);
+    expect(drafts.gaps[0]).toContain("launchXHandle");
     expect(drafts.linkedin).toContain("x.com/[x-handle]");
-    expect(drafts.x.at(-1)).toContain(`${origin}/[next]`);
+  });
+
+  test("with no evening published, every draft points to the Luma calendar, never a placeholder", () => {
+    const drafts = launchDrafts({ origin, xHandle: launchXHandle, next: null });
+    expect(drafts.gaps).toEqual([]);
+    expect(JSON.stringify(launchJson(drafts))).not.toContain("[next");
+    for (const [name, text] of [
+      ["x", drafts.x.at(-1) ?? ""],
+      ["bluesky", drafts.bluesky],
+      ["linkedin", drafts.linkedin],
+      ["discord", drafts.discord],
+      ...drafts.meetup.map(({ group, body }) => [group.name, body] as const),
+    ] as const) {
+      expect({ name, calendar: text.includes("luma.com/allthings") }).toEqual({
+        name,
+        calendar: true,
+      });
+    }
+    expect(drafts.luma.body).toContain("goes up on this calendar first");
   });
 
   test("once settled, no gap and no placeholder is left", () => {
@@ -257,7 +292,7 @@ describe("what isn't settled", () => {
   });
 
   test("the handle is one value, written with or without its @", () => {
-    expect(launchXHandle).toBeNull();
+    expect(launchXHandle).toBe("allthingswebdev");
     expect(
       launchDrafts({ ...settled, xHandle: "@allthingsdev" }).linkedin,
     ).toBe(launchDrafts(settled).linkedin);

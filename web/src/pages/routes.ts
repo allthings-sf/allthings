@@ -2,6 +2,7 @@ import { About } from "allthings-core/src/about.ts";
 import { asOf } from "allthings-core/src/clock.ts";
 import type { DataSourceError } from "allthings-core/src/errors.ts";
 import { Evenings } from "allthings-core/src/evenings.ts";
+import { readGuide } from "allthings-core/src/guide.ts";
 import { EventPages } from "allthings-core/src/event-page.ts";
 import { Community, type CommunityView } from "allthings-core/src/community.ts";
 import { Home } from "allthings-core/src/home.ts";
@@ -22,6 +23,9 @@ import {
   isEventAddress,
   sharedPrefix,
 } from "allthings-core/src/short-slugs.ts";
+import { TalksLibrary } from "allthings-core/src/talks-library.ts";
+import { Year } from "allthings-core/src/year.ts";
+import { publishedLetters } from "allthings-core/src/letter.ts";
 import { Duration, Effect, Layer, Option, Schema } from "effect";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -32,7 +36,11 @@ import { Images, WaitUntil } from "../images/route.ts";
 import {
   aboutPath,
   eventPath,
+  everyTalk,
+  guidePath,
   hosts,
+  issuePath,
+  letterPath,
   mediaOrigin,
   personPath,
 } from "../links.ts";
@@ -41,6 +49,27 @@ import { ThroughStore } from "../through-store.ts";
 import { aboutPage } from "./about.tsx";
 import { calendarFile, calendarFileName } from "./calendar.ts";
 import { codeOfConductPage, codeOfConductPath } from "./code-of-conduct.tsx";
+import { privacyPage, privacyPath } from "./privacy.tsx";
+import { coachPage, coachPath } from "./coach.tsx";
+import {
+  proposePage,
+  proposePath,
+  type ProposeProps,
+  trapField,
+} from "./propose.tsx";
+import { issuePage, letterIndexPage } from "./letter.tsx";
+import { readForm, sameOrigin } from "../preview/forms.ts";
+import {
+  boundedBody,
+  clientOf,
+  type Outcome,
+  outcomeMessages,
+  takeProposal,
+} from "../proposals.ts";
+import type { ProposalField } from "allthings-core/src/proposals.ts";
+import { talksPage } from "./talks.tsx";
+import { guidePage } from "./guide.tsx";
+import { yearPage } from "./year.tsx";
 import { eventPage, eventUnavailablePage, notFoundPage } from "./event.tsx";
 import { eventsPage } from "./events.tsx";
 import { homePage, unavailablePage } from "./home.tsx";
@@ -440,11 +469,10 @@ const personPageAt = (
   );
 
 /**
- * /people/<slug>: one person's page. What they do now stays off it until
- * Erik has reviewed the pilot on /lab/now (docs/now.md); turning it on for
- * everyone is `showNow: true` here.
+ * /people/<slug>: one person's page, with what they do now where they have
+ * a record (docs/now.md).
  */
-const person = personPageAt("/people/:slug", personPath, { showNow: false });
+const person = personPageAt("/people/:slug", personPath, { showNow: true });
 
 /**
  * /lab/now: everyone with a "now" record, each linking to their page with
@@ -629,6 +657,114 @@ const events = dataPage(
 );
 
 /**
+ * The talks library: every talk given at our evenings that are over
+ * (core's src/talks-library.ts), cached like the evenings index.
+ */
+const talks = dataPage(
+  everyTalk,
+  "the talks library",
+  TalksLibrary.use((library) => library.read),
+  (library, props) => talksPage({ talks: library, ...props }),
+);
+
+/** A year as /year/<yyyy> names it: four digits, never 0000. */
+const yearPattern = /^[1-9][0-9]{3}$/;
+
+/**
+ * /year/<yyyy>: a year of our evenings (core's src/year.ts), cached like
+ * the evenings index. A year in which none of ours was held, or anything
+ * that isn't a year, is not found, cached briefly: a year's first evening
+ * may end at any minute. The year and the hosts' portraits are read at
+ * once, over the request's pool.
+ */
+const yearAt = page(
+  "/year/:year",
+  ({ theme, acceptEncoding, params, images }) =>
+    Effect.gen(function* () {
+      const { origin } = yield* Site;
+      const asked = params["year"] ?? "";
+      const path = `/year/${asked}` as const;
+      // No year has an address of that shape: nothing to read.
+      if (!yearPattern.test(asked)) {
+        return yield* nothingAt(path, 404, { theme, acceptEncoding, images });
+      }
+      return yield* Effect.all(
+        [
+          Year.use((years) => years.read(Number(asked), mediaOrigin)),
+          footer(hostPortraits),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.provide(repositories),
+        Effect.timed,
+        Effect.map(([took, [found, { portraits, read }]]) => {
+          const db = Duration.toMillis(took);
+          return Option.match(found, {
+            onNone: () =>
+              htmlResponse(
+                notFoundPage({ origin, path, theme, portraits, images }),
+                acceptEncoding,
+                {
+                  cacheControl: read ? "notFound" : "failure",
+                  theme,
+                  images,
+                  status: 404,
+                  db,
+                },
+              ),
+            onSome: (view) =>
+              htmlResponse(
+                yearPage({ year: view, origin, theme, portraits, images }),
+                acceptEncoding,
+                {
+                  cacheControl: read ? "publicData" : "failure",
+                  theme,
+                  images,
+                  db,
+                },
+              ),
+          });
+        }),
+        Effect.catchCause((cause) =>
+          Effect.logError("Error rendering a year's page:", cause).pipe(
+            Effect.as(
+              htmlResponse(
+                unavailablePage({ origin, path, theme, images }),
+                acceptEncoding,
+                { cacheControl: "failure", theme, images, status: 503 },
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+  (params) => `/year/${params["year"] ?? ""}`,
+);
+
+/**
+ * The allthings guide (core's src/guide.ts): written by hand, so it reads
+ * no database but for the hosts' portraits in its footer, as the code of
+ * conduct does. It is read as of the clock, which takes an edition's days
+ * off once it is over, so it is cached like public data and that reaches
+ * visitors within minutes; the page store keeps it by the guide's own
+ * boundaries (core's src/site-version.ts).
+ */
+const guide = page(guidePath, ({ theme, acceptEncoding, images }) =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const groups = yield* readGuide;
+    const { portraits, read } = yield* footer(
+      hostPortraits.pipe(Effect.provide(repositories)),
+    );
+    return htmlResponse(
+      guidePage({ groups, origin, theme, portraits, images }),
+      acceptEncoding,
+      { cacheControl: read ? "publicData" : "failure", theme, images },
+    );
+  }),
+);
+
+/**
  * /brand changes only when the Worker is deployed, but for the hosts'
  * portraits in its footer, which it reads on every request it reaches. It is
  * cached as a page, so a new portrait may take a day to reach the edge.
@@ -668,6 +804,243 @@ const codeOfConduct = page(
         { cacheControl: read ? "page" : "failure", theme, images },
       );
     }),
+);
+
+/**
+ * The privacy page changes only when the Worker is deployed, but for the
+ * hosts' portraits in its footer; it is cached as a page, as /brand is.
+ */
+const privacy = page(privacyPath, ({ theme, acceptEncoding, images }) =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const { portraits, read } = yield* footer(
+      hostPortraits.pipe(Effect.provide(repositories)),
+    );
+    return htmlResponse(
+      privacyPage({ origin, theme, portraits, images }),
+      acceptEncoding,
+      { cacheControl: read ? "page" : "failure", theme, images },
+    );
+  }),
+);
+
+/**
+ * The coaching page changes only when the Worker is deployed, but for the
+ * hosts' portraits in its footer; it is cached as a page, as /privacy is.
+ */
+const coach = page(coachPath, ({ theme, acceptEncoding, images }) =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const { portraits, read } = yield* footer(
+      hostPortraits.pipe(Effect.provide(repositories)),
+    );
+    return htmlResponse(
+      coachPage({ origin, theme, portraits, images }),
+      acceptEncoding,
+      { cacheControl: read ? "page" : "failure", theme, images },
+    );
+  }),
+);
+
+/**
+ * /propose, the empty form: it changes only when the Worker is deployed,
+ * but for the hosts' portraits in its footer; it is cached as a page, as
+ * /brand is. Its policy lets its form post to this site.
+ */
+const propose = page(proposePath, ({ theme, acceptEncoding, images }) =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const { portraits, read } = yield* footer(
+      hostPortraits.pipe(Effect.provide(repositories)),
+    );
+    return htmlResponse(
+      proposePage({ origin, theme, portraits, images }),
+      acceptEncoding,
+      { cacheControl: read ? "page" : "failure", theme, images, form: true },
+    );
+  }),
+);
+
+/** The most a proposal's form may be, URL-encoded, in bytes: every field at its longest, in any script. */
+export const proposeFormLimit = 65_536;
+
+/** Each outcome's status, as the API answers it (v1/proposals.ts). */
+const proposeStatus: Readonly<Record<Outcome["_tag"], number>> = {
+  Kept: 200,
+  Invalid: 422,
+  Limited: 429,
+  Full: 429,
+  Closed: 503,
+  Unavailable: 503,
+};
+
+/** The fields the form sends, as text. */
+const formFields: ReadonlyArray<ProposalField> = [
+  "title",
+  "format",
+  "abstract",
+  "name",
+  "email",
+  "about",
+  "links",
+  "notes",
+];
+
+/**
+ * POST /propose: the form, sent without a script. Only from this site's
+ * own page (forms.ts's sameOrigin), URL-encoded and at most
+ * {@link proposeFormLimit} bytes. A form with its trap filled is a
+ * script's: thanked, and kept nowhere. Every other is handed to
+ * takeProposal as the site's, links one a line; the answer is the page
+ * again, never stored: thanks, or the form as it was sent with each
+ * problem beside its field.
+ */
+const proposeForm = HttpRouter.add(
+  "POST",
+  proposePath,
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const incoming = yield* HttpServerRequest.HttpServerRequest;
+    const theme = themeOf(incoming.cookies);
+    const acceptEncoding = incoming.headers["accept-encoding"];
+    const images: ImageMode = Option.isSome(yield* Images)
+      ? "variants"
+      : "originals";
+    const request = yield* HttpServerRequest.toWeb(incoming);
+    const { portraits } = yield* footer(
+      hostPortraits.pipe(Effect.provide(repositories)),
+    );
+    const answer = (
+      status: number,
+      props: Pick<ProposeProps, "values" | "problems" | "notice">,
+    ) =>
+      htmlResponse(
+        proposePage({ origin, theme, portraits, images, ...props }),
+        acceptEncoding,
+        { cacheControl: "failure", theme, images, form: true, status },
+      );
+    if (!sameOrigin(request)) {
+      yield* Effect.promise(() => boundedBody(request, proposeFormLimit));
+      return answer(403, {
+        notice: {
+          kind: "problem",
+          text: "This form is sent from allthings.dev's own page. Open it there and send it again.",
+        },
+      });
+    }
+    const body = yield* Effect.promise(() =>
+      readForm(request, proposeFormLimit),
+    );
+    if (!body.ok) {
+      // A refused body is read off, so the connection stays usable.
+      if (!request.bodyUsed) {
+        yield* Effect.promise(() => boundedBody(request, proposeFormLimit));
+      }
+      return answer(body.status, {
+        notice: { kind: "problem", text: body.reason },
+      });
+    }
+    const values: Partial<Record<ProposalField, string>> = {};
+    for (const field of formFields) {
+      const value = body.fields[field];
+      if (value !== undefined) values[field] = value;
+    }
+    if ((body.fields[trapField] ?? "") !== "") {
+      return answer(200, {
+        notice: { kind: "sent", text: outcomeMessages.Kept },
+      });
+    }
+    const outcome = yield* takeProposal(
+      {
+        ...values,
+        links: (values.links ?? "")
+          .split(/\r?\n/)
+          .map((link) => link.trim())
+          .filter((link) => link !== ""),
+      },
+      "site",
+      clientOf(request),
+    );
+    if (outcome._tag === "Kept") {
+      return answer(200, {
+        notice: { kind: "sent", text: outcomeMessages.Kept },
+      });
+    }
+    if (outcome._tag === "Invalid") {
+      const byField: Partial<Record<ProposalField, string>> = {};
+      const general: Array<string> = [];
+      for (const problem of outcome.problems) {
+        if (problem.field === "proposal") general.push(problem.message);
+        else byField[problem.field] = problem.message;
+      }
+      return answer(proposeStatus.Invalid, {
+        values,
+        problems: byField,
+        notice: {
+          kind: "problem",
+          text: [outcomeMessages.Invalid, ...general].join(" "),
+        },
+      });
+    }
+    return answer(proposeStatus[outcome._tag], {
+      values,
+      notice: { kind: "problem", text: outcomeMessages[outcome._tag] },
+    });
+  }),
+);
+
+/**
+ * /letter: the letter's archive (pages/letter.tsx), every issue Erik
+ * approved. The issues are files deployed with the Worker, so it changes
+ * only when the Worker is deployed, but for the hosts' portraits in its
+ * footer; it is cached as a page, as /coach is.
+ */
+const letterIndex = page(letterPath, ({ theme, acceptEncoding, images }) =>
+  Effect.gen(function* () {
+    const { origin } = yield* Site;
+    const letters = yield* publishedLetters;
+    const { portraits, read } = yield* footer(
+      hostPortraits.pipe(Effect.provide(repositories)),
+    );
+    return htmlResponse(
+      letterIndexPage({ letters, origin, theme, portraits, images }),
+      acceptEncoding,
+      { cacheControl: read ? "page" : "failure", theme, images },
+    );
+  }),
+);
+
+/** A month as /letter/<yyyy-mm> names it. */
+const monthPattern = /^\d{4}-(?:0[1-9]|1[0-2])$/;
+
+/**
+ * /letter/<yyyy-mm>: one issue, when Erik approved it. A draft, a month
+ * with no issue and anything that isn't a month are not found, as an
+ * address that never was: nothing says a draft exists.
+ */
+const issueAt = page(
+  `${letterPath}/:month`,
+  ({ theme, acceptEncoding, params, images }) =>
+    Effect.gen(function* () {
+      const { origin } = yield* Site;
+      const asked = params["month"] ?? "";
+      const path = issuePath(asked);
+      const letter = monthPattern.test(asked)
+        ? (yield* publishedLetters).find((each) => each.month === asked)
+        : undefined;
+      if (letter === undefined) {
+        return yield* nothingAt(path, 404, { theme, acceptEncoding, images });
+      }
+      const { portraits, read } = yield* footer(
+        hostPortraits.pipe(Effect.provide(repositories)),
+      );
+      return htmlResponse(
+        issuePage({ letter, origin, theme, portraits, images }),
+        acceptEncoding,
+        { cacheControl: read ? "page" : "failure", theme, images },
+      );
+    }),
+  (params) => issuePath(params["month"] ?? ""),
 );
 
 /**
@@ -1035,6 +1408,9 @@ const elsewhere = page(
 export const pageRoutes = Layer.mergeAll(
   home,
   events,
+  talks,
+  guide,
+  yearAt,
   people,
   person,
   speakers,
@@ -1046,6 +1422,12 @@ export const pageRoutes = Layer.mergeAll(
   nowLabPerson,
   brand,
   codeOfConduct,
+  privacy,
+  coach,
+  propose,
+  proposeForm,
+  letterIndex,
+  issueAt,
   eventAt(""),
   eventAt(sharedPrefix),
   calendarAt(""),

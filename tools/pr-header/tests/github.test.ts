@@ -6,12 +6,12 @@ import {
   type PullRequestData,
 } from "../src/github.ts";
 
-const repo = { owner: "allthingsweb-dev", name: "allthingsweb" };
+const repo = { owner: "allthings-sf", name: "allthings" };
 
 function data(overrides: Partial<PullRequestData> = {}): PullRequestData {
   return {
     number: 52,
-    url: "https://github.com/allthingsweb-dev/allthingsweb/pull/52",
+    url: "https://github.com/allthings-sf/allthings/pull/52",
     state: "OPEN",
     isDraft: false,
     mergeStateStatus: "CLEAN",
@@ -21,6 +21,7 @@ function data(overrides: Partial<PullRequestData> = {}): PullRequestData {
     deletions: 2,
     changedFiles: 3,
     reviews: { nodes: [] },
+    comments: { nodes: [] },
     reviewThreads: { nodes: [] },
     commits: {
       nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [] } } } }],
@@ -31,7 +32,7 @@ function data(overrides: Partial<PullRequestData> = {}): PullRequestData {
 
 const ready = {
   state: "success",
-  url: "https://allthingsweb-abc-team.vercel.app",
+  url: "https://allthings-web-pr-52-abc123.allthings.workers.dev",
 };
 
 function thread(login: string, isResolved: boolean) {
@@ -64,7 +65,7 @@ describe("summarizing a pull request", () => {
         ],
       },
     });
-    expect(summarize(repo, pr, ready, null).coderabbit.review).toBe("approved");
+    expect(summarize(repo, pr, ready).coderabbit.review).toBe("approved");
   });
 
   test("shows CodeRabbit as reviewing while its check runs", () => {
@@ -76,9 +77,7 @@ describe("summarizing a pull request", () => {
       },
       commits: contexts(checkRun("CodeRabbit", "IN_PROGRESS", null)),
     });
-    expect(summarize(repo, pr, ready, null).coderabbit.review).toBe(
-      "reviewing",
-    );
+    expect(summarize(repo, pr, ready).coderabbit.review).toBe("reviewing");
   });
 
   test("counts only CodeRabbit's review threads as findings", () => {
@@ -92,65 +91,86 @@ describe("summarizing a pull request", () => {
         ],
       },
     });
-    expect(summarize(repo, pr, ready, null).coderabbit.findings).toEqual({
+    expect(summarize(repo, pr, ready).coderabbit.findings).toEqual({
       resolved: 2,
       open: 1,
     });
   });
 
-  test("judges checks without CodeRabbit, Vercel or this header's own run", () => {
+  test("judges checks without CodeRabbit or this header's own run", () => {
     const passing = data({
       commits: contexts(
         checkRun("🧪 Tests", "COMPLETED", "SUCCESS"),
         checkRun("CodeRabbit", "IN_PROGRESS", null),
-        checkRun("Vercel", "COMPLETED", "FAILURE"),
         checkRun("PR header", "IN_PROGRESS", null),
       ),
     });
-    expect(summarize(repo, passing, ready, null).checks).toBe("passing");
+    expect(summarize(repo, passing, ready).checks).toBe("passing");
     const failing = data({
       commits: contexts(
         checkRun("🧪 Tests", "COMPLETED", "FAILURE"),
         checkRun("🧪 CLI", "IN_PROGRESS", null),
       ),
     });
-    expect(summarize(repo, failing, ready, null).checks).toBe("failing");
+    expect(summarize(repo, failing, ready).checks).toBe("failing");
     const running = data({
       commits: contexts(checkRun("🧪 CLI", "QUEUED", null)),
     });
-    expect(summarize(repo, running, ready, null).checks).toBe("running");
-    expect(summarize(repo, data(), ready, null).checks).toBe("none");
+    expect(summarize(repo, running, ready).checks).toBe("running");
+    expect(summarize(repo, data(), ready).checks).toBe("none");
   });
 
-  test("links the stable preview when there is one, else the deployment", () => {
-    const stable = "https://allthings-pr-52.vercel.app";
-    expect(summarize(repo, data(), ready, stable).preview).toEqual({
+  test("links the latest preview deployment", () => {
+    expect(summarize(repo, data(), ready).preview).toEqual({
       state: "ready",
-      url: stable,
+      url: ready.url,
     });
-    expect(summarize(repo, data(), ready, null).preview.url).toBe(ready.url);
-    expect(summarize(repo, data(), null, stable).preview).toEqual({
+    expect(summarize(repo, data(), null).preview).toEqual({
       state: "none",
       url: null,
     });
     expect(
-      summarize(repo, data(), { state: "in_progress", url: null }, null).preview
+      summarize(repo, data(), { state: "in_progress", url: null }).preview
         .state,
     ).toBe("building");
     expect(
-      summarize(repo, data(), { state: "error", url: null }, null).preview
-        .state,
+      summarize(repo, data(), { state: "error", url: null }).preview.state,
     ).toBe("failed");
   });
 
   test("maps GitHub's merge states", () => {
     const merge = (mergeStateStatus: string) =>
-      summarize(repo, data({ mergeStateStatus }), ready, null).mergeState;
+      summarize(repo, data({ mergeStateStatus }), ready).mergeState;
     expect(merge("CLEAN")).toBe("clean");
     expect(merge("DIRTY")).toBe("conflicts");
     expect(merge("BEHIND")).toBe("behind");
     expect(merge("UNKNOWN")).toBe("checking");
     expect(merge("SOMETHING_NEW")).toBe("unknown");
+  });
+
+  test("reads CodeRabbit's walkthrough comment, and no one else's", () => {
+    const walkthrough =
+      "<!-- walkthrough_start -->\n\nAdds a thing.\n\n<!-- walkthrough_end -->";
+    const comment = (login: string, body: string, n: number) => ({
+      author: { login },
+      url: `https://github.com/allthings-sf/allthings/pull/52#issuecomment-${n}`,
+      body,
+    });
+    const read = (nodes: ReturnType<typeof comment>[]) =>
+      summarize(repo, data({ comments: { nodes } }), ready).coderabbit
+        .walkthrough;
+    expect(read([])).toBeNull();
+    expect(read([comment("someone", walkthrough, 1)])).toBeNull();
+    expect(
+      read([
+        comment("someone", walkthrough, 1),
+        comment("coderabbitai", "Review triggered.", 2),
+        comment("coderabbitai", walkthrough, 3),
+      ]),
+    ).toMatchObject({
+      url: "https://github.com/allthings-sf/allthings/pull/52#issuecomment-3",
+      summary: "Adds a thing.",
+    });
   });
 });
 
@@ -174,7 +194,7 @@ describe("findings outside the diff", () => {
       },
       reviewThreads: { nodes: [thread("coderabbitai", false)] },
     });
-    expect(summarize(repo, pr, ready, null).coderabbit.findings).toEqual({
+    expect(summarize(repo, pr, ready).coderabbit.findings).toEqual({
       resolved: 0,
       open: 3,
     });
@@ -189,7 +209,7 @@ describe("findings outside the diff", () => {
         ],
       },
     });
-    expect(summarize(repo, pr, ready, null).coderabbit.findings.open).toBe(0);
+    expect(summarize(repo, pr, ready).coderabbit.findings.open).toBe(0);
   });
 });
 
@@ -231,9 +251,87 @@ describe("loading a pull request", () => {
     const pr = await fetchPullRequest(github, repo, 52);
     expect(pr.reviewThreads.nodes).toHaveLength(3);
     expect(calls.map((c) => c["after"] ?? null)).toEqual([null, "c1"]);
-    expect(summarize(repo, pr, ready, null).coderabbit.findings).toEqual({
+    expect(summarize(repo, pr, ready).coderabbit.findings).toEqual({
       resolved: 1,
       open: 2,
     });
+  });
+
+  test("follows comment pages until it finds CodeRabbit's walkthrough", async () => {
+    const comment = (login: string, body: string) => ({
+      author: { login },
+      url: "https://github.com/allthings-sf/allthings/pull/52#issuecomment-1",
+      body,
+    });
+    const walkthrough =
+      "<!-- walkthrough_start -->\n\nAdds a thing.\n\n<!-- walkthrough_end -->";
+    const pages = [
+      {
+        pageInfo: { hasNextPage: true, endCursor: "p2" },
+        nodes: [comment("someone", "Hi")],
+      },
+      {
+        pageInfo: { hasNextPage: true, endCursor: "p3" },
+        nodes: [comment("coderabbitai", walkthrough)],
+      },
+    ];
+    const cursors: unknown[] = [];
+    const github: GitHub = {
+      rest: async () => {
+        throw new Error("unused");
+      },
+      graphql: async <T>(query: string, variables: Record<string, unknown>) => {
+        if (!variables["after"])
+          return {
+            repository: { pullRequest: data({ comments: pages[0]! }) },
+          } as T;
+        expect(query).toContain("comments(first: 20, after: $after)");
+        cursors.push(variables["after"]);
+        return {
+          repository: { pullRequest: { comments: pages[1]! } },
+        } as T;
+      },
+    };
+    const pr = await fetchPullRequest(github, repo, 52);
+    // It stops at the page with the walkthrough, though more follow.
+    expect(cursors).toEqual(["p2"]);
+    expect(summarize(repo, pr, ready).coderabbit.walkthrough?.summary).toBe(
+      "Adds a thing.",
+    );
+  });
+
+  test("stops when a comment page hands back the cursor it was asked for", async () => {
+    const stuck = {
+      pageInfo: { hasNextPage: true, endCursor: "p2" },
+      nodes: [
+        {
+          author: { login: "someone" },
+          url: "https://github.com/allthings-sf/allthings/pull/52#issuecomment-1",
+          body: "Hi",
+        },
+      ],
+    };
+    let requests = 0;
+    const github: GitHub = {
+      rest: async () => {
+        throw new Error("unused");
+      },
+      graphql: async <T>(
+        _query: string,
+        variables: Record<string, unknown>,
+      ) => {
+        requests += 1;
+        return (
+          variables["after"]
+            ? { repository: { pullRequest: { comments: stuck } } }
+            : { repository: { pullRequest: data({ comments: stuck }) } }
+        ) as T;
+      },
+    };
+    await expect(fetchPullRequest(github, repo, 52)).rejects.toThrow(
+      "#52: comment pages stopped advancing at p2",
+    );
+    // The first page, then the one that repeated its cursor.
+    expect(requests).toBe(2);
   });
 });

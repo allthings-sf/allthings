@@ -1,6 +1,6 @@
 {
   "name": "allthings",
-  "version": "2.1.0",
+  "version": "2.8.1",
   "description": "allthings from your terminal and your agents: the evenings, who is on stage and how to get in.",
   "license": "MIT",
   "keywords": [
@@ -14,10 +14,10 @@
   "homepage": "https://allthings.dev",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/allthingsweb-dev/allthingsweb.git",
+    "url": "git+https://github.com/allthings-sf/allthings.git",
     "directory": "cli"
   },
-  "bugs": "https://github.com/allthingsweb-dev/allthingsweb/issues",
+  "bugs": "https://github.com/allthings-sf/allthings/issues",
   "type": "module",
   "bin": {
     "allthings": "./dist/index.js",

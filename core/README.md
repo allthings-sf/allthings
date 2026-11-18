@@ -25,6 +25,9 @@ statement from it.
   lists the code that reads the time for its own work.
 - **Ours or shared:** `ours(e)`. Whether a surface counts the evenings we
   share is a named choice, never a filter written inline.
+- **Which year:** `inYear(e, year)`, the year an evening starts in on San
+  Francisco's calendar (`yearOf(e)`), so an evening at 11pm on December
+  31st is that year's though UTC has moved on.
 - **Where an evening is:** `publicVenue(e, now)`, its venue as stored, or
   only its city while Luma keeps the venue to guests and the evening is
   ahead (`venueHidden`; "Hidden venues", below).
@@ -33,20 +36,25 @@ statement from it.
   attached; its people, by role. `talksOf`, `hostsOf` and `peopleOf` read
   them in that order, each surface choosing the fields it publishes, and
   `talkOrder`, `speakerOrder`, `hostOrder` and `peopleOrder` are the
-  orders themselves, for a statement that joins them its own way.
+  orders themselves, for a statement that joins them its own way. A
+  talk's links (its recording, slides, code) are `artifactsOf` it, in
+  `artifactOrder`.
 - **A person's appearances:** their talks (`talkAppearances`) and their
   parts in evenings as a whole (`roleAppearances`) at published evenings,
   each scoped by whose evenings (`ours` or `any`) and when (`any`, or
   once `ended`), latest evening first (`latestTalkFirst`,
   `latestAppearanceFirst`). /people is our evenings' at any time; a
-  person's page, every evening's; /about counts ours once over; the sitemap
+  person's page, every evening's; /about counts ours once over, and a
+  year (`src/year.ts`) counts the same at that year's evenings; the sitemap
   lists everyone at any; the speakers list (`list_speakers`,
-  `/api/v1/speakers`) counts our evenings' talks once `ended`.
+  `/api/v1/speakers`) counts our evenings' talks once `ended`, and the
+  talks library (/talks, `src/talks-library.ts`) lists those talks, each
+  evening's lineup by `talksOf`.
 
 Each surface still reads in one statement, since from a Worker every round
 trip costs more than the query, and builds it from these fragments. What a
 surface adds is how it shows what the catalog selects: home's limits, its
-hero (always ours); /events by year; an event page's posts,
+hero (always ours); /events and /talks by year; an event page's posts,
 schedule, notes, venue and guest count; the people page's groups and its
 X-follower order; the API's and the tools' published fields, long slugs,
 limits, search and error texts. None of that decides which evenings or
@@ -68,26 +76,26 @@ seeded database at one instant: the same evenings in the same order from
 `list_events`, `/api/v1/events`, the feed, /events and home; the same
 lineup from `get_event`, `/api/v1/events/:id` and the event page, by every
 link; the same people and talks from `list_speakers`, `/api/v1/speakers`,
-/people, people's pages, /about and the sitemap; and whose each evening is,
-from `list_events` and /events.
+/talks, /people, people's pages, /about and the sitemap, and each
+evening's talks on /talks in its page's running order; and whose each
+evening is, from `list_events` and /events.
 
 The public contract is `src/contract.ts`, the one source of it. The CLI's
 zod copy (`cli/src/schemas.ts`) is held to it by `tests/contract.test.ts`,
 which the core workflow runs whenever `cli/src` changes. The old app's
 schemas and answers are legacy: where tests still compare the Worker with
-the app, it is on the fields the app has.
+the answers it recorded before it was deleted (web/tests/support/app.ts),
+it is on the fields the app had.
 
 ## Luma sync
 
-`src/luma/` is the app's hourly Luma calendar sync (`app/src/lib/luma/`) as
-Effect services, for a Worker cron to run: `Luma` reads the calendar's public
+`src/luma/` is the hourly Luma calendar sync, carried over from the old app,
+as Effect services for a Worker cron to run: `Luma` reads the calendar's public
 iCalendar feed over `HttpClient` (retrying 429, 5xx, timeouts and dropped
 connections), and `LumaSync` writes it to `events` in one statement, touching
 only the events Luma changed, so `updated_at` says when it last did. Which
 columns Luma owns, and which the site does, is written down in
-`src/luma/sync.ts`. `tests/luma-parity.test.ts` runs the app's sync and
-core's on copies of one database with the same feed and requires the same
-rows; nothing in the tests reaches Luma.
+`src/luma/sync.ts`. Nothing in the tests reaches Luma.
 
 `LumaSync.rehearse` is the dry run. It runs the same statement in a
 transaction that always rolls back, and reports every event the sync would
@@ -112,7 +120,7 @@ The event studio's commands connect as `studio`, a login role made by
 [`infra/scripts/studio.ts`](../infra/scripts/studio.ts): `plan`,
 `readiness`, `luma create`, `update`, `publish`, `cover`, `registration`
 and `hosts`, `luma:drafts --add` and `--forget`, `social bluesky`, `discord` and `x`, `posts`,
-`photos`, `people photo`, `hosts logo`, `talks`, `community` and `collab`
+`photos`, `people photo`, `hosts logo`, `talks`, `community`, `proposals` and `collab`
 (all but `collab access end-sessions`, which reaches only Cloudflare). Its
 connection string
 is the 1Password item "allthings studio" (`credential`), so every one of
@@ -203,8 +211,8 @@ backfills below.
 
 Until they have a role of their own, the backfills still need it, so only
 the maintainer runs them (`OWNER_ONLY` in the script says why): `hosts`,
-`lineups`, `programs`, `curation`, `event-extras`, `external-talks` and
-`luma:people`. They rewrite the public record from reviewed files: they
+`lineups`, `programs`, `curation`, `event-extras`, `external-talks`,
+`talk-artifacts` and `luma:people`. They rewrite the public record from reviewed files: they
 create profiles and companies, and delete talks and people's parts, which
 no role in the shared vault should be able to do. Filling profiles from a
 people file (`bun run people`) has its own role, `profile_editor`, and
@@ -212,7 +220,7 @@ needs no owner (see "Filling in profiles").
 
 ## Image ingestion
 
-`src/ingest/` is the image half of the app's hourly sync (`app/src/lib/event-covers`, `profile-photos`, `post-images`) as an Effect service, `ImageIngest`. It fills in three kinds of missing image:
+`src/ingest/` is the image half of the hourly sync, carried over from the old app, as an Effect service, `ImageIngest`. It fills in three kinds of missing image:
 
 - each event without a cover gets its Luma cover
 - each profile without a photo gets the one at its `photo_source_url`
@@ -225,8 +233,6 @@ needs no owner (see "Filling in profiles").
 **Storing** an image means putting it in the `MediaBucket` under a new key. Then one statement records it in `images` and sets it on its row, only while the row still has none. An object stored for nothing is deleted again.
 
 Each phase starts nothing new after its budget, and `pending` is the dry run: it lists what would be fetched and fetches nothing.
-
-`tests/ingest-parity.test.ts` runs each phase and the app's on copies of one database, with the same downloads, processing, ids and time. It requires the same rows, the same objects stored and deleted, and the same results.
 
 ## Who took part
 
@@ -255,6 +261,11 @@ or by `slug` where it has none, and its `remove` lists what the evening
 didn't have, each with its sources: talks to take off it (a talk on no
 other evening is deleted with its speakers) and people's parts in it
 (by an existing profile and role).
+
+A lineup can name the companies that hosted an evening (`hosts`), each by
+its exact name in `sponsors` and with its sources, where Luma doesn't list
+the company's own account as a host. They are only ever added; a company
+the database lacks comes in through `backfill/hosts.json` first.
 
 ### Editing a talk
 
@@ -456,6 +467,41 @@ DATABASE_URL=… bun run external-talks             # write it, in one transacti
 Applying is safe to repeat: a talk is known by its speaker, title and day,
 and one already there only takes corrected links and sources.
 
+## What talks left behind
+
+`talk_artifacts` holds a talk's links: its recording, its slides, its
+code (`repo`), its site, or something else. Each is a row, so whatever
+adds one later, the recorder in the room or a speaker sharing their
+slides, needs no new column. A link may have a `label`, and a recording
+of the whole evening has the talk's `start_seconds`. A link from the same
+talk given somewhere else says where (`elsewhere`, "Chain React 2024").
+A talk's links are shown in `position` order, and go with it if it is
+deleted.
+
+The talk's own recording, the one its title links to, is its first
+recording with no `elsewhere`, played from its start (`talkLinks` and
+`playAt` in `src/talk-artifacts.ts`). Every surface reads the links with
+the catalog's `artifactsOf` and `artifactJson`, so it is the same one
+everywhere.
+
+`backfill/talk-artifacts.json` carries links found in public sources,
+each with the page that confirms it (it names the talk, or our evening,
+and the speaker) and the day it was read. A talk's links are listed in
+the order they are shown. What only looks right is kept under `held`
+with the question for the speaker that would settle it, and never
+written. The run refuses a talk whose stored title differs, a link listed
+twice, a start on anything but a recording, and a talk that would have
+two recordings of its own.
+
+```sh
+DATABASE_URL=… bun run talk-artifacts --dry-run   # what would be written, rolled back
+DATABASE_URL=… bun run talk-artifacts             # write it, in one transaction
+```
+
+Applying is safe to repeat: a link is known by its talk and URL, and one
+already there only takes corrected details. Links the file doesn't list
+are kept.
+
 ## Hidden venues
 
 While Luma shows an event's venue to guests only ("location_visibility":
@@ -596,7 +642,10 @@ from `backfill/hosts.json`) is that company: it is attached to the event as
 a hosting company (`event_sponsors`, only ever added), never matched to a
 person. Nothing is created without an organizer's decision: Luma's hosts
 include companies' accounts not yet on record and people under other names.
-Run it from `core/`:
+The hourly sync attaches hosting companies the same way for evenings that
+ended within the last week (`src/luma/company-hosts.ts`), and reports the
+hosts whose Luma account is neither a company's nor a profile's; people stay
+this import's. Run it from `core/`:
 
 ```sh
 DATABASE_URL=… LUMA_API_KEY=$(op read "op://allthings/allthings Luma API key/credential") \
@@ -739,9 +788,8 @@ DATABASE_URL=… bun run completeness --check  # also fail if an evening of talk
                                              # or any published evening, past or upcoming, has no venue
 ```
 
-It only reads, so the read-only `site_reader` role is enough. The admin MCP
-server (`app/scripts/mcp-server.ts`) serves the same JSON as
-`get_completeness_report`. `.github/workflows/completeness.yaml` runs
+It only reads, so the read-only `site_reader` role is enough.
+`.github/workflows/completeness.yaml` runs
 `--check` against production every Monday and puts the report in the run's
 summary.
 
@@ -751,8 +799,8 @@ summary.
 row has the post's canonical URL (unique), its plain text, its author, when
 it was posted, and a status: `approved` shows, `hidden` was taken down,
 `pending` waits for an organizer. Nothing approves itself. Images are kept
-as their source URLs, and the app's hourly sync copies them into the media
-bucket (`app/src/lib/post-images/`). Pages show only those copies.
+as their source URLs, and the hourly sync copies them into the media
+bucket (`src/ingest/`). Pages show only those copies.
 
 `src/posts/` reads a post from public sources that need no key. X posts
 come through the FixTweet API (api.fxtwitter.com), Bluesky posts through
@@ -767,7 +815,6 @@ DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run pos
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts apply [--dry-run]   # every post in backfill/posts.json
 ```
 
-The admin MCP server's `add_event_post` runs the same script.
 `tests/posts.test.ts` runs against recorded answers; nothing in the tests
 reaches X, FixTweet or Bluesky.
 
@@ -798,8 +845,43 @@ Worker searches the last week's evenings on its schedule and queues what it find
 only through `public.queue_event_post` (migrations/0018_pending_posts.ts), a
 SECURITY DEFINER function with its search path pinned that checks every
 field and inserts nothing but pending posts; the role holds no INSERT on
-`event_posts`, and EXECUTE is revoked from everyone else. The admin MCP server's `list_pending_posts`, `approve_post` and
-`hide_post` run the same script.
+`event_posts`, and EXECUTE is revoked from everyone else.
+
+An evening's links, to search by, are its Luma page (on luma.com and
+lu.ma), its short links (`event_slugs`, allthings.dev/aie) and its long
+slug on allthings.dev and allthingsweb.dev.
+
+### Sweeping one evening
+
+The agent running an evening keeps its page's posts live with a sweep
+(`src/posts/sweep.ts`): the same search for that one evening, named by its
+long slug or short link, from two weeks before it to a week after, whether
+or not it has started. It adds what scores enough as pending, then prints
+what is new, what it found again, and every post of the evening waiting
+for review. A sweep adds nothing it added before, so running it again is
+safe. `--every <minutes>` sweeps again at that interval until the
+evening's window closes; run it in the background for the lead-up and the
+night.
+
+```sh
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts sweep aie --dry-run   # what it would add
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts sweep aie --every 30   # until a week after
+```
+
+X's search needs a paid key, so X is searched in a browser instead.
+`bun run posts x-searches <slug or short link>` prints the searches to run
+on x.com, each with its URL: one for each of the evening's links (its
+short link and Luma page first), its name, its topic with "allthings", and
+its people saying allthings or mentioned with it, held to the evening's
+window by day. Copy each result's post URL into a file, one a line (a line
+starting with `#` is a note), then add them all at once. Each post goes in
+once, however often the file names it, as pending; one that can't be read
+is reported and the rest go on.
+
+```sh
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts x-searches aie
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts add <long slug> --from x-posts.txt [--dry-run]
+```
 
 ## An evening's photos
 
@@ -863,11 +945,55 @@ DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run pho
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run photos remove effect 5 --approve <token>   # exactly that change
 ```
 
-The admin MCP server's `list_event_photos`, `add_event_photos`,
-`replace_event_photo` and `remove_event_photo` run the same script.
-`remove_event_photo` without `approve` is the dry run. `tests/photos.test.ts`
+`tests/photos.test.ts`
 runs it against `tests/seed.sql` with a media origin that only keeps what it
 is given.
+
+### From the Photos library on Erik's Mac
+
+`bun run photos library <slug or short link>` reads the Apple Photos
+library on this Mac (`scripts/photo-library.ts`, through osxphotos, which
+uv runs pinned) for the photos taken from an hour before the evening to an
+hour after, San Francisco time. It never writes to the library. Being in
+the library doesn't make a photo Erik's: anything in a shared album, a
+shared moment or an iCloud Shared Library, or Shared with You, is left out,
+by osxphotos's filters and again by what the library says of each photo
+(`isOwn`), his own shared ones too. So is a photo the library says nothing
+of on any of those four. It keeps what the library says of the rest in `~/Desktop/allthings-photos/<date>/library.json`, copies each one's
+still preview (which the library keeps even for a photo only in iCloud)
+into `previews/`, and draws a shortlist the same way every time:
+
+1. A photo less sharp than a quarter of the set's median is blurred and
+   left out.
+2. Of photos that are the same shot (difference hashes within 10 bits), the
+   one the library scores best stays.
+3. A close-up (one to three faces) is shortlisted only when the library
+   names every face in it as someone on the evening's stage or running it.
+   Any other close-up is a guest's: it is listed for Erik to pick, never
+   shortlisted. Crowds, rooms and the stage are fine.
+4. The rest are taken by kind in turn (the stage, a crowd, the room,
+   close-ups), best first, up to `--max` (8).
+
+Look at the previews, pick, then export the picks at full size into
+`candidates/`, as JPEG named by uuid, and add them as above with alt text
+written from looking at each one. A photo only in iCloud is downloaded
+through Photos, which macOS asks Erik to allow once (System Settings >
+Privacy & Security > Photos, for the app this runs in); when macOS refuses,
+the command says exactly what to allow. Only the evening's own photos, as
+the library has them when it runs, can be exported, and each export must
+leave a new file, or the command fails naming the photos it didn't write.
+`--dry-run` reads the library and draws the shortlist from the previews
+where the library keeps them, and writes, copies and exports nothing.
+
+```sh
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run photos library agent-setups --dry-run   # the shortlist, nothing written
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run photos library agent-setups   # previews and the shortlist
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run photos library agent-setups --export <uuid> --export <uuid>   # the picks, full size
+```
+
+Other people's photos are never copied: they come in as their posts (see
+"Posts about events"), which pages show with their author's name and a
+link, so the photo stays theirs.
 
 ### The home lab's wall, faces and tally
 
@@ -903,6 +1029,113 @@ against production when either file changes, on main, and every Monday.
 ```sh
 DATABASE_URL=$(op read "op://allthings/allthings site_reader/credential") bun run hero-photos
 ```
+
+## Running an evening's page
+
+One agent runs each evening and keeps its page live, from two weeks
+before it to three days after, with the commands above. `<slug>` is the
+evening's short link (`aie`); the commands that need the long slug print
+it.
+
+| When               | Do                                                                                                                                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| T-14 days          | Start `posts sweep <slug> --every 360` in the background: a sweep every six hours, until a week after the evening.                                                                                  |
+| T-14 to T-1, daily | The X pass: `posts x-searches <slug>`, run each search on x.com (read only), put the posts' URLs in a file, `posts add <long slug> --from <file>`. Then review.                                     |
+| The night          | Stop the six-hourly sweep and start `posts sweep <slug> --every 30`. The X pass every hour from an hour before to three hours after. Review each time.                                              |
+| T+1 day            | The X pass and review. The photos: `photos library <slug>`, look at the previews, pick, `photos library <slug> --export <uuid>…`, then `photos add` with alt text written from looking at each one. |
+| T+3 days           | The last X pass and review. Stop the sweep. Anything still pending goes to Erik as a question.                                                                                                      |
+
+Review from `posts pending --slug <long slug>`, each post once:
+
+- **Approve** a post by us (allthings, Erik, Andre, the evening's
+  organizers) about the evening, and a clear post about the evening by
+  someone who came or is coming.
+- **Hide** a post that isn't about the evening: another event, a search's
+  false match, spam.
+- **Leave pending**, and ask Erik in the run's report, anything that names
+  other companies' events or sponsors, complains, is about a person more
+  than the evening, or that you aren't sure of.
+
+Photos: Erik's come from his Photos library, his own only; a guest's
+close-up goes up only when Erik picks it. Other people's photos come in
+only as their posts, which the page shows with their author's name and a
+link. Never copy them.
+
+```sh
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts sweep aie --every 360   # the lead-up, in the background
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts x-searches aie   # the X pass's searches
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts pending --slug <long slug>   # what to review
+```
+
+## The guide
+
+The allthings guide (/guide) stars happenings beyond our evenings the way
+the Michelin guide stars a restaurant: three stars are worth a special
+journey, two a detour, one a stop. The stars are the organizers' judgment,
+written by hand in `core/backfill/guide.json`, never counted or voted.
+
+It is editorial, as the wall is: it names other people's conferences and
+evenings, which we neither host nor sync, so it is a file, not a table.
+`src/guide.ts` decodes it at import and refuses an entry without a
+sentence of why, an official https site and a source for its facts, or one
+named twice. A next edition's days are written only once its organizers
+announce them, and the guide shows them through the edition's last day in
+San Francisco; the site's version names the start of the day after as a
+boundary (`guideBoundaries`, `src/site-version.ts`), so no kept page shows
+days that are over.
+
+Agents and scripts read the same guide, as of the same clock, from the MCP
+server's `get_guide` and from `/api/v1/guide`: the contract's `Guide`
+(`src/contract.ts`), which `toGuide` builds, each entry with what its stars
+mean and its place on the page, `/guide#<id>`.
+
+## The letter
+
+The allthings letter is one a month, written by Claude and sent only once
+Erik has read it and said y. Each issue is a file in `core/letters/`
+(`2026-12.ts`), listed in `core/letters/index.ts`; `src/letter.ts` decodes
+it at import. Its sections come in one order (our next evenings,
+happenings worth your time, new open source, papers, jobs, then a closing
+paragraph), and a section with nothing real in it is left out. Each item
+names its data: an evening by its short link, a guide entry by its id, a
+talk by its id. Happenings may only name the guide's entries and evenings
+the site publishes, so nothing reaches the letter that isn't already out.
+
+`letterFindings` holds an issue to our voice (`src/voice.ts`) and to the
+letter's own rules: a word budget per section and 400 words in all, one
+question at most, no greeting and no "this month" opener, and every link
+https, written as words, to what the issue names or a page of this site.
+`tests/letter.test.ts` fails on any issue that breaks one.
+
+An issue is published (its page, the API, the MCP server, the sitemap)
+only once `core/letters/approvals.json` holds Erik's y with the approval
+token of exactly what he read (`src/approval.ts`); change a word and it is
+a draft again; so does a new address for a guide entry it names, since
+the token covers where each item links. `publishedLetters` is the only way
+a surface reads them.
+
+Before Erik reads an issue, `approve --dry-run` checks its evenings and
+talks against the database (`sourceFindings`): each evening a published
+one at that short link, ours and not yet over in our next evenings, and
+each talk given at the evening it names. It prints the token only when the
+issue breaks no rule, and `--approve` refuses one that does.
+
+Agents read the published issues from `/api/v1/letters`,
+`/api/v1/letters/<yyyy-mm>` and the MCP server's `get_letter`: the
+contract's `Letter` (`src/contract.ts`), which `toLetter` builds.
+
+```sh
+bun run letter list            # every issue, draft or approved
+bun run letter show 2026-12    # as it reads, its budgets and findings; no database
+DATABASE_URL=$(op read "op://allthings/allthings site_reader/credential") bun run letter approve 2026-12 --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings site_reader/credential") bun run letter approve 2026-12 --approve <token>   # only on Erik's y for that token
+```
+
+Erik's edits to a draft become rules in `src/letter.ts` or `src/voice.ts`
+where they generalize, and examples in `core/letters/before-after.json`
+where they don't: every `after` must read in our voice, and no issue may
+say a `before` again. `bun run letter show` counts his edits to an issue
+by kind (cut, reword, fact); fewer cuts over time is the measure.
 
 ## Schedules and notes
 
@@ -946,15 +1179,17 @@ says so under `askedBy`: who asked, the day, and their words.
   it replaces (`was`), and replaces it only while the column still holds
   just that. A photo source is never replaced once its image is copied.
 - A title is the person's job title now, as of the day it was read
-  (their talks already say when they spoke), or their latest known title
-  where no source gives a current one.
+  (their talks already say when they spoke), and never a stale one:
+  "Role, Company" only when a public page from the last 12 months says so,
+  just the company when only that is confirmed ("Moss"), and otherwise
+  their part at our evenings, as the site names it ("Speaker, at/ai").
 - A bio is the person's own words, at most trimmed or put in the third
   person, or one an organizer asked for (`askedBy`): two or three
   sentences in the site's voice on what they build, what they're known
   for and what they did at allthings, every claim on a page the fact
   lists. A terse profile line is no bio.
 - A photo is only ever a `photo_source_url` on a host the hourly ingestion
-  copies from (`app/src/lib/profile-photos/hosts.ts`), which then makes it
+  copies from (`profilePhotoHosts` in `src/ingest/remote.ts`), which then makes it
   the profile's image.
 - Anything uncertain, a same-name collision above all, is kept under
   `held` with its reason and never written.
@@ -1206,8 +1441,7 @@ cover centered on black in the smallest exact 16:9 frame that holds it,
 unscaled (`scripts/pad-cover.ts`), by default to the system's temporary
 directory.
 
-It only reads. The admin MCP server's `get_promo_drafts` runs the same
-script. `tests/promo.test.ts` keeps each seeded evening's drafts as golden
+It only reads. `tests/promo.test.ts` keeps each seeded evening's drafts as golden
 files in `tests/fixtures/promo/`; after an intended change, regenerate them
 with `UPDATE_GOLDEN=1 bun test tests/promo.test.ts` and read the diff.
 
@@ -1220,19 +1454,21 @@ in, and a note for /about's history. It says what changed (the name and
 the domain, short links, person pages, shared evenings, the at/hack
 starter, and the `allthings` command with the public MCP server it reads:
 both on X, LinkedIn, Discord and Luma, the command alone on Meetup, neither
-on Bluesky or in the /about note) and names the next evening. What isn't settled is one value with
-a placeholder and a gap: the X handle (`launchXHandle`) and the next
-evening. A checklist of what has to be true before posting comes first.
+on Bluesky or in the /about note), says the brand's line, "An open door and
+a high bar.", and names the next evening once one is published (`--next`);
+until then each draft says the next one goes up on luma.com/allthings first.
+The X handle is one value, `launchXHandle` (@allthingswebdev: X declined
+@allthings). A checklist of what has to be true before posting comes first.
 
 ```sh
-bun run promo:launch                                  # every draft, placeholders for what isn't settled
+bun run promo:launch                                  # every draft, pointing to Luma for what's next
 bun run promo:launch --channel x --channel discord    # only these
-bun run promo:launch --x-handle allthingsdev          # before launchXHandle is set
+bun run promo:launch --x-handle allthingsdev          # from another X account
 DATABASE_URL=… bun run promo:launch --next <slug>     # naming a published, upcoming evening of ours
 ```
 
 Only `--next` reads the database. `tests/promo-launch.test.ts` keeps the
-kit with placeholders and settled as golden files; regenerate them with
+kit without a handle or a next evening, and with both, as golden files; regenerate them with
 `UPDATE_GOLDEN=1 bun test tests/promo-launch.test.ts`.
 
 ## Planning
@@ -1279,9 +1515,7 @@ planning rows: they live only in the database, written through the CLI.
 the studio (see "The studio's connection"); no site role may use the
 schema. Each change runs in
 one transaction and prints the row as it now is; every command takes
-`--json`, which the admin MCP server's planning tools (`add_idea`,
-`list_wanted_speakers`, `search_planning`, `audit_planning` and the rest)
-read, so the tools and the CLI can never disagree. People and companies are
+`--json`, for scripts and agents to read. People and companies are
 named by id or exact name, events by slug, and a name two rows share is
 refused with both ids. Every command that writes takes `--dry-run`: the write runs in a
 transaction that is rolled back, so it prints exactly what it would be and
@@ -1342,8 +1576,7 @@ blockers and advice, its lineup and talks with whether each person has
 said yes, the companies we'd like to host, its collaboration (rounds, active
 invitations by role, submissions; only as a role that reads every row of
 it), its open questions, decisions and notes, and the last 20 lines of its
-log. The admin MCP server's `draft_status`, `add_draft_note` and
-`resolve_draft_note` run the same commands.
+log.
 
 ```sh
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run plan note <draft slug> --kind question --text "CodeRabbit or Vercel?" --dry-run
@@ -1351,6 +1584,105 @@ DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run pla
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run plan note resolve <question id>
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run plan status <draft slug> [--json]
 ```
+
+### Talk proposals
+
+`planning.proposals` (`migrations/0040_proposals.ts`) holds talks people
+propose to give at one of our evenings: a title, an abstract and a format
+(a talk of about 20 minutes, a lightning talk of about 5, or a demo of
+about 10), who proposes it, their email, a few lines about them, up to four
+https links, notes for the organizers, where it came from, whether we
+accepted it, and, once it is on one, the evening it is on. Like the rest of planning it is private: no site role can read
+it, nothing public shows it, and no seed or fixture holds one.
+
+`src/proposals.ts` is the module and `bun run proposals` its CLI, as the
+studio. `readProposal` reads one in as anyone sends it, trimmed and held to
+the table's limits, with a reason per field a person can act on; every way
+in uses it.
+
+- **`list`** prints the proposals with a status (`new`, the default,
+  `accepted`, `declined` or `all`), oldest first, so nobody waits behind a
+  newer one; **`show`** prints one whole. Both only read.
+- **`add`** records a proposal sent to an organizer by email or a
+  message, as `ALLTHINGS_ACTOR`; `--dry-run` makes it and rolls it back.
+- **`accept`**, **`decline`** and **`remove`** decide one, exactly as a dry
+  run showed it, like `talks update`: `--dry-run` prints the proposal, the
+  decision (with `--note`, why) and an approval token; `--approve <token>`
+  locks the proposal, works the decision out again, and refuses unless it
+  still hashes to the token. Who decided and when are kept with it.
+  `remove` deletes the row: spam, a test, or someone asking to be
+  forgotten (/privacy).
+- **`place`** puts an accepted talk on an evening (`--event <slug>`, a
+  draft or one published), with the same dry run and token, so planning
+  stops suggesting it for others. Placing it on another evening moves it;
+  declining or removing it takes it off. A move onto or off a draft is a
+  line in that draft's log, ids and the format alone, and the evening's
+  day and draft state are in the token, so a moved evening stops the
+  approval.
+
+```sh
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals list [--status new|accepted|declined|all] [--json]
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals show <id> [--json]
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals add --title "…" --abstract "…" --name "…" --email "…" \
+  [--format talk|lightning|demo] [--about "…"] [--link https://…] [--notes "…"] --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals accept <id> --note "…" --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals accept <id> --note "…" --approve <token>
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals decline <id> --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals remove <id> --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run proposals place <id> --event <draft slug> --dry-run
+```
+
+#### Taking proposals from anyone
+
+Anyone may propose, so the public way in writes as a role that can do
+nothing else: `proposal_intake` (made by the same migration, stated in
+`src/proposal-intake-role.ts`). It may INSERT a proposal's columns, as any
+source but an organizer (it can't name one), and nothing more: no SELECT,
+not even of what it just added, no UPDATE or DELETE, no other table, and
+statements of at most 5 seconds. `submitProposal` (`src/proposal-intake.ts`)
+is all it runs, and it returns nothing, so whoever sends a proposal learns
+only that it was taken.
+
+Before a proposal from outside is kept, the table's trigger
+`proposals_intake`, which runs as the owner, drops it quietly when the same
+email, title and abstract are already waiting, and refuses it past 100 from
+outside in a day (`ProposalIntakeFull`), so a flood that gets past the
+edge's rate limit stops at the table. An organizer's are never limited.
+
+- **The ways in** all hand what they were sent to the Worker's
+  `takeProposal` (`web/src/proposals.ts`): it counts the sender against
+  the edge's rate limit, reads the proposal in with `readProposal`, and
+  keeps it as this role through prod's `INTAKE` Hyperdrive
+  (infra/README.md, "Talk proposals"). The first is
+  `POST /api/v1/proposals`, a JSON body of the proposal's fields
+  (`title`, `abstract`, `name` and `email`; `format`, `about`, `links` and
+  `notes` if wanted): 202 when it is taken, 422 with each field's problem,
+  429 past the rate limit or the day's, 503 on a stage that doesn't keep
+  them. Only `application/json`, which a browser can't send to another
+  origin without a preflight it never answers, and a browser's request
+  from another site's page is refused.
+- **`/propose`**, the site's form (`web/src/pages/propose.tsx`), works
+  without a script: it posts URL-encoded to itself, only from the site's
+  own page, and answers with the page again, thanks or each problem by its
+  field. A hidden field no person fills (`website`) marks a script's form,
+  which is thanked and kept nowhere.
+- **`propose_talk`**, the MCP server's one tool that writes
+  (`web/src/mcp/propose.ts`): the proposal's fields as its input, and as
+  its answer only that it was taken, or each problem. It runs on every
+  call, never through the page store, and the store's own address refuses
+  it. A call from the `allthings` command (its `User-Agent` says
+  `allthings-cli/`) is kept as the CLI's, any other as MCP's.
+- **Its login** is set by `infra/scripts/proposal-intake.ts`, run by the
+  maintainer with the owner's connection once the migration is on
+  production, as profile_editor's is: `--dry-run` shows it, `--apply` sets
+  a new password, stores the connection string in "allthings
+  proposal_intake" without printing it, and signs in with what 1Password
+  holds. Rerun `--apply` to rotate it.
+- **Proved.** `tests/proposal-intake-role.test.ts` holds the role's
+  catalog privileges and settings to the lists above, tries every column
+  of `public` and `planning` both ways, and runs `submitProposal` as the
+  role: a proposal kept, the same one sent twice kept once, and the 101st
+  of a day refused.
 
 ## Readiness
 
@@ -1403,6 +1735,10 @@ the same in the same order:
 - network speakers whose past talks share the most of the evening's words
   (its topic, the idea's, and any `--topic` given), then the most recent
 - wanted speakers whose topics share one, free that day
+- talks people proposed and we accepted (see "Talk proposals") that are on
+  no evening yet, whose title or abstract shares the evening's words: most
+  shared first, then the one accepted longest ago, so nobody waits behind
+  a newer one. `proposals place` takes one off the list for good
 - host prospects, and hosts that last had us more than 90 days ago,
   longest first
 - open dates on the three weekdays our evenings have been on most, with
@@ -1422,7 +1758,6 @@ DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run rea
 ```
 
 It exits 1 when something blocks publishing, 2 on a draft that isn't there.
-The admin MCP server's `get_draft_readiness` runs the same script.
 
 ## Collaborating on a draft
 
@@ -1559,10 +1894,8 @@ checks it sees every row (it counts them, and `planning.collab_row_counts()`
 counts them as their owner, in one statement) and refuses as any role row
 security holds back, rather than read them short. `collab access sync`
 checks again as it reads the invitations: unless it sees every
-collaborator, it leaves Access's list as it is. Each command is also an admin
-MCP tool (`collab_invite`, `collab_brief_set`, `collab_review`, … in
-app/scripts/collab.ts, which runs the CLI with `--json`). `collab_show` and
-`collab_export` open a round only into a file and return its path, so a
+collaborator, it leaves Access's list as it is. `collab show` and
+`collab export` open a round only into a file and print its path, so a
 round's answers never reach an agent's transcript. What changes who may see what (an invitation, a revocation, the
 brief, a review) is read first: without `--approve`, the command prints
 what it would write and the approval token of exactly that, as publishing
@@ -1663,6 +1996,14 @@ a "for collaborators" panel in the site's own design:
 - the comments.
 
 It has the same grid, rules and type, and layout tokens only.
+
+**The brief as one document.** `/<slug>/brief` on the preview, linked from
+the panel, is the brief's sections for you as one page to read through or
+hand to a co-host: the evening's lockup as its cover, in the evening's mode,
+then a numbered ledger row per section (web/src/preview/brief-document.tsx).
+Who may open it is who may open the page, and it holds exactly the sections
+the panel shows you. Printed or saved as a PDF from the browser, the cover
+takes the first sheet and the site's frame stays off the paper.
 
 ## Putting an evening out on Luma
 
@@ -1810,7 +2151,7 @@ sets it through Luma's API (`calendars/update`):
 - the two sentences from brand/foundations.md;
 - Bridge, the slash's color, as its tint;
 - the site, and the channels the site's footer lists (web/src/links.ts);
-- the a/ app icon as its avatar (app/public/brand/icon-512.png).
+- the a/ app icon as its avatar (brand/public/icon-512.png).
 
 `tests/luma-calendar.test.ts` holds each of these to its source. The address
 changes only with `--slug`. It moved from luma.com/allthingsweb to
@@ -1859,8 +2200,7 @@ the change at once; `--approve <token>` works the plan out again, goes on
 only if it hashes the same, sets approval on the ticket types, sends one
 event update with the rest, and reads registration back to check each took.
 Questions are the whole list, in the order given across `--question`
-(required) and `--question-optional`; `--clear-questions` asks none. The
-admin MCP server's `luma_registration` runs the same command.
+(required) and `--question-optional`; `--clear-questions` asks none.
 
 ```sh
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") \
@@ -1890,8 +2230,7 @@ It works the way publish does: `--dry-run` reads and prints who would be
 added and removed and the approval token for exactly that (the event, its
 hosts now and the changes), saying so when the event is public;
 `--approve <token>` works the plan out again, goes on only if it hashes the
-same, adds, then removes, and reads the hosts back to check each took. The
-admin MCP server's `luma_hosts` runs the same command.
+same, adds, then removes, and reads the hosts back to check each took.
 
 Each host is added at the least access it needs: `none` (shown on the page,
 no rights to manage it: a hosting company, anyone credited) unless
@@ -2063,9 +2402,7 @@ OP_SERVICE_ACCOUNT_TOKEN=… bun run social x-sign-in --from-xurl               
 ## Migrations
 
 `migrations/` holds the schema as Effect SQL migrations, applied by Effect's
-migrator (`src/migrator.ts`). The Next app in `app/` still runs on drizzle and
-its hand-applied `app/migrations` until the cutover; both share production
-until then (see below).
+migrator (`src/migrator.ts`). Production takes migrations from here alone.
 
 ### Writing one
 
@@ -2079,16 +2416,6 @@ until then (see below).
   of the migrations here.
 - Each runs in one transaction with the others pending, so no
   `CREATE INDEX CONCURRENTLY`; split such a change out when it is needed.
-- Until the cutover, a schema change ships twice: as the app's drizzle
-  migration and as a migration here. `tests/migrations.test.ts` replays
-  `app/migrations` and fails when the two schemas drift apart. Change
-  `app/src/lib/schema.ts`, run `bun run db:generate --name <name>` in `app/`
-  for the migration and its snapshot, and append any data statements to the
-  generated SQL by hand. Only the test replays those files: production, now
-  stamped, takes migrations from here alone. One exception: a migration that
-  only brings production back to what `app/migrations` already creates (one
-  of the hand-applied differences the test lists) ships here alone, and its
-  entry leaves that list.
 - Add the lines the migration creates to
   `tests/fixtures/production-schema.txt`, which is production's catalog once
   every migration here has run (`bun run migrate`, below).
@@ -2100,8 +2427,8 @@ until then (see below).
   failure names each migration to renumber, and the number it should take.
 
 `0001_baseline` is production's schema on 2026-10-04, read from its catalog,
-not a copy of `app/migrations`: production received changes by hand that
-those files do not record. The test lists each difference with its reason.
+not a replay of the old Next app's drizzle migrations: production received
+changes by hand that those never recorded.
 `tests/fixtures/production-schema.txt` is that catalog plus what each later
 migration adds, and the tests hold the migrations to it both in PGlite and on
 Postgres 17 (`tests/postgres.test.ts`, in CI).
@@ -2126,8 +2453,8 @@ holds: fetched with neonctl (with `--org-id org-broad-sea-60121176`, signed
 in as a member of All Things Web), never stored (see "The studio's
 connection").
 
-A migration reaches production before the code that needs it: the app on
-Vercel builds and serves against production's database (previews too), so
+A migration reaches production before the code that needs it: every stage's
+Web Worker, pull request previews included, reads production's database, so
 code that reads a new column fails until it exists. Once a pull request with
 a migration is approved and green, check out its final head commit and run
 both against production; the dry run must list exactly that pull request's

@@ -25,6 +25,7 @@ import { CandidateSearches, findCandidates } from "../src/posts/candidates.ts";
 import { PostSources } from "../src/posts/sources.ts";
 import { EventPostWriter } from "../src/posts/store.ts";
 import { LumaApi } from "../src/luma/api.ts";
+import { LumaCompanyHosts } from "../src/luma/company-hosts.ts";
 import { LumaDescriptions } from "../src/luma/descriptions.ts";
 import { Luma } from "../src/luma/luma.ts";
 import { LumaSync } from "../src/luma/sync.ts";
@@ -49,37 +50,10 @@ import {
  * outside its grants must be refused.
  *
  * The sync's writes are core's event sync, its venue visibility and venue
- * fill, its short links and description import, and the app's three image
- * ingestions (event covers, profile photos, post images), whose statements
- * the Worker's port keeps. The app's are loaded at runtime, as in
- * luma-parity.test.ts, with downloads, processing and storage faked: only
- * their SQL matters here.
+ * fill, its short links and description import, and its three image
+ * ingestions (event covers, profile photos, post images), with downloads,
+ * processing and storage faked: only their SQL matters here.
  */
-
-const app = new URL("../../app/", import.meta.url);
-const load = (path: string): Promise<unknown> =>
-  import(new URL(path, app).href);
-const { drizzle } = (await import(
-  Bun.resolveSync("drizzle-orm/pglite", app.pathname)
-)) as { drizzle: (config: { client: unknown }) => unknown };
-
-interface Ingested {
-  readonly ingested: ReadonlyArray<string>;
-  readonly failed: ReadonlyArray<unknown>;
-}
-type Ingest = (
-  deps: Record<string, unknown>,
-  options?: { budgetMs?: number },
-) => Promise<Ingested>;
-const { ingestMissingCovers } = (await load(
-  "src/lib/event-covers/ingest.ts",
-)) as { ingestMissingCovers: Ingest };
-const { ingestProfilePhotos } = (await load(
-  "src/lib/profile-photos/ingest.ts",
-)) as { ingestProfilePhotos: Ingest };
-const { ingestPostImages } = (await load("src/lib/post-images/ingest.ts")) as {
-  ingestPostImages: Ingest;
-};
 
 const calendar = await fixture("calendar.ics");
 const stored = await fixture("stored.sql");
@@ -118,26 +92,6 @@ const refusal = async (statement: string): Promise<string | undefined> => {
     return error instanceof Error ? error.message : String(error);
   }
 };
-
-let ids = 0;
-const image = {
-  bytes: new Uint8Array([1, 2, 3]),
-  width: 1200,
-  height: 630,
-  format: "jpeg",
-  placeholder: "data:image/jpeg;base64,AA",
-};
-/** What every app ingestion needs besides its database: all of it faked. */
-const fakes = () => ({
-  database: drizzle({ client: db }),
-  findCoverUrl: async () => "https://images.lumacdn.com/cover.jpg",
-  download: async () => image.bytes,
-  process: async () => image,
-  store: async (key: string) => `https://media.allthings.dev/${key}`,
-  remove: async () => undefined,
-  newId: () => `90000000-0000-4000-8000-${String(++ids).padStart(12, "0")}`,
-  now: Date.now,
-});
 
 /**
  * Luma's API, faked: every event is at CodeRabbit, has a description, and
@@ -353,6 +307,68 @@ describe("site_sync", () => {
       expect(result.written).toBe(result.refreshed.length);
       expect(result.written).toBeGreaterThan(0);
     }
+  });
+
+  test("attaches the hosting companies Luma lists, never more", async () => {
+    // Sentry's Luma account is on record, as backfill/hosts.json writes it.
+    await db.exec(`RESET ROLE;
+      UPDATE sponsors SET luma_user_id = 'usr-Sentry1'
+        WHERE id = 'c0000000-0000-4000-8000-000000000001';
+      SET ROLE ${SITE_SYNC}`);
+    const hostedBySentry = Layer.succeed(
+      LumaApi,
+      LumaApi.of({
+        eventPeople: Option.some((lumaEventId: string) =>
+          Effect.succeed(
+            Option.some({
+              lumaEventId,
+              managed: true,
+              hosts: [
+                { lumaUserId: "usr-Sentry1", name: "Sentry", avatarUrl: null },
+                {
+                  lumaUserId: "usr-Someone1",
+                  name: "Someone",
+                  avatarUrl: null,
+                },
+              ],
+              guestCount: null,
+              checkedInCount: null,
+            }),
+          ),
+        ),
+        eventVenue: Option.none(),
+        eventDetails: Option.none(),
+        eventDescription: Option.none(),
+      }),
+    );
+    const layer = LumaCompanyHosts.layer.pipe(
+      Layer.provide(hostedBySentry),
+      Layer.provideMerge(sqlLayer(db)),
+      Layer.provideMerge(clockAt(DateTime.makeUnsafe("2026-10-05T12:00:00Z"))),
+    );
+    const result = await Effect.runPromise(
+      LumaCompanyHosts.use((step) =>
+        step.run({ dryRun: false, within: "7 days" }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(result).toMatchObject({ _tag: "Planned", unavailable: [] });
+    if (result._tag === "Planned") {
+      expect(result.asked).toBeGreaterThan(0);
+      expect(result.written).toBe(result.plan.attach.length);
+      expect(result.written).toBeGreaterThan(0);
+    }
+    // It only adds: it may neither change nor remove an attachment.
+    expect(
+      await refusal("UPDATE event_sponsors SET updated_at = now()"),
+    ).toContain("permission denied");
+    expect(await refusal("DELETE FROM event_sponsors")).toContain(
+      "permission denied",
+    );
+    expect(
+      await refusal(
+        "INSERT INTO sponsors (name, about, updated_at) VALUES ('x', 'x', now())",
+      ),
+    ).toContain("permission denied");
   });
 
   test("runs the description import", async () => {
@@ -619,28 +635,7 @@ describe("site_sync", () => {
     ).toContain("permission denied");
   });
 
-  test("stores missing covers, profile photos and post images", async () => {
-    const covers = await ingestMissingCovers(fakes());
-    expect(covers.failed).toEqual([]);
-    expect(covers.ingested.length).toBeGreaterThan(0);
-
-    const photos = await ingestProfilePhotos(fakes());
-    expect(photos).toMatchObject({ ingested: ["Ada Lovelace"], failed: [] });
-
-    const posts = await ingestPostImages(fakes());
-    expect(posts.failed).toEqual([]);
-    expect(posts.ingested).toHaveLength(2);
-
-    await db.exec("RESET ROLE");
-    const { rows } = await db.query<{ missing: number }>(`
-      SELECT (SELECT count(*) FROM profiles WHERE photo_source_url IS NOT NULL AND image IS NULL)
-           + (SELECT count(*) FROM event_posts WHERE image IS NULL OR author_avatar IS NULL)
-           + (SELECT count(*) FROM events WHERE luma_event_id IS NOT NULL AND preview_image IS NULL)
-           AS missing`);
-    expect(Number(rows[0]?.missing)).toBe(0);
-  });
-
-  test("runs core's image ingestion, the Worker's", async () => {
+  test("stores missing covers, profile photos and post images, with core's image ingestion", async () => {
     const missing = await db.query<{ luma_event_id: string }>(
       "SELECT luma_event_id FROM events WHERE preview_image IS NULL AND luma_event_id IS NOT NULL",
     );
@@ -686,6 +681,14 @@ describe("site_sync", () => {
     expect(photos).toEqual({ ingested: ["Ada Lovelace"], failed: [] });
     expect(posts).toMatchObject({ failed: [], remaining: 0 });
     expect(posts.ingested).toHaveLength(2);
+
+    await db.exec("RESET ROLE");
+    const { rows } = await db.query<{ missing: number }>(`
+      SELECT (SELECT count(*) FROM profiles WHERE photo_source_url IS NOT NULL AND image IS NULL)
+           + (SELECT count(*) FROM event_posts WHERE image IS NULL OR author_avatar IS NULL)
+           + (SELECT count(*) FROM events WHERE luma_event_id IS NOT NULL AND preview_image IS NULL)
+           AS missing`);
+    expect(Number(rows[0]?.missing)).toBe(0);
   });
 
   test("may delete nothing", async () => {
