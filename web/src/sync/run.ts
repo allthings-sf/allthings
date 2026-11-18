@@ -270,11 +270,13 @@ const venueVisibility = (
   checker: LumaVenueVisibility["Service"],
   limits: SyncLimits,
   dryRun: boolean,
+  rehearsed: ReadonlyArray<RehearsedEvening> = [],
 ) =>
   Effect.gen(function* () {
     const { maxEvents } = limits.venueVisibility;
     const result = yield* checker.run({
       dryRun,
+      rehearsed,
       ...(maxEvents === undefined ? {} : { maxEvents }),
     });
     if (result._tag === "Skipped") return { skipped: result.reason };
@@ -635,7 +637,8 @@ const dryRun = (limits: SyncLimits) =>
     // rolls back: the links step lists theirs too.
     let created: ReadonlyArray<PendingEvening> = [];
     let published: ReadonlyArray<PublishedDraft> = [];
-    // The same evenings as the company hosts step would see them.
+    // The same evenings as the venue visibility and company hosts steps
+    // would see them.
     let rehearsed: ReadonlyArray<RehearsedEvening> = [];
     steps["events"] = yield* step(
       "events",
@@ -660,7 +663,7 @@ const dryRun = (limits: SyncLimits) =>
     );
     steps["venue-visibility"] = yield* step(
       "venue-visibility",
-      venueVisibility(yield* LumaVenueVisibility, limits, true),
+      venueVisibility(yield* LumaVenueVisibility, limits, true, rehearsed),
     );
     steps["venues"] = yield* step(
       "venues",

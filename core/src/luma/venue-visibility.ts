@@ -4,6 +4,7 @@ import { ahead, published, soonestFirst } from "../catalog.ts";
 import type { DataSourceError } from "../errors.ts";
 import { orDataSourceError } from "../sql.ts";
 import { LumaApi, type LumaApiError } from "./api.ts";
+import type { RehearsedEvening } from "./company-hosts.ts";
 
 /**
  * Whether Luma shows each evening's venue to approved guests only (Luma's
@@ -78,6 +79,13 @@ export interface VenueVisibilityOptions {
    * that later runs ask about the rest.
    */
   readonly maxEvents?: number;
+  /**
+   * A dry run's evenings as the rehearsed event sync would leave them
+   * (src/luma/company-hosts.ts, `rehearsedEvenings`): one it would create
+   * is asked about as `pending:<Luma id>`. A run that writes takes the
+   * evenings as stored.
+   */
+  readonly rehearsed?: ReadonlyArray<RehearsedEvening>;
 }
 
 /** The service: one run of the venue visibility check. */
@@ -100,23 +108,57 @@ const make = Effect.gen(function* () {
    * (from the start again after the last), so that of n evenings each is
    * asked about at least once in every ceil(n / maxEvents) hourly runs.
    */
-  const read = (now: DateTime.Utc, maxEvents: number | null) => {
+  const read = (
+    now: DateTime.Utc,
+    maxEvents: number | null,
+    rehearsed: ReadonlyArray<RehearsedEvening>,
+  ) => {
     const hour = Math.floor(DateTime.toEpochMillis(now) / 3_600_000);
     const inTurn =
       maxEvents === null
         ? sql`true`
         : sql`(a.i - ${hour}::bigint * ${maxEvents}::bigint % a.n + a.n) % a.n
             < ${maxEvents}`;
+    const overlay = JSON.stringify(
+      rehearsed.map((row) => ({
+        luma_event_id: row.lumaEventId,
+        slug: row.slug,
+        is_draft: row.isDraft,
+        start_date: row.startDate,
+        end_date: row.endDate,
+      })),
+    );
+    // Stored evenings, with what a rehearsed sync would change laid over
+    // them, and those it would create (public until Luma says otherwise),
+    // as the company hosts' step reads them; a run that writes lays nothing.
     return sql`
+      WITH r AS (
+        SELECT * FROM jsonb_to_recordset(${overlay}::jsonb) AS r(
+          luma_event_id text, slug text, is_draft boolean,
+          start_date timestamptz, end_date timestamptz)
+      ), x AS (
+        SELECT e.id::text AS id, e.slug, e.luma_event_id,
+          e.venue_guests_only,
+          COALESCE(r.is_draft, e.is_draft) AS is_draft,
+          COALESCE(r.start_date, e.start_date) AS start_date,
+          COALESCE(r.end_date, e.end_date) AS end_date
+        FROM events e LEFT JOIN r ON r.luma_event_id = e.luma_event_id
+        UNION ALL
+        SELECT 'pending:' || r.luma_event_id, r.slug, r.luma_event_id, false,
+          r.is_draft, r.start_date, r.end_date
+        FROM r
+        WHERE NOT EXISTS (
+          SELECT 1 FROM events e WHERE e.luma_event_id = r.luma_event_id)
+      )
       SELECT a."eventId", a.slug, a."lumaEventId", a."guestsOnly"
       FROM (
-        SELECT e.id AS "eventId", e.slug, e.luma_event_id AS "lumaEventId",
-          e.venue_guests_only AS "guestsOnly",
-          row_number() OVER (ORDER BY ${soonestFirst(sql, "e")}) - 1 AS i,
+        SELECT x.id AS "eventId", x.slug, x.luma_event_id AS "lumaEventId",
+          x.venue_guests_only AS "guestsOnly",
+          row_number() OVER (ORDER BY ${soonestFirst(sql, "x")}) - 1 AS i,
           count(*) OVER () AS n
-        FROM events e
-        WHERE ${published(sql, "e")} AND ${ahead(sql, "e", now)}
-          AND e.luma_event_id IS NOT NULL
+        FROM x
+        WHERE ${published(sql, "x")} AND ${ahead(sql, "x", now)}
+          AND x.luma_event_id IS NOT NULL
       ) a
       WHERE ${inTurn}
       ORDER BY a.i`.pipe(
@@ -152,7 +194,7 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const run = ({ dryRun, maxEvents }: VenueVisibilityOptions) =>
+  const run = ({ dryRun, maxEvents, rehearsed = [] }: VenueVisibilityOptions) =>
     Option.match(api.eventVenue, {
       onNone: () =>
         Effect.succeed<VenueVisibility>({
@@ -161,7 +203,11 @@ const make = Effect.gen(function* () {
         }),
       onSome: (eventVenue) =>
         Effect.gen(function* () {
-          const evenings = yield* read(yield* DateTime.now, maxEvents ?? null);
+          const evenings = yield* read(
+            yield* DateTime.now,
+            maxEvents ?? null,
+            dryRun ? rehearsed : [],
+          );
           const answers = yield* Effect.forEach(
             evenings,
             (evening: Ahead) =>

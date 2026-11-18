@@ -227,6 +227,59 @@ describe("the venue visibility", () => {
     expect(all.asked).toEqual(["evt-endsnow", "evt-upcoming"]);
   });
 
+  test("a dry run asks about the evenings as the rehearsed sync would leave them; a run that writes, as stored", async () => {
+    const db = await database();
+    const before = await stored(db);
+    const rehearsed = [
+      // The seed's draft, published and moved ahead.
+      {
+        lumaEventId: "evt-draft",
+        slug: "2026-09-01-draft-night",
+        isDraft: false,
+        startDate: "2026-10-09T01:00:00Z",
+        endDate: "2026-10-09T04:00:00Z",
+      },
+      // An evening the sync would create.
+      {
+        lumaEventId: "evt-new",
+        slug: "2026-10-08-new-night-evt-new",
+        isDraft: false,
+        startDate: "2026-10-09T02:00:00Z",
+        endDate: "2026-10-09T05:00:00Z",
+      },
+      // The upcoming meetup, cancelled: a draft now.
+      {
+        lumaEventId: "evt-upcoming",
+        slug: "2026-11-05-upcoming",
+        isDraft: true,
+        startDate: null,
+        endDate: null,
+      },
+    ];
+    const replies = {
+      ...both,
+      "evt-draft": [answer("evt-draft", "public")],
+      "evt-new": [answer("evt-new")],
+    };
+    const dry = await check(db, replies, { dryRun: true, rehearsed });
+    expect(dry.asked).toEqual(["evt-endsnow", "evt-draft", "evt-new"]);
+    expect(dry.result).toMatchObject({
+      asked: 3,
+      guestsOnly: ["2026-10-08-new-night-evt-new"],
+      changed: [
+        {
+          eventId: "pending:evt-new",
+          slug: "2026-10-08-new-night-evt-new",
+          guestsOnly: true,
+        },
+      ],
+      written: null,
+    });
+    expect(await stored(db)).toEqual(before);
+    const wrote = await check(db, replies, { rehearsed });
+    expect(wrote.asked).toEqual(["evt-endsnow", "evt-upcoming"]);
+  });
+
   test("a dry run plans the same and writes nothing", async () => {
     const db = await database();
     const before = await stored(db);
