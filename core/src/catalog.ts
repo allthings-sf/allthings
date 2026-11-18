@@ -113,9 +113,14 @@ export const venueHidden = (
 /**
  * The city in an address as Luma writes one, "<venue>, <street>, San
  * Francisco, CA 94105, USA": the part just before the state, its ZIP code
- * and country optional. An address that doesn't end so names no city.
+ * and country optional, when it has no digit and the part before it does
+ * (the street's number, or a suite's). So a street is never taken for the
+ * city: "201 Spear St, CA 94105, USA" and "Spear St, CA 94105, USA" name
+ * none, and neither does a city alone ("San Francisco, CA"), which can't
+ * be told from a street alone. An address that doesn't end so names no
+ * city.
  */
-const cityPattern = String.raw`([^,]+),\s*[A-Z]{2}(?:\s+\d{5}(?:-\d{4})?)?(?:,\s*(?:USA|United States))?\s*$`;
+const cityPattern = String.raw`(?:^|,)[^,]*[0-9][^,]*,\s*([^,0-9]+),\s*[A-Z]{2}(?:\s+[0-9]{5}(?:-[0-9]{4})?)?(?:,\s*(?:USA|United States))?\s*$`;
 
 /** The city of the venue of the evening aliased `e`, or NULL. */
 const cityOf = (sql: SqlClient, e: EventAlias): Statement.Fragment =>

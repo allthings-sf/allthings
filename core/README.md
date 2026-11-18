@@ -535,8 +535,11 @@ published evening not over with a Luma page, whatever venue is stored, and
 writes the ones that changed, before the venue fill runs, so a guests-only
 venue it fills in is never shown. Luma alone decides it: an organizer's
 venue (`venue_by_organizer`) is still Luma's to hide. The city is read from
-the address as Luma writes one ("…, San Francisco, CA 94105, USA"); where
-the address names none, the surfaces say nothing of the place. Every public
+the address as Luma writes one ("201 Spear St, San Francisco, CA 94105,
+USA"): the part before the state, only when it has no digit and the part
+before it does, so a street just before the state ("201 Spear St, CA
+94105") is never taken for the city. Where the address names none, the
+surfaces say nothing of the place. Every public
 read takes the venue from `publicVenue` (src/catalog.ts), never the columns
 themselves, which `tests/catalog-guard.test.ts` holds it to; the
 organizers' tools (readiness, planning, the completeness report) read the
