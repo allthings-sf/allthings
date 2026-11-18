@@ -1,13 +1,18 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { PGlite } from "@electric-sql/pglite";
-import { Effect, Exit, Layer } from "effect";
+import { DateTime, Effect, Exit, Layer } from "effect";
 import { LumaApi } from "../src/luma/api.ts";
 import {
   LumaVenueVisibility,
   type VenueVisibility,
   type VenueVisibilityOptions,
 } from "../src/luma/venue-visibility.ts";
-import { clockLayer, seededDatabase, sqlLayer } from "./support/database.ts";
+import {
+  clockAt,
+  clockLayer,
+  seededDatabase,
+  sqlLayer,
+} from "./support/database.ts";
 import {
   configFrom,
   fakeLumaBy,
@@ -65,12 +70,14 @@ const check = async (
   replies: Readonly<Record<string, ReadonlyArray<Reply>>>,
   options: Partial<VenueVisibilityOptions> & {
     env?: Record<string, string>;
+    /** The clock's instant; the seed's by default. */
+    at?: DateTime.Utc;
   } = {},
 ): Promise<{
   result: VenueVisibility;
   asked: ReadonlyArray<string | null>;
 }> => {
-  const { env = withKey, ...rest } = options;
+  const { env = withKey, at, ...rest } = options;
   const luma = fakeApi(replies);
   const exit = await Effect.runPromiseExit(
     settle(
@@ -83,7 +90,7 @@ const check = async (
           Layer.provide(LumaApi.layer),
           Layer.provide(Layer.mergeAll(luma.layer, configFrom(env))),
           Layer.provideMerge(sqlLayer(db)),
-          Layer.provideMerge(clockLayer),
+          Layer.provideMerge(at === undefined ? clockLayer : clockAt(at)),
         ),
       ),
     ),
@@ -193,11 +200,31 @@ describe("the venue visibility", () => {
     );
   });
 
-  test("asks about at most maxEvents, the soonest first", async () => {
+  test("asks about at most maxEvents, in turn, the next ones each hour", async () => {
     const db = await database();
-    const { asked, result } = await check(db, both, { maxEvents: 1 });
-    expect(asked).toEqual(["evt-endsnow"]);
-    expect(result).toMatchObject({ asked: 1, changed: [], written: 0 });
+    // Both evenings are ahead at either hour; each asks about the other.
+    const asked: Array<ReadonlyArray<string | null>> = [];
+    for (const instant of [
+      "2026-10-03T17:00:00Z",
+      "2026-10-03T18:00:00Z",
+      "2026-10-03T19:00:00Z",
+    ]) {
+      const run = await check(db, both, {
+        maxEvents: 1,
+        dryRun: true,
+        at: DateTime.makeUnsafe(instant),
+      });
+      expect(run.result).toMatchObject({ asked: 1 });
+      asked.push(run.asked);
+    }
+    expect(asked).toEqual([
+      ["evt-upcoming"],
+      ["evt-endsnow"],
+      ["evt-upcoming"],
+    ]);
+    // As many as there are, or more, asks about every one, soonest first.
+    const all = await check(db, both, { maxEvents: 2, dryRun: true });
+    expect(all.asked).toEqual(["evt-endsnow", "evt-upcoming"]);
   });
 
   test("a dry run plans the same and writes nothing", async () => {

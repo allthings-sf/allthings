@@ -73,7 +73,10 @@ export type VenueVisibility =
 export interface VenueVisibilityOptions {
   /** Plan only: ask Luma, write nothing. */
   readonly dryRun: boolean;
-  /** Ask about at most this many evenings, the soonest first. */
+  /**
+   * Ask about at most this many evenings, taken in turn hour by hour so
+   * that later runs ask about the rest.
+   */
   readonly maxEvents?: number;
 }
 
@@ -91,18 +94,36 @@ const make = Effect.gen(function* () {
   const api = yield* LumaApi;
   const sql = yield* SqlClient;
 
-  const read = (now: DateTime.Utc, maxEvents: number | null) =>
-    sql`
-      SELECT e.id AS "eventId", e.slug, e.luma_event_id AS "lumaEventId",
-        e.venue_guests_only AS "guestsOnly"
-      FROM events e
-      WHERE ${published(sql, "e")} AND ${ahead(sql, "e", now)}
-        AND e.luma_event_id IS NOT NULL
-      ORDER BY ${soonestFirst(sql, "e")}
-      LIMIT ${maxEvents}`.pipe(
+  /**
+   * The published evenings not over with a Luma page, soonest first: every
+   * one, or `maxEvents` of them taken in turn, the next ones each hour
+   * (from the start again after the last), so that of n evenings each is
+   * asked about at least once in every ceil(n / maxEvents) hourly runs.
+   */
+  const read = (now: DateTime.Utc, maxEvents: number | null) => {
+    const hour = Math.floor(DateTime.toEpochMillis(now) / 3_600_000);
+    const inTurn =
+      maxEvents === null
+        ? sql`true`
+        : sql`(a.i - ${hour}::bigint * ${maxEvents}::bigint % a.n + a.n) % a.n
+            < ${maxEvents}`;
+    return sql`
+      SELECT a."eventId", a.slug, a."lumaEventId", a."guestsOnly"
+      FROM (
+        SELECT e.id AS "eventId", e.slug, e.luma_event_id AS "lumaEventId",
+          e.venue_guests_only AS "guestsOnly",
+          row_number() OVER (ORDER BY ${soonestFirst(sql, "e")}) - 1 AS i,
+          count(*) OVER () AS n
+        FROM events e
+        WHERE ${published(sql, "e")} AND ${ahead(sql, "e", now)}
+          AND e.luma_event_id IS NOT NULL
+      ) a
+      WHERE ${inTurn}
+      ORDER BY a.i`.pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Ahead))),
       orDataSourceError,
     );
+  };
 
   const write = (
     changes: ReadonlyArray<VisibilityChange>,

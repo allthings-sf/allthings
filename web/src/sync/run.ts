@@ -91,7 +91,8 @@ export interface SyncLimits {
   readonly covers: { readonly maxItems?: number };
   /**
    * Evenings ahead asked whether Luma shows their venue to guests only;
-   * every one by default.
+   * every one by default, else `maxEvents` of them in turn, the next ones
+   * each hour.
    */
   readonly venueVisibility: { readonly maxEvents?: number };
   /** Events without a venue asked about; every one by default. */
