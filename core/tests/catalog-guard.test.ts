@@ -16,6 +16,9 @@ import { describe, expect, test } from "bun:test";
 /** Up to four sort terms before the one a rule looks for. */
 const sortTerms = String.raw`ORDER BY\s+(?:[\w.]+(?:\s+(?:ASC|DESC))?(?:\s+NULLS\s+(?:FIRST|LAST))?\s*,\s*){0,4}`;
 
+/** The rule that a public read takes an evening's venue from `publicVenue`. */
+const venue = "an evening's venue";
+
 /** What stating a rule looks like in SQL. */
 const rules: ReadonlyArray<readonly [string, RegExp]> = [
   // Selecting by it, not reading it out: compared either way round, also
@@ -46,7 +49,7 @@ const rules: ReadonlyArray<readonly [string, RegExp]> = [
   // A venue column read or written in SQL, by an alias or bare; never a
   // key of Luma's answer (`full_address: …`, `json?.full_address`).
   [
-    "an evening's venue",
+    venue,
     /(?<![\w?.])(?:[a-z_]+\.)?(?:street_address|short_location|full_address)\b(?!\s*:(?!:))/,
   ],
 ];
@@ -62,8 +65,6 @@ const internal: Readonly<Record<string, string>> = {
   "core/src/completeness.ts": "the completeness report",
   "core/src/curation.ts": "writes curation from its backfill",
   "core/src/drafts.ts": "lists drafts for the organizers",
-  "core/src/lineups.ts":
-    "writes the venues the organizers set, from their backfill",
   "web/src/preview/collab.ts":
     "the draft preview: which evenings a signer may help with, drafts included",
   "core/src/luma/descriptions.ts": "Luma import",
@@ -71,8 +72,6 @@ const internal: Readonly<Record<string, string>> = {
   "core/src/luma/people-sync.ts": "Luma import of people",
   "core/src/luma/sync.ts": "the Luma sync, which writes is_draft",
   "core/src/luma/venues.ts": "Luma import of venues",
-  "core/src/planning/draft.ts":
-    "a draft's notes and status, for the organizers",
   "core/src/planning/planning.ts": "planning, for the organizers",
   "core/src/posts/candidates.ts": "the post search",
   "core/src/posts/review.ts": "post review, for the organizers",
@@ -82,6 +81,18 @@ const internal: Readonly<Record<string, string>> = {
   "core/src/sql.ts":
     "reads curation into JSON for the pages, and selects nothing by it",
   "core/src/talk-edits.ts": "edits talks, for the organizers",
+};
+
+/**
+ * Code that isn't a public read and reads or writes an evening's venue as
+ * stored, but states no other rule: excused from that one alone, and held
+ * to every other.
+ */
+const venueAsStored: Readonly<Record<string, string>> = {
+  "core/src/lineups.ts":
+    "writes the venues the organizers set, from their backfill",
+  "core/src/planning/draft.ts":
+    "a draft's notes and status, for the organizers",
 };
 
 /** Reading the current time, rather than the instant every read is as of. */
@@ -231,7 +242,9 @@ describe("the catalog's rules are stated once", () => {
     const unlisted: Array<string> = [];
     for (const path of sources) {
       if (path === catalog || path in internal) continue;
-      const names = await stated(path);
+      const names = (await stated(path)).filter(
+        (name) => !(path in venueAsStored && name === venue),
+      );
       if (names.length > 0) unlisted.push(`${path}: ${names.join(", ")}`);
     }
     expect(unlisted).toEqual([]);
@@ -241,6 +254,11 @@ describe("the catalog's rules are stated once", () => {
     const stale: Array<string> = [];
     for (const path of Object.keys(internal)) {
       if (!sources.includes(path) || (await stated(path)).length === 0) {
+        stale.push(path);
+      }
+    }
+    for (const path of Object.keys(venueAsStored)) {
+      if (!sources.includes(path) || !(await stated(path)).includes(venue)) {
         stale.push(path);
       }
     }

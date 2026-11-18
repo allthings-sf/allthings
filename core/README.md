@@ -66,8 +66,10 @@ fails on any file that states one of these rules itself (selecting by
 `start_date`, a lineup's order, or reading a venue column) outside
 `src/catalog.ts`. It lists the
 code that isn't a public read (the Luma sync, the organizers' tools, the
-reports), each with why; the list only shrinks, and a listed file that
-states no rule fails it too. `tests/catalog.test.ts` holds the fragments to
+reports), each with why, and apart from it the code that reads a venue as
+stored and states no other rule, excused from the venue rule alone; the
+lists only shrink, and a listed file that states no rule (or no longer
+reads a venue) fails it too. `tests/catalog.test.ts` holds the fragments to
 the schema, `ahead` and `ended` to `eventStatus` at every instant around
 an evening's start and end, and each scope of a person's appearances.
 
