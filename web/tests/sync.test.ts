@@ -380,6 +380,13 @@ describe("a sync run that writes", () => {
         public: [],
         unavailable: [],
       });
+      // The evenings the fill wrote a venue for, read before toMatchObject,
+      // which puts its matchers in place of what they matched.
+      const filled = (
+        report.steps["venues"] as unknown as {
+          filled: ReadonlyArray<{ slug: string }>;
+        }
+      ).filled.map(({ slug }) => `'${slug}'`);
       expect(report.steps["venues"]).toMatchObject({
         status: "done",
         filled: expect.arrayContaining([
@@ -391,8 +398,10 @@ describe("a sync run that writes", () => {
       });
       expect(await count(db, unplaced)).toBe(0);
       // Luma shows every venue to guests only here: each published evening
-      // not over with a Luma page is marked, whatever venue it has, and
+      // not over with a Luma page is marked, whatever venue it has, and so
+      // is each evening the fill wrote a venue for, from the same answer;
       // none other.
+      expect(filled.length).toBeGreaterThan(0);
       const ahead = await count(
         db,
         `SELECT count(*) AS n FROM events WHERE is_draft = false
@@ -413,15 +422,19 @@ describe("a sync run that writes", () => {
           db,
           `SELECT count(*) AS n FROM events WHERE venue_guests_only
             AND NOT (is_draft = false AND luma_event_id IS NOT NULL
-              AND end_date >= '2026-10-05T12:00:00Z')`,
+              AND end_date >= '2026-10-05T12:00:00Z')
+            AND slug NOT IN (${filled.join(", ")})`,
         ),
       ).toBe(0);
       expect(
         await count(
           db,
-          "SELECT count(*) AS n FROM events WHERE venue_guests_only",
+          `SELECT count(*) AS n FROM events WHERE NOT venue_guests_only
+            AND (slug IN (${filled.join(", ")})
+              OR (is_draft = false AND luma_event_id IS NOT NULL
+                AND end_date >= '2026-10-05T12:00:00Z'))`,
         ),
-      ).toBe(ahead);
+      ).toBe(0);
       const described = await count(
         db,
         "SELECT count(*) AS n FROM events WHERE is_draft = false AND luma_event_id IS NOT NULL",
