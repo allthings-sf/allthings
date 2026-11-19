@@ -3,13 +3,15 @@ import { SQL } from "bun";
 import { PgClient } from "@effect/sql-pg";
 import { Effect, Redacted } from "effect";
 import * as Migrator from "effect/sql/Migrator";
-import type { SqlClient } from "effect/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import baselineMigration, { baseline } from "../migrations/0001_baseline.ts";
 import { migrations } from "../migrations/index.ts";
+import { publicVenue } from "../src/catalog.ts";
 import { isTopic } from "../src/lockup.ts";
 import * as Migrations from "../src/migrator.ts";
 import * as SchemaSnapshot from "../src/schema-snapshot.ts";
-import { expectedSchema } from "./support/database.ts";
+import { cityAddresses } from "./support/city-addresses.ts";
+import { expectedSchema, now } from "./support/database.ts";
 import { notTopics, topics } from "./support/topics.ts";
 
 /**
@@ -119,6 +121,25 @@ if (serverUrl === undefined) {
         ),
       ).toBe("");
     });
+
+    test.each(cityAddresses)(
+      "finds the city of %p: %p",
+      async (address, city) => {
+        const rows = await on(
+          serverUrl,
+          Effect.gen(function* () {
+            const sql = yield* SqlClient;
+            return yield* sql<{ shortLocation: string | null }>`
+            SELECT ${publicVenue(sql, "e", now, "columns")}
+            FROM (SELECT ${address}::text AS full_address,
+              NULL::text AS street_address, 'A venue'::text AS short_location,
+              true AS venue_guests_only,
+              '2099-01-01T00:00:00Z'::timestamptz AS end_date) e`;
+          }),
+        );
+        expect(rows[0]?.shortLocation).toBe(city);
+      },
+    );
 
     test("the CHECK on events.topic agrees with isTopic", async () => {
       const url = await freshDatabase("topic");

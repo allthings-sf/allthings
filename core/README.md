@@ -540,12 +540,12 @@ a guests-only venue it fills in is never shown, though the visibility step
 failed or didn't ask about it. Luma alone decides it: an organizer's
 venue (`venue_by_organizer`) is still Luma's to hide. The city is read from
 the address as Luma writes one ("201 Spear St, San Francisco, CA 94105,
-USA"): the part before the state, only when it has no digit and the part
-before it does, so a street just before the state ("201 Spear St, CA
-94105") is never taken for the city. Where the address names none, the
-surfaces say nothing of the place. Every public
-read takes the venue from `publicVenue` (src/catalog.ts), never the columns
-themselves, which `tests/catalog-guard.test.ts` holds it to; the
+USA"): the part before the state, when it follows a numbered street
+address or suite and has neither digits nor a street suffix. Where the
+address names no unambiguous city, the surfaces say nothing of the
+place. Every public read takes the venue from `publicVenue`
+(src/catalog.ts), never the columns themselves, which
+`tests/catalog-guard.test.ts` holds it to; the
 organizers' tools (readiness, planning, the completeness report) read the
 venue as stored. A cover is drawn from the evening's page, so one drawn
 while its venue is hidden names no neighborhood; one drawn before still

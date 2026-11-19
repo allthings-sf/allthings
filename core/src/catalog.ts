@@ -110,24 +110,25 @@ export const venueHidden = (
 ): Statement.Fragment =>
   sql`(${column(sql, e, "venue_guests_only")} AND ${ahead(sql, e, now)})`;
 
-/**
- * The city in an address as Luma writes one, "<venue>, <street>, San
- * Francisco, CA 94105, USA": the part just before the state, its ZIP code
- * and country optional, when it has no digit and the part before it does
- * (the street's number, or a suite's). So a street is never taken for the
- * city: "201 Spear St, CA 94105, USA" and "Spear St, CA 94105, USA" name
- * none, and neither does a city alone ("San Francisco, CA"), which can't
- * be told from a street alone. An address that doesn't end so names no
- * city.
- */
-const cityPattern = String.raw`(?:^|,)[^,]*[0-9][^,]*,\s*([^,0-9]+),\s*[A-Z]{2}(?:\s+[0-9]{5}(?:-[0-9]{4})?)?(?:,\s*(?:USA|United States))?\s*$`;
+// The segment before the city must start with a street number or a unit marker.
+const numberedStreet = String.raw`[0-9]+[a-z]?(?:-[0-9]+[a-z]?)?\s+[^,\s]`;
+const unit = String.raw`(?:(?:suite|ste|unit|apt|floor)\.?\s+#?\s*|#\s*)[a-z]?[0-9]+[a-z]?(?=\s|,|-)`;
+const floor = String.raw`[0-9]+(?:st|nd|rd|th)\s+floor(?=\s|,)`;
+const addressPart = `(?:${numberedStreet}|${unit}|${floor})`;
+const streetSuffix = String.raw`(?:st(?:reet)?|ave(?:nue)?|blvd|boulevard|rd|road|dr(?:ive)?|way|ln|lane|ct|court|pl(?:ace)?|cir(?:cle)?|ter(?:race)?|pkwy|parkway|hwy|highway|trl|trail|aly|alley|sq(?:uare)?|cres(?:cent)?)`;
+
+/** Captures an unambiguous city before the state in a Luma address. */
+export const cityPattern = new RegExp(
+  String.raw`(?:^|,)\s*${addressPart}[^,]*,\s*(?![^,]*\s+${streetSuffix}\.?\s*,)([^,0-9]+),\s*[A-Z]{2}(?:\s+[0-9]{5}(?:-[0-9]{4})?)?(?:,\s*(?:USA|United States))?\s*$`,
+  "i",
+);
 
 /** The city of the venue of the evening aliased `e`, or NULL. */
 const cityOf = (sql: SqlClient, e: EventAlias): Statement.Fragment =>
   sql`NULLIF(btrim((regexp_match(
     COALESCE(NULLIF(btrim(${column(sql, e, "full_address")}), ''),
       ${column(sql, e, "street_address")}),
-    ${sql.literal(`'${cityPattern}'`)}))[1]), '')`;
+    ${cityPattern.source}, ${cityPattern.flags}))[1]), '')`;
 
 /**
  * Where the evening aliased `e` is, as every public surface may say at
