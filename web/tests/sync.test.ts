@@ -400,7 +400,8 @@ describe("a sync run that writes", () => {
       // Luma shows every venue to guests only here: each published evening
       // not over with a Luma page is marked, whatever venue it has, and so
       // is each evening the fill wrote a venue for, from the same answer;
-      // none other.
+      // the feed also marks drafts it publishes, including the past Sentry
+      // evening, whose address is already visible because it is over.
       expect(filled.length).toBeGreaterThan(0);
       const ahead = await count(
         db,
@@ -420,9 +421,17 @@ describe("a sync run that writes", () => {
       expect(
         await count(
           db,
+          `SELECT count(*) AS n FROM events WHERE slug = 'sentry-summer-2024'
+            AND NOT is_draft AND venue_guests_only`,
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          db,
           `SELECT count(*) AS n FROM events WHERE venue_guests_only
             AND NOT (is_draft = false AND luma_event_id IS NOT NULL
               AND end_date >= '2026-10-05T12:00:00Z')
+            AND slug <> 'sentry-summer-2024'
             AND slug NOT IN (${filled.join(", ")})`,
         ),
       ).toBe(0);

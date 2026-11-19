@@ -19,7 +19,7 @@ import type * as Rows from "./rows.ts";
  * How statements alias the events table (`e`, `ev`), or a subquery of
  * it that keeps its columns' names (`x`, `y`).
  */
-export type EventAlias = "e" | "ev" | "x" | "y";
+export type EventAlias = "e" | "ev" | "r" | "x" | "y";
 
 /** An instant as a statement's parameter. */
 const instant = (now: DateTime.Utc | Date): Date =>

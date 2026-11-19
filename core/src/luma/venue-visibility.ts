@@ -1,6 +1,6 @@
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
-import { ahead, published, soonestFirst } from "../catalog.ts";
+import { ahead, drafts, published, soonestFirst } from "../catalog.ts";
 import type { DataSourceError } from "../errors.ts";
 import { orDataSourceError } from "../sql.ts";
 import { LumaApi, type LumaApiError } from "./api.ts";
@@ -18,9 +18,9 @@ import type { RehearsedEvening } from "./company-hosts.ts";
  * says nothing of the setting, an organizer's venue (`venue_by_organizer`)
  * is still Luma's to hide, and a venue that was public may be hidden later,
  * or shown. An evening over keeps what was last read; its venue shows
- * again whatever it says. Luma alone decides it: nothing else writes it
- * but the venue fill (src/luma/venues.ts), which writes Luma's setting
- * from the same answer as each address it fills.
+ * again whatever it says. The feed sync hides a draft's venue on
+ * publication until the API confirms it is public. The venue fill
+ * (src/luma/venues.ts) writes Luma's setting with each address it fills.
  *
  * Only evenings whose stored setting differs from Luma's are written, each
  * with the Clock's now as its updated_at. All of Luma's answers are read
@@ -138,7 +138,8 @@ const make = Effect.gen(function* () {
           start_date timestamptz, end_date timestamptz)
       ), x AS (
         SELECT e.id::text AS id, e.slug, e.luma_event_id,
-          e.venue_guests_only,
+          e.venue_guests_only OR COALESCE(${drafts(sql, "e")} AND ${published(sql, "r")}, false)
+            AS venue_guests_only,
           COALESCE(r.is_draft, e.is_draft) AS is_draft,
           COALESCE(r.start_date, e.start_date) AS start_date,
           COALESCE(r.end_date, e.end_date) AS end_date

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { PGlite } from "@electric-sql/pglite";
 import { Cause, DateTime, Effect, Exit, Layer, Option } from "effect";
+import { SqlClient } from "effect/sql/SqlClient";
+import { publicVenue } from "../src/catalog.ts";
 import { LumaApi } from "../src/luma/api.ts";
 import {
   draftChanges,
@@ -9,6 +11,9 @@ import {
   LumaDrafts,
   type StoredDraft,
 } from "../src/luma/drafts.ts";
+import { Luma } from "../src/luma/luma.ts";
+import { LumaSync } from "../src/luma/sync.ts";
+import { LumaVenueVisibility } from "../src/luma/venue-visibility.ts";
 import {
   coverReferences,
   forgetBlocks,
@@ -23,6 +28,7 @@ import {
 } from "./support/database.ts";
 import {
   configFrom,
+  fakeLuma,
   fakeLumaBy,
   fixture,
   type Reply,
@@ -212,6 +218,65 @@ describe.skipIf(studioRun)("the draft refresh", () => {
       unavailable: ["evt-draft"],
       written: 0,
     });
+  });
+
+  test("keeps a stored draft address hidden when the feed publishes it without an API key", async () => {
+    await run([answer({ location_visibility: "guests-only" })], false);
+    const before = await stored();
+    expect(before?.["full_address"]).toContain("1070 Maryland St");
+
+    const feed = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:evt-draft@events.lu.ma",
+      "DTSTART:20261121T013000Z",
+      "DTEND:20261121T053000Z",
+      "SUMMARY:Markdown Trivia Night",
+      "LOCATION:https://luma.com/event/evt-draft",
+      "STATUS:CONFIRMED",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\r\n");
+    const luma = fakeLuma([{ body: feed }]);
+    const upstream = Layer.mergeAll(luma.layer, configFrom({}));
+    const layer = Layer.mergeAll(
+      LumaSync.layer.pipe(Layer.provide(Luma.layer)),
+      LumaVenueVisibility.layer.pipe(Layer.provide(LumaApi.layer)),
+    ).pipe(
+      Layer.provide(upstream),
+      Layer.provideMerge(sqlLayer(db)),
+      Layer.provideMerge(clockLayer),
+    );
+    const result = await Effect.runPromise(
+      settle(
+        Effect.gen(function* () {
+          const sync = yield* LumaSync.use((service) => service.run);
+          const visibility = yield* LumaVenueVisibility.use((check) =>
+            check.run({ dryRun: false }),
+          );
+          const sql = yield* SqlClient;
+          const now = yield* DateTime.now;
+          const venues = yield* sql`
+            SELECT ${publicVenue(sql, "e", now, "columns")}
+            FROM events e WHERE luma_event_id = 'evt-draft' AND NOT is_draft`;
+          return { sync, visibility, venues };
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(result.sync.publishedCount).toBe(1);
+    expect(result.visibility._tag).toBe("Skipped");
+    expect(await stored()).toMatchObject({
+      is_draft: false,
+      full_address: before?.["full_address"],
+    });
+    expect(result.venues).toEqual([
+      {
+        streetAddress: null,
+        shortLocation: "San Francisco",
+        fullAddress: null,
+      },
+    ]);
   });
 
   test("does nothing without LUMA_API_KEY", async () => {

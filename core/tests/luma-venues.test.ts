@@ -123,6 +123,26 @@ describe("Luma's API", () => {
     }
   });
 
+  test.each([
+    ["missing", undefined],
+    ["unrecognized", "invitees"],
+  ])("treats %s location visibility as guests-only", async (_, visibility) => {
+    const event = JSON.parse(managed) as Record<string, unknown>;
+    expect(
+      await ask({
+        body: JSON.stringify({ ...event, location_visibility: visibility }),
+      }),
+    ).toEqual(
+      Exit.succeed(
+        Option.some({
+          lumaEventId: "evt-react",
+          location: "1 Market St, San Francisco, CA 94105",
+          guestsOnly: true,
+        }),
+      ),
+    );
+  });
+
   test("has nothing to ask without LUMA_API_KEY, nor about an event Luma hides", async () => {
     expect(await ask({ body: managed }, {})).toEqual(Exit.succeed("no key"));
     expect(await ask({ status: 403 })).toEqual(Exit.succeed(Option.none()));

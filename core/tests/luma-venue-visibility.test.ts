@@ -268,6 +268,10 @@ describe("the venue visibility", () => {
       guestsOnly: ["2026-10-08-new-night-evt-new"],
       changed: [
         {
+          slug: "2026-09-01-draft-night",
+          guestsOnly: false,
+        },
+        {
           eventId: "pending:evt-new",
           slug: "2026-10-08-new-night-evt-new",
           guestsOnly: true,
