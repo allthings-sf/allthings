@@ -8,7 +8,7 @@ import type * as Rows from "./rows.ts";
  * The catalog: which evenings there are, in what order, and whether each
  * is ahead or over, each stated once (README, "One catalog"). A public read
  * builds its statement from these fragments rather than writing its own
- * `is_draft`, `end_date`, `curation` or ordering of evenings;
+ * `is_draft`, `end_date`, `curation`, ordering of evenings or venue;
  * tests/catalog-guard.test.ts holds the code to that.
  *
  * A fragment names the events table by the alias its statement gives it,
@@ -19,7 +19,7 @@ import type * as Rows from "./rows.ts";
  * How statements alias the events table (`e`, `ev`), or a subquery of
  * it that keeps its columns' names (`x`, `y`).
  */
-export type EventAlias = "e" | "ev" | "x" | "y";
+export type EventAlias = "e" | "ev" | "r" | "x" | "y";
 
 /** An instant as a statement's parameter. */
 const instant = (now: DateTime.Utc | Date): Date =>
@@ -96,6 +96,72 @@ export const inYear = (
 /** Our own evenings, not those we share. */
 export const ours = (sql: SqlClient, e: EventAlias): Statement.Fragment =>
   sql`${column(sql, e, "curation")} = 'ours'`;
+
+/**
+ * Whether the evening aliased `e` keeps its venue to its guests at `now`:
+ * Luma shows the venue to approved guests only (`venue_guests_only`, as the
+ * hourly sync last read it, src/luma/venue-visibility.ts) and the evening
+ * is not over ({@link ahead}). Once it is over, the venue shows again.
+ */
+export const venueHidden = (
+  sql: SqlClient,
+  e: EventAlias,
+  now: DateTime.Utc | Date,
+): Statement.Fragment =>
+  sql`(${column(sql, e, "venue_guests_only")} AND ${ahead(sql, e, now)})`;
+
+// The segment before the city must start with a street number or a unit marker.
+const numberedStreet = String.raw`[0-9]+[a-z]?(?:-[0-9]+[a-z]?)?\s+[^,\s]`;
+const unit = String.raw`(?:(?:suite|ste|unit|apt|floor)\.?\s+#?\s*|#\s*)[a-z]?[0-9]+[a-z]?(?=\s|,|-)`;
+const floor = String.raw`[0-9]+(?:st|nd|rd|th)\s+floor(?=\s|,)`;
+const addressPart = `(?:${numberedStreet}|${unit}|${floor})`;
+const streetSuffix = String.raw`(?:st(?:reet)?|ave(?:nue)?|blvd|boulevard|rd|road|dr(?:ive)?|way|ln|lane|ct|court|pl(?:ace)?|cir(?:cle)?|ter(?:race)?|pkwy|parkway|hwy|highway|trl|trail|aly|alley|sq(?:uare)?|cres(?:cent)?)`;
+
+/** Captures an unambiguous city before the state in a Luma address. */
+export const cityPattern = new RegExp(
+  String.raw`(?:^|,)\s*${addressPart}[^,]*,\s*(?![^,]*\s+${streetSuffix}\.?\s*,)([^,0-9]+),\s*[A-Z]{2}(?:\s+[0-9]{5}(?:-[0-9]{4})?)?(?:,\s*(?:USA|United States))?\s*$`,
+  "i",
+);
+
+/** The city of the venue of the evening aliased `e`, or NULL. */
+const cityOf = (sql: SqlClient, e: EventAlias): Statement.Fragment =>
+  sql`NULLIF(btrim((regexp_match(
+    COALESCE(NULLIF(btrim(${column(sql, e, "full_address")}), ''),
+      ${column(sql, e, "street_address")}),
+    ${cityPattern.source}, ${cityPattern.flags}))[1]), '')`;
+
+/**
+ * Where the evening aliased `e` is, as every public surface may say at
+ * `now`: its three venue columns as stored, or, while it keeps its venue to
+ * its guests ({@link venueHidden}), only its city, as its short location,
+ * with no street or full address, so nothing names the building, maps it
+ * or places it in a neighborhood (src/places.ts). Without a city in its
+ * address, none of the three. Pages, feeds, the MCP tools and the v1 API
+ * read the venue through this alone (tests/catalog-guard.test.ts).
+ *
+ * As three columns of a SELECT, `streetAddress`, `shortLocation` and
+ * `fullAddress`, or as the same keys and values inside a
+ * `json_build_object`.
+ */
+export const publicVenue = (
+  sql: SqlClient,
+  e: EventAlias,
+  now: DateTime.Utc | Date,
+  shape: "columns" | "json",
+): Statement.Fragment => {
+  const hidden = venueHidden(sql, e, now);
+  const street = sql`CASE WHEN ${hidden} THEN NULL
+    ELSE ${column(sql, e, "street_address")} END`;
+  const short = sql`CASE WHEN ${hidden} THEN ${cityOf(sql, e)}
+    ELSE ${column(sql, e, "short_location")} END`;
+  const full = sql`CASE WHEN ${hidden} THEN NULL
+    ELSE ${column(sql, e, "full_address")} END`;
+  return shape === "columns"
+    ? sql`${street} AS "streetAddress", ${short} AS "shortLocation",
+      ${full} AS "fullAddress"`
+    : sql`'streetAddress', ${street}, 'shortLocation', ${short},
+      'fullAddress', ${full}`;
+};
 
 /**
  * The evening aliased `e` that `slug` names: its short link, a link it

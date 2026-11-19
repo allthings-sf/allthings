@@ -81,7 +81,7 @@ export const ApiEvent = Schema.Struct({
     ),
   ),
   /** Who may see the venue: "public", or "guests-only" (the feed hides it). */
-  location_visibility: Schema.optionalKey(Schema.String),
+  location_visibility: Schema.optionalKey(Schema.Unknown),
   /** The description in the Markdown of Luma's editor; "" for none. */
   description_md: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** Its name and times, which a private event's are nowhere else. */
@@ -156,7 +156,7 @@ export function toEventVenue(event: ApiEvent): LumaEventVenue {
   return {
     lumaEventId: event.id,
     location: location === "" ? null : location,
-    guestsOnly: event.location_visibility === "guests-only",
+    guestsOnly: event.location_visibility !== "public",
   };
 }
 
@@ -304,6 +304,20 @@ const make = Effect.gen(function* () {
               cause: new Error(`Luma answered with ${event.id}`),
             }),
         ),
+        Effect.tap((event) => {
+          const visibility = event.location_visibility;
+          if (visibility === "public" || visibility === "guests-only") {
+            return Effect.void;
+          }
+          return Effect.logWarning(
+            "Treating Luma venue as guests-only because location_visibility is missing or unrecognized",
+          ).pipe(
+            Effect.annotateLogs({
+              lumaEventId,
+              reason: visibility === undefined ? "missing" : "unrecognized",
+            }),
+          );
+        }),
         Effect.map(Option.some),
         Effect.catchTag("LumaRejected", (error) =>
           error.status === 403 || error.status === 404

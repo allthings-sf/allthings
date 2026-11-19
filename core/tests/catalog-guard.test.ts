@@ -4,9 +4,10 @@ import { describe, expect, test } from "bun:test";
  * The catalog's rules are written in src/catalog.ts and nowhere else
  * (README, "One catalog"): no public read states for itself which evenings
  * are published, ahead or over, ours or shared, how evenings are ordered,
- * or how an evening's lineup is. This reads the source of core and of the
- * Worker and fails on any file that does, unless it is listed below as
- * code that isn't a public read, with its reason.
+ * how an evening's lineup is, or where an evening is (its venue columns,
+ * which a public read takes from `publicVenue`). This reads the source of
+ * core and of the Worker and fails on any file that does, unless it is
+ * listed below as code that isn't a public read, with its reason.
  *
  * The list only shrinks. A listed file that no longer states a rule fails
  * too, so it comes off the list.
@@ -14,6 +15,9 @@ import { describe, expect, test } from "bun:test";
 
 /** Up to four sort terms before the one a rule looks for. */
 const sortTerms = String.raw`ORDER BY\s+(?:[\w.]+(?:\s+(?:ASC|DESC))?(?:\s+NULLS\s+(?:FIRST|LAST))?\s*,\s*){0,4}`;
+
+/** The rule that a public read takes an evening's venue from `publicVenue`. */
+const venue = "an evening's venue";
 
 /** What stating a rule looks like in SQL. */
 const rules: ReadonlyArray<readonly [string, RegExp]> = [
@@ -41,6 +45,12 @@ const rules: ReadonlyArray<readonly [string, RegExp]> = [
       sortTerms +
         String.raw`(?:et\.position|ts\.created_at|es\.created_at|ep\.(?:role|position)|array_position\(\s*ARRAY\['organizer')`,
     ),
+  ],
+  // A venue column read or written in SQL, by an alias or bare; never a
+  // key of Luma's answer (`full_address: …`, `json?.full_address`).
+  [
+    venue,
+    /(?<![\w?.])(?:[a-z_]+\.)?(?:street_address|short_location|full_address)\b(?!\s*:(?!:))/,
   ],
 ];
 
@@ -73,6 +83,18 @@ const internal: Readonly<Record<string, string>> = {
   "core/src/talk-edits.ts": "edits talks, for the organizers",
 };
 
+/**
+ * Code that isn't a public read and reads or writes an evening's venue as
+ * stored, but states no other rule: excused from that one alone, and held
+ * to every other.
+ */
+const venueAsStored: Readonly<Record<string, string>> = {
+  "core/src/lineups.ts":
+    "writes the venues the organizers set, from their backfill",
+  "core/src/planning/draft.ts":
+    "a draft's notes and status, for the organizers",
+};
+
 /** Reading the current time, rather than the instant every read is as of. */
 const readsTheClock =
   /\bDateTime\.now\b|\bClock\.currentTimeMillis\b|\bnew Date\(\)|\bDate\.now\(\)/;
@@ -99,6 +121,7 @@ const ownTime: Readonly<Record<string, string>> = {
   "core/src/luma/people-sync.ts": "Luma import of people",
   "core/src/luma/publish.ts": "publishing, for the organizers",
   "core/src/luma/sync.ts": "the Luma sync",
+  "core/src/luma/venue-visibility.ts": "Luma import of venue visibility",
   "core/src/luma/venues.ts": "Luma import of venues",
   "core/src/planning/planning.ts": "planning, for the organizers",
   "core/src/posts/candidates.ts": "the post search",
@@ -159,6 +182,14 @@ describe("what stating a rule looks like", () => {
   });
 
   test.each([
+    "full_address: Schema.optionalKey(Schema.NullOr(Schema.String)),",
+    "event.geo_address_json?.full_address?.trim()",
+    "fullAddress: row.fullAddress,",
+  ])("%s is no venue column", (code) => {
+    expect(states(code)).toEqual([]);
+  });
+
+  test.each([
     ["e.end_date >= now", "ahead or over"],
     ["e.end_date < $1", "ahead or over"],
     ["e.curation = 'ours'", "ours or shared"],
@@ -175,6 +206,11 @@ describe("what stating a rule looks like", () => {
     ["ORDER BY s.name, es.created_at, s.id", "an evening's lineup"],
     ["ORDER BY e.id DESC NULLS LAST, et.position", "an evening's lineup"],
     ["ORDER BY ep.role, ep.position", "an evening's lineup"],
+    ['e.street_address AS "streetAddress"', "an evening's venue"],
+    ["'fullAddress', ev.full_address", "an evening's venue"],
+    ["SELECT short_location FROM events", "an evening's venue"],
+    ["UPDATE events SET full_address = $1", "an evening's venue"],
+    ["e.full_address::text", "an evening's venue"],
     [
       "ORDER BY array_position(ARRAY['organizer', 'co-host', 'mc'], ep.role)",
       "an evening's lineup",
@@ -188,7 +224,16 @@ describe("the catalog's rules are stated once", () => {
   test("the catalog states each of them", async () => {
     // Its fragments name columns through a helper, so check the names.
     const text = await Bun.file(new URL(catalog, root)).text();
-    for (const name of ["is_draft", "end_date", "curation", "start_date"]) {
+    for (const name of [
+      "is_draft",
+      "end_date",
+      "curation",
+      "start_date",
+      "street_address",
+      "short_location",
+      "full_address",
+      "venue_guests_only",
+    ]) {
       expect(text).toContain(`"${name}"`);
     }
   });
@@ -197,7 +242,9 @@ describe("the catalog's rules are stated once", () => {
     const unlisted: Array<string> = [];
     for (const path of sources) {
       if (path === catalog || path in internal) continue;
-      const names = await stated(path);
+      const names = (await stated(path)).filter(
+        (name) => !(path in venueAsStored && name === venue),
+      );
       if (names.length > 0) unlisted.push(`${path}: ${names.join(", ")}`);
     }
     expect(unlisted).toEqual([]);
@@ -207,6 +254,11 @@ describe("the catalog's rules are stated once", () => {
     const stale: Array<string> = [];
     for (const path of Object.keys(internal)) {
       if (!sources.includes(path) || (await stated(path)).length === 0) {
+        stale.push(path);
+      }
+    }
+    for (const path of Object.keys(venueAsStored)) {
+      if (!sources.includes(path) || !(await stated(path)).includes(venue)) {
         stale.push(path);
       }
     }

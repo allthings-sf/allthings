@@ -210,7 +210,7 @@ const make = (wall: ReadonlyArray<HeroPick>) =>
             SELECT json_agg(y.evening ORDER BY ${soonestFirst(sql, "y")})
             FROM (
               SELECT e.id, e.start_date, json_build_object(
-                'listing', ${sql.literal(listingJson)},
+                'listing', ${listingJson(sql, now)},
                 'photo', ${eveningPhoto(sql, wallJson, photoPrefix)},
                 'guests', e.luma_guest_count,
                 'talks', ${talksOf(sql, "e", {
