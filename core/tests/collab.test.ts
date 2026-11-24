@@ -428,6 +428,69 @@ describe("parseBrief", () => {
   });
 });
 
+describe("parseBrief's code fences", () => {
+  const section = (heading: string, audience: string, body: string) =>
+    `## ${heading}\n<!-- for: ${audience} -->\n${body}`;
+
+  test("a fence closes only on a run of its own character at least as long, with nothing else after it", () => {
+    const example = "````md\n```\nan example\n````";
+    expect(
+      parseBrief(
+        [
+          section("The pitch", "viewer", example),
+          section("Venues", "organizer", "Door code 1234.\n```\nx\n```"),
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        position: 1,
+        heading: "The pitch",
+        body: example,
+        audiences: ["viewer"],
+      },
+      {
+        position: 2,
+        heading: "Venues",
+        body: "Door code 1234.\n```\nx\n```",
+        audiences: ["organizer"],
+      },
+    ]);
+    for (const inside of ["```js", "~~~", "``` x"]) {
+      const body = `\`\`\`\n${inside}\n## not a section\n\`\`\``;
+      expect(parseBrief(section("A", "viewer", body))).toEqual([
+        { position: 1, heading: "A", body, audiences: ["viewer"] },
+      ]);
+    }
+    // Up to three spaces before it and spaces after it, or a longer run.
+    for (const closing of ["   ```", "```  ", "`````", "```~"]) {
+      const sections = parseBrief(
+        section("A", "viewer", `\`\`\`\nx\n${closing}\n`) +
+          section("B", "organizer", "y"),
+      );
+      expect(Array.isArray(sections) ? sections.length : sections).toBe(2);
+    }
+  });
+
+  test("what isn't a fence opens none", () => {
+    for (const line of ["    ```", "``` a`b", "``"]) {
+      const sections = parseBrief(
+        section("A", "viewer", `${line}\n`) + section("B", "organizer", "y"),
+      );
+      expect(Array.isArray(sections) ? sections.length : sections).toBe(2);
+    }
+  });
+
+  test("refuses a fence that never closes", () => {
+    expect(
+      parseBrief(
+        section("A", "viewer", "````\n```\n") + section("B", "organizer", "y"),
+      ),
+    ).toBe(
+      "Line 3 opens a code fence that never closes. Close it with ````, so the sections after it stay their own.",
+    );
+  });
+});
+
 describe("rounds, tasks and logistics", () => {
   test("rounds take their own positions", async () => {
     expect(await collab(round5)).toEqual({

@@ -21,6 +21,15 @@ import { type BriefSection, Role } from "./model.ts";
  * every section whatever it says. `###` and deeper stay in the body, as
  * does anything inside a code fence. A `---` rule at a section's end is
  * dropped: in the file it separates sections, and the page draws its own.
+ *
+ * Code fences are read as Marked, which shows each section, reads them
+ * (web/src/preview/brief.ts): one opens with up to three spaces, then three
+ * or more backticks (with none after them on the line) or tildes, and
+ * closes only on a line of up to three spaces, at least that same run, and
+ * nothing after it but backticks, tildes and spaces. So a shorter run, or
+ * one with an info string, inside a fence stays in it, and a section never
+ * holds a heading the page would show as another's. A fence that never
+ * closes is refused: it would carry every section after it into its own.
  */
 
 export const maxSections = 50;
@@ -28,6 +37,19 @@ const maxHeading = 120;
 const maxBody = 20000;
 
 const isRole = Schema.is(Role);
+
+/** The run of backticks or tildes `line` opens a code fence with, if it does. */
+const opensFence = (line: string): string | undefined =>
+  /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/.exec(line)?.[1];
+
+/** Whether `line` closes the code fence `run` opened. */
+const closesFence = (line: string, run: string): boolean => {
+  const indented = /^ {0,3}/.exec(line)?.[0].length ?? 0;
+  return (
+    line.startsWith(run, indented) &&
+    /^[`~]* *$/.test(line.slice(indented + run.length))
+  );
+};
 
 /** The sections `markdown` holds, or why it can't be stored. */
 export function parseBrief(
@@ -39,12 +61,13 @@ export function parseBrief(
     lines: Array<string>;
     line: number;
   }> = [];
-  let fence: string | undefined;
+  let fence: { run: string; line: number } | undefined;
   for (const [index, line] of lines.entries()) {
-    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marker !== undefined) {
-      if (fence === undefined) fence = marker[0];
-      else if (marker[0] === fence) fence = undefined;
+    if (fence === undefined) {
+      const run = opensFence(line);
+      if (run !== undefined) fence = { run, line: index + 1 };
+    } else if (closesFence(line, fence.run)) {
+      fence = undefined;
     }
     const heading = fence === undefined ? /^## (.*)$/.exec(line) : null;
     if (heading !== null) {
@@ -65,6 +88,9 @@ export function parseBrief(
     ) {
       return `Line ${index + 1} comes before the first "## " section. Put it in a section, so it says who it is for.`;
     }
+  }
+  if (fence !== undefined) {
+    return `Line ${fence.line} opens a code fence that never closes. Close it with ${fence.run}, so the sections after it stay their own.`;
   }
   if (sections.length === 0) return 'The brief has no "## " sections.';
   if (sections.length > maxSections) {
