@@ -242,12 +242,24 @@ const words = (id: string) => id.replaceAll("-", " ");
 /** The most columns a check's name takes in coaching: every check's fits. */
 export const checkNameWidth = 32;
 
-/** A check's name in at most `checkNameWidth` columns, cut with "…" when longer. */
+/** The columns `text` takes on a terminal: two for a wide character, none for a combining mark. */
+const columns = (text: string) => Bun.stringWidth(text);
+
+/**
+ * A check's name in at most `checkNameWidth` columns, cut with "…" when
+ * wider. It is cut between characters, never inside one.
+ */
 const checkName = (id: string) => {
-  if (id.length <= checkNameWidth) return id;
-  const kept = id.slice(0, checkNameWidth - 1);
-  // Never half a character: a cut after a high surrogate drops it too.
-  return `${/[\uD800-\uDBFF]$/.test(kept) ? kept.slice(0, -1) : kept}…`;
+  if (columns(id) <= checkNameWidth) return id;
+  let kept = "";
+  let width = 0;
+  for (const char of id) {
+    const next = columns(char);
+    if (width + next > checkNameWidth - 1) break;
+    kept += char;
+    width += next;
+  }
+  return `${kept}…`;
 };
 
 /**
@@ -274,8 +286,11 @@ export function formatCoaching(
     ...coaching.findings,
     ...coaching.strengths,
     ...coaching.unchecked,
-  ].reduce((widest, item) => Math.max(widest, checkName(item.id).length), 0);
-  const label = (id: string) => style("dim", checkName(id).padEnd(width));
+  ].reduce((widest, item) => Math.max(widest, columns(checkName(item.id))), 0);
+  const label = (id: string) => {
+    const name = checkName(id);
+    return style("dim", `${name}${" ".repeat(width - columns(name))}`);
+  };
   const indent = " ".repeat(width + 4);
   const severities = [
     ["must", "Must", "red"],

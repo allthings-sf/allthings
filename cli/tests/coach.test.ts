@@ -216,6 +216,24 @@ describe("printing coaching", () => {
       "https://allthings.dev/coach",
     );
     expect(emoji).toContain(`\n  ${"x".repeat(30)}…  o\n`);
+    // Wide characters take two columns each, and names pad to columns too.
+    const wide = formatCoaching(
+      {
+        ...coaching,
+        findings: [
+          { ...findings[0]!, id: "界".repeat(32) },
+          { ...findings[0]!, id: "c0" },
+          { ...findings[0]!, id: "ab界界" },
+        ],
+        strengths: [],
+        unchecked: [],
+      },
+      false,
+      "https://allthings.dev/coach",
+    );
+    expect(wide).toContain(`\n  ${"界".repeat(15)}…  o\n${" ".repeat(35)}a`);
+    expect(wide).toContain(`\n  c0${" ".repeat(29)}  o\n`);
+    expect(wide).toContain(`\n  ab界界${" ".repeat(25)}  o\n`);
     // Each finding takes its two lines of 32 columns of name and indent, no more.
     expect(text.length).toBeLessThan(1_000 + 501 * 80);
   });
