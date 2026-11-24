@@ -9,7 +9,6 @@ PACKAGE_MANAGER := bun
 CURRENT_DIR := $(shell pwd)
 DEPENDENCIES := bun git
 CLI_DIR := $(CURRENT_DIR)/cli
-AUX_DIR := $(CURRENT_DIR)/aux
 
 .PHONY: list
 list:
@@ -31,19 +30,15 @@ check-dependencies:
 .PHONY: install
 install: check-dependencies ## Install the dependencies
 	@cd $(CLI_DIR) && $(PACKAGE_MANAGER) install
-	@cd $(AUX_DIR) && $(PACKAGE_MANAGER) install
 
 .PHONY: fmt
 fmt: ## Format the code
 	@cd $(CLI_DIR) && $(PACKAGE_MANAGER) run fmt
-	@cd $(AUX_DIR) && $(PACKAGE_MANAGER) run fmt
 
 .PHONY: check
 check: ## Check the code
 	@cd $(CLI_DIR) && $(PACKAGE_MANAGER) run check
 	@cd $(CLI_DIR) && $(PACKAGE_MANAGER) run typecheck
-	@cd $(AUX_DIR) && $(PACKAGE_MANAGER) run check
-	@cd $(AUX_DIR) && $(PACKAGE_MANAGER) run typecheck
 
 .PHONY: build-cli
 build-cli:  ## Build CLI
