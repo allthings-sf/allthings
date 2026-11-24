@@ -4,7 +4,8 @@ name: Event completeness
 # production as the read-only site_reader role and fails if an evening of
 # talks (events.program) that ended in the last 30 days has none, or if any
 # published evening has no venue. The full report is the run's summary
-# either way.
+# either way. NEON_READER_URL is a secret of the production-read
+# environment, which only main may use.
 on:
   schedule:
     - cron: "0 16 * * 1"
@@ -21,6 +22,7 @@ jobs:
   report:
     name: 📋 Completeness
     runs-on: ubuntu-latest
+    environment: production-read
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

@@ -1003,7 +1003,8 @@ photos, and faces.
 `bun run hero-photos` fails, naming each, when a page can't show one of the
 wall's photos or faces (a photo's `images` row is deleted when it is
 replaced or removed), and `.github/workflows/hero-photos.yaml` runs it
-against production when either file changes, on main, and every Monday.
+against production on main and every Monday. Pull requests don't get
+production's credential, so run it yourself when you change either file:
 
 ```sh
 DATABASE_URL=$(op read "op://allthings/allthings site_reader/credential") bun run hero-photos

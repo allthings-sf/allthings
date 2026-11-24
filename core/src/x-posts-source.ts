@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import {
   Config,
   Context,
@@ -131,6 +131,35 @@ export interface XPostsSourceShape {
   ) => Effect.Effect<ReadonlyMap<string, ReadPost | null>, XReadError>;
 }
 
+/**
+ * Whether `directory` is a cache's own: a directory this account owns, which
+ * no other account may write in. Missing, it is made so when `make`.
+ * Otherwise "shared", where anything it holds could be anyone's, or
+ * "missing".
+ */
+const cacheDirectory = async (
+  directory: string,
+  make: boolean,
+): Promise<"own" | "shared" | "missing"> => {
+  try {
+    if (make) await mkdir(directory, { recursive: true, mode: 0o700 });
+    const info = await stat(directory);
+    return info.isDirectory() &&
+      info.uid === process.getuid?.() &&
+      (info.mode & 0o022) === 0
+      ? "own"
+      : "shared";
+  } catch {
+    return "missing";
+  }
+};
+
+/**
+ * The most pages of someone's posts a run reads: X keeps a user's latest
+ * 3200 on this timeline, and a page holds at least 5.
+ */
+const maxPages = 640;
+
 export class XPostsSource extends Context.Service<
   XPostsSource,
   XPostsSourceShape
@@ -201,14 +230,29 @@ export class XPostsSource extends Context.Service<
               while: (error) => error.retryable,
             }),
           );
+        let warned = false;
         // Each answer kept for its UTC day: X bills a post read once a day.
+        // Only in a directory no other account may write, since an answer
+        // read from it is taken as X's: a shared one isn't used at all.
         const get = <S extends Schema.Top>(what: string, url: URL, schema: S) =>
           Effect.gen(function* () {
             const key = createHash("sha256")
               .update(url.toString())
               .digest("hex");
-            const path =
+            const directory =
               cache === undefined
+                ? "missing"
+                : yield* Effect.promise(() =>
+                    cacheDirectory(cache.directory, cache.readOnly !== true),
+                  );
+            if (directory === "shared" && !warned) {
+              warned = true;
+              yield* Effect.logWarning(
+                `${cache?.directory} isn't this account's alone, so X's answers are neither read from it nor kept there`,
+              );
+            }
+            const path =
+              cache === undefined || directory !== "own"
                 ? undefined
                 : `${cache.directory}/${cache.day}-${key}.json`;
             const decode = Schema.decodeUnknownEffect(schema);
@@ -251,7 +295,6 @@ export class XPostsSource extends Context.Service<
               // answer X gave is used all the same.
               const partial = `${path}.${process.pid}.${randomUUID()}.partial`;
               yield* Effect.tryPromise(async () => {
-                await mkdir(cache!.directory, { recursive: true });
                 await Bun.write(partial, JSON.stringify(body));
                 await rename(partial, path);
               }).pipe(
@@ -284,6 +327,7 @@ export class XPostsSource extends Context.Service<
         const ownPosts = (userId: string, since: string, max: number) =>
           Effect.gen(function* () {
             const found: Array<ReadPost> = [];
+            const followed = new Set<string>();
             let next: string | undefined;
             do {
               const page = yield* get(
@@ -309,8 +353,15 @@ export class XPostsSource extends Context.Service<
                 ...(page.data ?? []).map((tweet) => postOf(tweet, handles)),
               );
               next = page.meta?.next_token;
+              // A token followed before would read the same pages again.
+              if (next !== undefined && followed.has(next)) break;
+              if (next !== undefined) followed.add(next);
               // X answers 5 to 100 a page and bills each: never past `max`.
-            } while (next !== undefined && max - found.length >= 5);
+            } while (
+              next !== undefined &&
+              max - found.length >= 5 &&
+              followed.size < maxPages
+            );
             return found.slice(0, max);
           });
 

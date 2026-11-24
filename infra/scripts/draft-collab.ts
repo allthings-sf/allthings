@@ -30,10 +30,11 @@
  *
  * Like site_sync it is created with SQL by the database owner, never in
  * Neon's console or API, because roles made there join neon_superuser. The
- * connection string goes straight into the repository's NEON_COLLAB_URL
- * secret and a 1Password item; it is never printed. Run it from the
- * repository root with the owner's connection string in the environment,
- * passed without printing it:
+ * connection string goes straight into a 1Password item, where production's
+ * deploys read it (move-day-deploy.sh, for one), and nowhere else: no
+ * workflow reads NEON_COLLAB_URL, so GitHub doesn't hold it. It is never
+ * printed. Run it from the repository root with the owner's connection
+ * string in the environment, passed without printing it:
  *
  *   OWNER_URL=$(bunx neonctl@latest connection-string br-round-dust-a6avtg0r \
  *     --project-id wispy-sea-75401301 --role-name neondb_owner --database-name neondb) \
@@ -252,13 +253,14 @@ async function main(): Promise<void> {
   await storeConnectionString({
     value: connectionStringFor(owner, DRAFT_COLLAB, password),
     secret: "NEON_COLLAB_URL",
+    environments: [],
     item,
     vault,
     notes:
       "The draft preview's connection to production for draft collaboration (its Worker's Collab Hyperdrive). Rotate with infra/scripts/draft-collab.ts in allthings-sf/allthings.",
   });
   console.log(
-    `✓ ${DRAFT_COLLAB} ${created ? "created" : "has a new password"}, column grants on ${Object.keys(DRAFT_COLLAB_GRANTS).length} tables; NEON_COLLAB_URL and 1Password ("${item}" in ${vault}) updated`,
+    `✓ ${DRAFT_COLLAB} ${created ? "created" : "has a new password"}, column grants on ${Object.keys(DRAFT_COLLAB_GRANTS).length} tables; 1Password ("${item}" in ${vault}) updated`,
   );
 }
 
