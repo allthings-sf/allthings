@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SQL } from "bun";
 import { PgClient } from "@effect/sql-pg";
 import { Effect, Redacted } from "effect";
+import { approvalToken } from "../src/approval.ts";
 import * as Migrations from "../src/migrator.ts";
 import { stat } from "node:fs/promises";
 import { newAnswersKey } from "../../infra/scripts/collab-answers-key.ts";
@@ -420,8 +421,12 @@ if (serverUrl === undefined) {
         ],
         backups: [],
       };
+      const submissions = {
+        draft: crypto.randomUUID(),
+        final: crypto.randomUUID(),
+      };
       for (const stage of ["draft", "final"] as const) {
-        const id = crypto.randomUUID();
+        const id = submissions[stage];
         const sealed = await seal(
           key,
           {
@@ -474,11 +479,19 @@ if (serverUrl === undefined) {
         exported.exited,
       ]);
       expect(code).toBe(0);
-      expect(stdout).toStartWith(
-        "✓ round 5 (final, not reviewed) from submission ",
+      const written = await Bun.file(out).text();
+      expect(written).toContain("Answer: 512");
+      // stdout is the receipt, whole: where the key went and the digest of
+      // what was written (the key's text; the file adds a newline), and not a
+      // word of the key. Searching it for the answer instead failed by chance,
+      // when the submission's random id, the temporary path or the digest's
+      // hex held "512".
+      const digest = await Effect.runPromise(
+        approvalToken(written.slice(0, -1)),
       );
-      expect(stdout).not.toContain("512");
-      expect(await Bun.file(out).text()).toContain("Answer: 512");
+      expect(stdout).toBe(
+        `✓ round 5 (final, not reviewed) from submission ${submissions.final}, to ${out} (digest ${digest})\n`,
+      );
       expect((await stat(out)).mode & 0o777).toBe(0o600);
 
       // Never over a file that is there.
