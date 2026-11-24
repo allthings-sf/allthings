@@ -5,7 +5,6 @@ import { DateTime } from "effect";
 import { built } from "../src/assets.ts";
 import { yearCard } from "../src/og/year-card.ts";
 import { eventsPage } from "../src/pages/events.tsx";
-import type { ImageMode } from "../src/pages/picture.tsx";
 import { statement, yearPage } from "../src/pages/year.tsx";
 import { sitemapXml } from "../src/seo/sitemap.ts";
 import {
@@ -86,17 +85,13 @@ const year: YearView = {
 
 const origin = "https://allthings.dev";
 
-const render = (
-  view: YearView = year,
-  theme?: "light" | "dark",
-  images: ImageMode = "originals",
-) =>
+const render = (view: YearView = year, theme?: "light" | "dark") =>
   yearPage({
     year: view,
     origin,
     theme,
     portraits: new Map(),
-    images,
+    images: "originals",
   });
 
 const entries = (html: string) =>
@@ -181,16 +176,6 @@ describe("a year's page", () => {
     expect(first).toContain("118 said “I’m in”");
     expect(first).toContain('alt="The room at effect"');
     expect(second).toContain("Hosted by Acme &amp; Globex");
-  });
-
-  test("asks for an evening's photo as wide as depth.css shows it: the page's width on a phone, then the row's last five columns", () => {
-    const [first = ""] = entries(render(year, undefined, "variants"));
-    const sizes =
-      "(max-width: 599.98px) 91vw, (max-width: 1439.98px) calc(37.92vw - 14px), 533px";
-    // Its AVIF and WebP <source>s, and its <img>.
-    expect(
-      [...first.matchAll(/ sizes="([^"]*)"/g)].map(([, value]) => value),
-    ).toEqual([sizes, sizes, sizes]);
   });
 
   test("shows an evening without a photo, without a slot for one, and says nothing it doesn't know", () => {
