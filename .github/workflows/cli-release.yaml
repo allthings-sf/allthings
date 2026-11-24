@@ -31,6 +31,7 @@ jobs:
         runs-on: ubuntu-latest
         environment: npm-release
         permissions:
+            # Only the approved job can create the release and upload assets.
             contents: write
         steps:
             - name: ⬇️ Checkout repo
@@ -59,6 +60,10 @@ jobs:
                   sha256sum "${assets[@]}" > SHA256SUMS
                   prerelease=()
                   if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+                  # An administrator can move a tag while approval or compilation is pending.
+                  # Fetch the current tag into FETCH_HEAD and peel annotated tags to commits.
+                  git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME"
+                  test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$(git rev-parse HEAD)"
                   gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag \
                     --title "Release $GITHUB_REF_NAME" "${prerelease[@]}" "${assets[@]}" SHA256SUMS
 
