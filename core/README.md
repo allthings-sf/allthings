@@ -2409,8 +2409,13 @@ migrator (`src/migrator.ts`). Production takes migrations from here alone.
   it merges is caught on pull requests only while the pull request that
   adds it stays open: if that one closes unmerged, a later pull request can
   take its number and pass, main's production check then fails after that
-  merge, and `migrate` refuses the migration until it is renumbered. The
-  failure names each migration to renumber, and the number it should take.
+  merge, and `migrate` refuses to run, since production's record is no
+  longer a prefix of main's migrations. To recover, add the applied
+  migration back to main exactly as it ran, under its number and name
+  (from the closed pull request's branch), and move the one that took its
+  number, which production never ran, to the next free number: the record
+  is a prefix again, and no applied migration changed. The failure names
+  each migration to renumber, and the number it should take.
 
 `0001_baseline` is production's schema on 2026-10-04, read from its catalog,
 not a replay of the old Next app's drizzle migrations: production received
