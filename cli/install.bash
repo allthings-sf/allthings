@@ -6,8 +6,15 @@
 #
 # allthings.dev serves this file as it is here (web/scripts/build.ts).
 #
-# ALLTHINGS_VERSION=2.0.0-alpha.3 installs that (pre)release; the default is
-# the latest stable release. ALLTHINGS_HOME moves the install (~/.allthings).
+# It installs a binary only when its SHA-256 matches the release's
+# SHA256SUMS, which the release workflow writes from the binaries it built
+# (.github/workflows/cli-release.yaml), and otherwise installs nothing.
+# Releases before SHA256SUMS (2.8.1 and older) can't be checked, so it
+# refuses them: download those from the releases page yourself.
+#
+# ALLTHINGS_VERSION=<version> installs that release or prerelease; the
+# default is the latest stable release. ALLTHINGS_HOME moves the install
+# (~/.allthings).
 set -euo pipefail
 
 repo="allthings-sf/allthings"
@@ -48,16 +55,39 @@ fi
 
 mkdir -p "$bin_dir"
 download=$(mktemp "$bin_dir/.allthings.XXXXXX")
-trap 'rm -f "$download"' EXIT
+sums=$(mktemp "$bin_dir/.allthings-sums.XXXXXX")
+trap 'rm -f "$download" "$sums"' EXIT
 base="https://github.com/$repo/releases/download/$version"
-# Releases before the rename ship the binary as atw-cli-<platform>.
-if ! curl -fsL -o "$download" "$base/allthings-$platform" &&
-  ! curl -fsSL -o "$download" "$base/atw-cli-$platform"; then
+asset="allthings-$platform"
+if ! curl -fsSL -o "$download" "$base/$asset"; then
   echo "Release $version has no binary for $platform." >&2
+  exit 1
+fi
+if ! curl -fsSL -o "$sums" "$base/SHA256SUMS"; then
+  echo "Release $version publishes no SHA256SUMS, so its binary can't be checked. Nothing was installed." >&2
+  exit 1
+fi
+# sha256sum's lines: the hash, then the file's name ("*name" in binary mode).
+expected=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1; exit }' "$sums")
+if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Release $version's SHA256SUMS has no checksum for $asset. Nothing was installed." >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null; then
+  actual=$(sha256sum "$download" | cut -d ' ' -f 1)
+elif command -v shasum >/dev/null; then
+  actual=$(shasum -a 256 "$download" | cut -d ' ' -f 1)
+else
+  echo "Found neither sha256sum nor shasum to check the binary with. Nothing was installed." >&2
+  exit 1
+fi
+if [[ "$actual" != "$expected" ]]; then
+  echo "$asset from release $version doesn't match its SHA256SUMS checksum. Nothing was installed." >&2
   exit 1
 fi
 chmod 755 "$download"
 mv "$download" "$bin_dir/allthings"
+rm -f "$sums"
 trap - EXIT
 ln -sf allthings "$bin_dir/atw"
 
