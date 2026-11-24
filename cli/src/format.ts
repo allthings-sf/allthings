@@ -239,6 +239,17 @@ export function formatTracks(tracks: Track[], color: boolean): string {
 /** "find-contributors" as a person reads it: "find contributors". */
 const words = (id: string) => id.replaceAll("-", " ");
 
+/** The most columns a check's name takes in coaching: every check's fits. */
+export const checkNameWidth = 32;
+
+/** A check's name in at most `checkNameWidth` columns, cut with "…" when longer. */
+const checkName = (id: string) => {
+  if (id.length <= checkNameWidth) return id;
+  const kept = id.slice(0, checkNameWidth - 1);
+  // Never half a character: a cut after a high surrogate drops it too.
+  return `${/[\uD800-\uDBFF]$/.test(kept) ? kept.slice(0, -1) : kept}…`;
+};
+
 /**
  * coach_talk's answer, for a person: what to do first, then each finding
  * by how much it matters with what was measured and what to do, what's
@@ -259,13 +270,12 @@ export function formatCoaching(
       ? []
       : [coaching.goals.map(words).join(", ")]),
   ].join(" · ");
-  const width = Math.max(
-    0,
-    ...[...coaching.findings, ...coaching.strengths, ...coaching.unchecked].map(
-      (item) => item.id.length,
-    ),
-  );
-  const label = (id: string) => style("dim", id.padEnd(width));
+  const width = [
+    ...coaching.findings,
+    ...coaching.strengths,
+    ...coaching.unchecked,
+  ].reduce((widest, item) => Math.max(widest, checkName(item.id).length), 0);
+  const label = (id: string) => style("dim", checkName(id).padEnd(width));
   const indent = " ".repeat(width + 4);
   const severities = [
     ["must", "Must", "red"],

@@ -184,6 +184,41 @@ describe("printing coaching", () => {
       "Every check, and why: https://allthings.dev/coach\n",
     );
   });
+
+  test("a check's name is shown in at most 32 columns", () => {
+    const id = `${"long-check-name-".repeat(8)}end`;
+    const findings = Array.from({ length: 500 }, (_, index) => ({
+      id: `c${index}`,
+      severity: "consider" as const,
+      observed: "o",
+      advice: "a",
+    }));
+    const text = formatCoaching(
+      {
+        ...coaching,
+        findings: [...findings, { ...findings[0]!, id }],
+        strengths: [],
+        unchecked: [],
+      },
+      false,
+      "https://allthings.dev/coach",
+    );
+    expect(text).toContain(`\n  ${id.slice(0, 31)}…  o\n${" ".repeat(36)}a`);
+    expect(text).toContain(`\n  c0${" ".repeat(30)}  o\n${" ".repeat(36)}a`);
+    const emoji = formatCoaching(
+      {
+        ...coaching,
+        findings: [{ ...findings[0]!, id: `${"x".repeat(30)}🎤🎤` }],
+        strengths: [],
+        unchecked: [],
+      },
+      false,
+      "https://allthings.dev/coach",
+    );
+    expect(emoji).toContain(`\n  ${"x".repeat(30)}…  o\n`);
+    // Each finding takes its two lines of 32 columns of name and indent, no more.
+    expect(text.length).toBeLessThan(1_000 + 501 * 80);
+  });
 });
 
 describe("allthings coach", () => {
@@ -236,6 +271,30 @@ describe("allthings coach", () => {
 
   test("--json prints coach_talk's answer", async () => {
     const { stdout } = await exec(["coach", "o.md", "--json"], { "o.md": "x" });
+    expect(JSON.parse(stdout)).toEqual(coaching);
+  });
+
+  test("--json leaves the text unwritten", async () => {
+    // Writing the text sorts the findings by severity; JSON never does.
+    class Unsorted<T> extends Array<T> {
+      override filter(): never {
+        throw new Error("the text was written");
+      }
+    }
+    const findings = Unsorted.from(coaching.findings);
+    let stdout = "";
+    const code = await run(["coach", "o.md", "--json"], {
+      stdout: (text) => (stdout += text),
+      stderr: () => {},
+      isTTY: false,
+      env: {},
+      openUrl: async () => {},
+      client: fakeClient({
+        coachTalk: async () => ({ ...coaching, findings }),
+      }),
+      readFile: async () => "x",
+    });
+    expect(code).toBe(ExitCode.Ok);
     expect(JSON.parse(stdout)).toEqual(coaching);
   });
 
