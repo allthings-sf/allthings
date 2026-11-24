@@ -561,7 +561,11 @@ place. Every public read takes the venue from `publicVenue`
 organizers' tools (readiness, planning, the completeness report) read the
 venue as stored. A cover is drawn from the evening's page, so one drawn
 while its venue is hidden names no neighborhood; one drawn before still
-does, and readiness counts it stale until it is drawn again.
+does, and readiness counts it stale until it is drawn again. Public reads
+serve it meanwhile (`previewImage`): it is a copy of the evening's cover on
+Luma, which Luma shows everyone whatever the venue's visibility, so
+dropping ours would hide nothing the evening's Luma page doesn't show:
+only drawing it again on Luma does.
 
 Where Luma's venue is wrong, the organizers' replaces it: a `venue` in an
 evening's entry in `backfill/lineups.json`, with its sources, written by
