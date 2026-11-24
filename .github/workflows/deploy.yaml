@@ -25,6 +25,9 @@ jobs:
     name: 🚀 Deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # Read the last successful staging run before updating the Worker.
     concurrency:
       group: deploy-staging
       # A pending approval can outlast several main pushes. Keep each staging run.
@@ -38,6 +41,19 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Refuse to roll staging back to an older main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Queue order follows arrival, which can differ from commit order.
+          last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yaml/runs?event=push&branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty')
+          if [[ -n "$last" ]] && ! git merge-base --is-ancestor "$last" "$GITHUB_SHA"; then
+            echo "::error::Staging already passed $last. Refusing to deploy older or unrelated $GITHUB_SHA."
+            exit 1
+          fi
 
       - name: 🍞 Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
