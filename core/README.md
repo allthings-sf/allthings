@@ -614,8 +614,10 @@ and writes `event_people` (its own rows only), `profiles.luma_user_id`, and
 Hosts are matched by Luma user id, then, for a host of an event our calendar
 manages, by exact name with a review line. A Luma user picks their own name,
 so a host whom only other calendars' events list (Luma's `access: "view"`) is
-never linked by name: the plan reports them with the `--link usr-…=<profile
-id>` that would link them, for an organizer to decide.
+never linked by name. Where their name would have linked them (one profile
+has it and no Luma user id), the plan reports them with the `--link
+usr-…=<profile id>` that would, for an organizer to decide; with no such
+profile, or several, they are reported as any unmatched host is.
 A host whose Luma user id is a hosting company's (`sponsors.luma_user_id`,
 from `backfill/hosts.json`) is that company: it is attached to the event as
 a hosting company (`event_sponsors`, only ever added), never matched to a
