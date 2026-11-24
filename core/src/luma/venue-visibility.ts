@@ -42,12 +42,12 @@ import type { RehearsedEvening } from "./company-hosts.ts";
  * as it was. Each write is one statement that locks the rows it writes and
  * decides on each as it stands then. A guests-only answer is written as it
  * arrives (`markGuestsOnly`), whatever the run is still asking: hiding is
- * never wrong to keep, and another run about to show the venue must see it
- * at once. The rest waits for all of Luma's answers: a failure asking about
- * any evening writes nothing more. A failure asking again leaves the
- * venue hidden, its reveal announced, until a later answer settles it. An
- * evening Luma doesn't show us keeps what it has. Without LUMA_API_KEY it
- * does nothing.
+ * never wrong to keep, and committed after another run announced a reveal
+ * and before that reveal locks the row, it calls the reveal off. The rest
+ * waits for all of Luma's answers: a failure asking about any evening
+ * writes nothing more. A failure asking again leaves the venue hidden, its
+ * reveal announced, until a later answer settles it. An evening Luma
+ * doesn't show us keeps what it has. Without LUMA_API_KEY it does nothing.
  */
 
 /** Evenings asked about at once, far under the API's 200 requests a minute. */
@@ -125,8 +125,9 @@ export interface LumaVenueVisibilityShape {
 
 /**
  * What one answer does to its evening:
- * - `hide`: Luma keeps the venue to guests. It is marked so, and any reveal
- *   announced is called off.
+ * - `hide`: Luma keeps the venue to guests. It is marked so, and any
+ *   announced reveal's token is cleared, so a reveal that locks the row
+ *   after this shows nothing.
  * - `announce`: Luma shows a venue stored as hidden. The run announces the
  *   reveal with its token, replacing any other run's (whose reveal then
  *   shows nothing), and asks Luma again.
@@ -211,12 +212,15 @@ const settle = (
 };
 
 /**
- * Marks `eventId`'s venue guests-only, as Luma has just answered, and calls
- * off any reveal announced for it (`events.venue_reveal_token`), at once:
- * whatever else a run is still asking, since hiding is never wrong to keep
- * and a run about to show the venue must see the answer first. The venue
- * fill (src/luma/venues.ts) marks each venue Luma keeps to guests with it
- * too. Whether its setting changed.
+ * Marks `eventId`'s venue guests-only, as Luma has just answered, at once,
+ * whatever else a run is still asking, since hiding is never wrong to keep.
+ * A reveal already announced for it when this commits
+ * (`events.venue_reveal_token`) is called off, and finds no token, unless
+ * it locked the row first: then this waits for it and hides the venue
+ * again. A reveal announced after this asks Luma again after this answer
+ * was read, so that newer answer decides. The venue fill
+ * (src/luma/venues.ts) marks each venue Luma keeps to guests with it too.
+ * Whether its setting changed.
  */
 export const markGuestsOnly = (
   sql: SqlClient,

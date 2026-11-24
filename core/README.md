@@ -542,10 +542,12 @@ answer as it arrives, whatever else they are still asking. A venue is
 shown again only once Luma has said so twice, the second time asked after
 the run announced the reveal (`events.venue_reveal_token`). A guests-only
 answer, from another run or the fill, clears the token as it is written:
-committed before the reveal locks the row, it calls the reveal off;
-committed after, it hides the venue again. So however runs overlap, an
-older answer never shows a venue that a newer one, already written, found
-kept to guests. The fill never clears the mark.
+committed between the announcement and the reveal's lock on the row, it
+calls the reveal off; committed after the reveal, it hides the venue
+again; committed before the announcement, it was read before Luma was
+asked the second time, whose newer answer decides. So however runs
+overlap, an older answer never shows a venue that a newer one, already
+written, found kept to guests. The fill never clears the mark.
 Until Luma has been asked, a venue is hidden: migration 0042 started every
 evening the sync asks about hidden, as a draft just published starts, so
 none was public before the sync's first run had asked Luma about it.

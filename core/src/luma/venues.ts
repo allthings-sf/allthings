@@ -25,12 +25,15 @@ import { markGuestsOnly } from "./venue-visibility.ts";
  * never replaced: the write checks again that it is missing.
  *
  * Where Luma keeps the venue to guests it marks it so as the answer
- * arrives, and calls off any reveal the visibility step has announced and
- * not yet written, or hides the venue again if it has
- * (`markGuestsOnly`, src/luma/venue-visibility.ts), whether or not it then
- * writes the address; and it writes the mark again with the address, so an
- * address it fills is never public before the setting is known, though the
- * visibility step failed this run or didn't ask about the evening. It
+ * arrives (`markGuestsOnly`, src/luma/venue-visibility.ts): committed
+ * after the visibility step announced a reveal and before that reveal
+ * locks the row, the reveal shows nothing; committed after the reveal, it
+ * hides the venue again; committed before the announcement, the step's
+ * second question, asked after it, decides. It marks it
+ * whether or not it then writes the address; and it writes the mark again
+ * with the address, so an address it fills is never public before the
+ * setting is known, though the visibility step failed this run or didn't
+ * ask about the evening. It
  * never clears the mark: its answer may be older than one another run has
  * just read, so only the visibility step shows a venue again, once Luma
  * has said so twice.
