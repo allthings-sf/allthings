@@ -51,13 +51,31 @@ const cookieOptions = {
   sameSite: "lax",
 } as const;
 
+/** Any origin: only paths and queries are read against it. */
+const base = "http://localhost";
+
+/**
+ * `path` and `search` as a Location on this site, read as a browser reads
+ * it: the URL parser drops tabs and line breaks and resolves dot segments
+ * first. A path that would then name another host goes to the home page;
+ * any other is sent as the parser writes it, its leading slashes kept to
+ * one, so the browser reads it as this site's path too.
+ */
+function onThisSite(path: string, search: string): `/${string}` {
+  // "?" and "#" in a path are the path's own: escaped, they stay in it.
+  const escaped = path.replaceAll("?", "%3F").replaceAll("#", "%23");
+  const target = new URL(`${escaped}${search}`, base);
+  if (target.origin !== base) return "/";
+  return `/${target.pathname.replace(/^\/+/, "")}${target.search}`;
+}
+
 /**
  * The answer to `?theme=<choice>` on the page at `path`, requested as
  * `url` (a path and query): remember the choice, or forget it for
  * "system", and see the page again without the `theme` parameter. The
- * page's own path is where it goes, never one read from the request, so it
- * cannot send anyone elsewhere. Never stored, so every choice reaches the
- * Worker.
+ * page's own path is where it goes, never one read from the request, and
+ * only on this site (`onThisSite`). Never stored, so every choice reaches
+ * the Worker.
  */
 export function chooseTheme(
   choice: Choice,
@@ -65,10 +83,10 @@ export function chooseTheme(
   url: string,
 ): HttpServerResponse.HttpServerResponse {
   // Only the query is used; the base just makes `url` parseable.
-  const query = new URL(url, "http://localhost").searchParams;
+  const query = new URL(url, base).searchParams;
   query.delete("theme");
   const search = query.size === 0 ? "" : `?${query.toString()}`;
-  const redirect = HttpServerResponse.redirect(`${path}${search}`, {
+  const redirect = HttpServerResponse.redirect(onThisSite(path, search), {
     status: 303,
     headers: { "cache-control": preferenceCacheControl },
   });

@@ -327,6 +327,26 @@ describe("legacy URLs", () => {
     }
   });
 
+  it("sends a mode's choice back to a path on this host", async (url) => {
+    for (const path of [
+      "/%09/elsewhere.example",
+      "/%0A/elsewhere.example",
+      "/%0D%0A/elsewhere.example",
+      "/%09%5Celsewhere.example",
+    ]) {
+      const response = await fetch(`${url}${path}?theme=dark`, {
+        redirect: "manual",
+      });
+      await response.arrayBuffer();
+      expect([path, response.status]).toEqual([path, 303]);
+      const location = response.headers.get("location") ?? "";
+      expect([path, new URL(location, url).origin]).toEqual([
+        path,
+        new URL(url).origin,
+      ]);
+    }
+  });
+
   it("keeps the query when it drops a trailing slash", async (url) => {
     const response = await fetch(`${url}/events/?a=1`, { redirect: "manual" });
     await response.arrayBuffer();
