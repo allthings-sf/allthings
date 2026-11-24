@@ -260,7 +260,7 @@ bunx cf@1.0.0-beta.12 --profile allthings alerting policies test <id>
 
 ## CI credentials
 
-GitHub Actions deploys with an account-owned token that has only the permissions listed in [`ci-token.json`](ci-token.json). [`scripts/ci-token.sh`](scripts/ci-token.sh) applies that file. It creates the token, or updates its policies in place, and writes the value straight into the main-only, reviewer-protected `Production` environment's `CLOUDFLARE_API_TOKEN` secret, so nobody ever sees or copies it. When staging declares something that needs a permission group the token lacks, add it to `ci-token.json` in the same PR, then rerun the script after it merges. A declaration it can already deploy (a binding that provisions nothing, such as an Analytics Engine dataset; one more KV namespace) leaves the file as it is.
+GitHub Actions deploys with an account-owned token that has only the permissions listed in [`ci-token.json`](ci-token.json). [`scripts/ci-token.sh`](scripts/ci-token.sh) applies that file. Creating or rotating a token writes its value straight into the main-only, reviewer-protected `Production` environment's `CLOUDFLARE_API_TOKEN` secret. With an existing token, the default invocation only reconciles permissions. Alchemy binds its state-store secret to a Worker, which requires Secrets Store Write. When staging declares something that needs a permission group the token lacks, add it to `ci-token.json` in the same PR, then rerun the script after it merges. A declaration it can already deploy (a binding that provisions nothing, such as an Analytics Engine dataset; one more KV namespace) leaves the file as it is.
 
 The script runs on a maintainer's machine signed in to the allthings account with Cloudflare's CLI, whose sign-in may create account tokens, so no Global API Key or token-minting token exists anywhere. Run it from the repository root:
 
@@ -269,6 +269,8 @@ NODE_OPTIONS=--dns-result-order=ipv4first bunx cf@1.0.0-beta.12 auth create allt
 bash infra/scripts/ci-token.sh            # create, or update the policies
 bash infra/scripts/ci-token.sh --rotate   # also roll the value and update the secret
 ```
+
+To migrate an existing repository secret, wait for the main-only deploy workflow to land. Before approving that deploy, run `bash infra/scripts/ci-token.sh --rotate` and confirm `gh secret list --repo allthings-sf/allthings --env Production` lists the token. Then remove its invalidated repository copy with `gh secret delete CLOUDFLARE_API_TOKEN --repo allthings-sf/allthings`.
 
 ## The studio's Zero Trust token
 
