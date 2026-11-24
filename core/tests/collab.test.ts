@@ -480,7 +480,32 @@ describe("parseBrief's code fences", () => {
     }
   });
 
-  test("refuses a fence that never closes", () => {
+  test("a run inside raw HTML, as Marked reads the brief, opens no fence", () => {
+    const comment = "Text.\n<!--\n```\n-->";
+    expect(parseBrief(section("A", "viewer", comment))).toEqual([
+      { position: 1, heading: "A", body: comment, audiences: ["viewer"] },
+    ]);
+    const sections = parseBrief(
+      section("A", "viewer", "<div>\n```\n</div>\n\n") +
+        section("B", "organizer", "y\n```\nx\n```"),
+    );
+    expect(
+      Array.isArray(sections)
+        ? sections.map(({ heading, audiences }) => [heading, audiences])
+        : sections,
+    ).toEqual([
+      ["A", ["viewer"]],
+      ["B", ["organizer"]],
+    ]);
+  });
+
+  test("keeps a fence left open at the end, where it holds no heading", () => {
+    expect(parseBrief(section("A", "viewer", "```\nx\n"))).toEqual([
+      { position: 1, heading: "A", body: "```\nx", audiences: ["viewer"] },
+    ]);
+  });
+
+  test("refuses a fence that never closes over a heading", () => {
     expect(
       parseBrief(
         section("A", "viewer", "````\n```\n") + section("B", "organizer", "y"),
