@@ -38,7 +38,7 @@ allthings has its own Cloudflare account (`af627f300cd00c4dca56aacf05bea050`), s
 - **`staging`:** [`deploy.yaml`](../.github/workflows/deploy.yaml) deploys a push to main after approval in the `Production` environment. Pull requests skip deployment.
 - **Your own stage:** `bun run deploy --profile allthings` from a machine signed in with `bun alchemy profile edit --profile allthings --add Cloudflare`, with `NEON_READER_URL` in the environment (below).
 
-Each stage's Hyperdrive connects to production's Neon branch as `site_reader`, which may only `SELECT` the tables the public site reads and starts every transaction read-only, so nothing outside prod can write production's data or read anything else. The stack refuses a `NEON_READER_URL` for any other role, including Neon's own `reader`, which belongs to `neon_superuser` and can write. [`scripts/site-reader.ts`](scripts/site-reader.ts) creates the role or rotates its password, and stores the connection string in the repository secret and 1Password. Previews only read, so Hyperdrive caches query results for 60 seconds and may serve them up to 15 seconds stale while it refreshes them; each stage holds at most about 5 connections to Neon. CI deploys with the `NEON_READER_URL` repository secret, a direct (not pooled) connection string. On your machine, pass the same string without printing it:
+Each stage's Hyperdrive connects to production's Neon branch as `site_reader`, which may only `SELECT` the tables the public site reads and starts every transaction read-only, so nothing outside prod can write production's data or read anything else. The stack refuses a `NEON_READER_URL` for any other role, including Neon's own `reader`, which belongs to `neon_superuser` and can write. [`scripts/site-reader.ts`](scripts/site-reader.ts) creates the role or rotates its password, and stores the connection string as a secret of the `production-read` environment, which only main may use (the migration guard, hero photo and completeness checks run there), in the repository secret while CI's staging deploy still reads it, and in 1Password. Previews only read, so Hyperdrive caches query results for 60 seconds and may serve them up to 15 seconds stale while it refreshes them; each stage holds at most about 5 connections to Neon. CI's staging deploy still reads the `NEON_READER_URL` repository secret, a direct (not pooled) connection string, until its environment holds one; then the repository secret goes. On your machine, pass the same string without printing it:
 
 ```sh
 NEON_READER_URL=$(op read "op://allthings/allthings site_reader/credential") \
@@ -55,7 +55,7 @@ The hourly Luma sync writes production as `site_sync`, a second login role made 
 - It has no `DELETE`, and no access to any table the sync doesn't touch.
 - Its statements, lock waits and idle transactions time out at 30 seconds or less.
 
-[`core/tests/site-sync.test.ts`](../core/tests/site-sync.test.ts) runs the sync as the role and checks everything else is refused. The connection string is in the `NEON_SYNC_URL` repository secret and the "allthings site_sync" 1Password item.
+[`core/tests/site-sync.test.ts`](../core/tests/site-sync.test.ts) runs the sync as the role and checks everything else is refused. The connection string is `NEON_SYNC_URL`, a secret of the `production-sync` environment, which only main may use (the community snapshot runs there), and the "allthings site_sync" 1Password item.
 
 The draft preview reads and writes draft collaboration as `draft_collab` (see core's README, "Collaborating on a draft"), a third login role made the same way by [`scripts/draft-collab.ts`](scripts/draft-collab.ts):
 
@@ -65,7 +65,7 @@ The draft preview reads and writes draft collaboration as `draft_collab` (see co
 - Row security applies to every row it touches.
 - Its statements, lock waits and idle transactions time out at 15 seconds or less.
 
-[`core/tests/draft-collab.test.ts`](../core/tests/draft-collab.test.ts) makes the role with the script's statements. It checks that what the preview does succeeds, that everything else is refused, and that the role's privileges in the catalog are exactly the script's. The connection string goes into the `NEON_COLLAB_URL` repository secret and the "allthings draft_collab" 1Password item.
+[`core/tests/draft-collab.test.ts`](../core/tests/draft-collab.test.ts) makes the role with the script's statements. It checks that what the preview does succeeds, that everything else is refused, and that the role's privileges in the catalog are exactly the script's. The connection string goes into the "allthings draft_collab" 1Password item only, where prod's deploys read it: no workflow reads `NEON_COLLAB_URL`.
 
 The event studio's commands (`bun run plan`, `readiness`, `luma`, `social`, `posts`, `photos`, `collab` and the rest; core's README, "The studio's connection") connect as `studio`, a fourth login role made the same way by [`scripts/studio.ts`](scripts/studio.ts):
 

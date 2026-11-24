@@ -149,14 +149,22 @@ const withKey = { LUMA_API_KEY: "test-key" };
 const fakeApi = (replies: Readonly<Record<string, ReadonlyArray<Reply>>>) =>
   fakeLumaBy((url) => url.searchParams.get("event_id") ?? "", replies);
 
-/** Luma's answer for `id`, describing it with `markdown`. */
-const answer = (id: string, markdown: string | null): Reply => ({
+/**
+ * Luma's answer for `id`, describing it with `markdown`, for an event
+ * `visibility` says who may see.
+ */
+const answer = (
+  id: string,
+  markdown: string | null,
+  visibility: "public" | "members-only" | "private" = "public",
+): Reply => ({
   body: managed
     .replace('"id": "evt-react"', `"id": ${JSON.stringify(id)}`)
     .replace(
       '"description_md": "Server components in practice."',
       `"description_md": ${JSON.stringify(markdown)}`,
-    ),
+    )
+    .replace('"visibility": "public"', `"visibility": "${visibility}"`),
 });
 
 describe("Luma's API", () => {
@@ -209,6 +217,24 @@ describe("Luma's API", () => {
         Exit.succeed(Option.some({ lumaEventId: "evt-react", markdown: null })),
       );
     }
+  });
+
+  test("an event Luma shows only to its guests or members has no description the site may show", async () => {
+    for (const visibility of ["private", "members-only"] as const) {
+      const { exit } = await ask([
+        answer("evt-react", "Server components in practice.", visibility),
+      ]);
+      expect(exit).toEqual(
+        Exit.succeed(Option.some({ lumaEventId: "evt-react", markdown: null })),
+      );
+    }
+  });
+
+  test("an answer that doesn't say who may see the event says nothing of its description", async () => {
+    const { exit } = await ask([
+      { body: managed.replace('"visibility": "public",', "") },
+    ]);
+    expect(exit).toEqual(Exit.succeed(Option.none()));
   });
 
   test("has nothing to ask without LUMA_API_KEY, and nothing to say about an event it hides", async () => {
@@ -418,6 +444,51 @@ describe("the import", () => {
         "Rescheduled to a later evening, in the same place.",
         "<p>Rescheduled to a later evening, in the same place.</p>\n",
       ],
+    ]);
+  });
+
+  test("empties the description of an event Luma now shows only to its guests or members", async () => {
+    const db = await database();
+    await importInto(db);
+    const before = await stored(db);
+    const later = DateTime.makeUnsafe("2026-10-04T19:00:00Z");
+    const done = planned(
+      (
+        await importInto(
+          db,
+          {
+            "evt-react": [answer("evt-react", "Now for guests.", "private")],
+            "evt-upcoming": [
+              answer("evt-upcoming", "Now for members.", "members-only"),
+            ],
+          },
+          { at: later },
+        )
+      ).result,
+    );
+    expect(done).toMatchObject({ unavailable: [], written: 2 });
+    const after = await stored(db);
+    expect(
+      after.map(({ slug, luma_description, luma_summary }) => [
+        slug,
+        luma_description,
+        luma_summary,
+      ]),
+    ).toEqual([
+      ["2026-08-12-react-at-acme", "", null],
+      // The draft is never asked about.
+      ["2026-09-01-draft-night", null, null],
+      ["2026-11-05-upcoming", "", null],
+    ]);
+    // Both are written at the Clock's now, so caches see the change.
+    const changed = after.filter(
+      (row, i) => row.updated_at.getTime() !== before[i]?.updated_at.getTime(),
+    );
+    expect(
+      changed.map(({ slug, updated_at }) => [slug, updated_at.toISOString()]),
+    ).toEqual([
+      ["2026-08-12-react-at-acme", "2026-10-04T19:00:00.000Z"],
+      ["2026-11-05-upcoming", "2026-10-04T19:00:00.000Z"],
     ]);
   });
 

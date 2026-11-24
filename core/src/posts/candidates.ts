@@ -100,6 +100,30 @@ export const bareLink = (url: string): string =>
     .replace(/[?#].*$/, "")
     .replace(/\/+$/, "");
 
+/**
+ * Whether `word`, text between whitespace, is written like a link: a dot
+ * after its first character, then a slash at least one character later,
+ * and with `path`, at least one character after that. One pass over the
+ * word, so a long post costs no more than its length.
+ */
+const linkLike = (word: string, path: boolean): boolean => {
+  const dot = word.indexOf(".", 1);
+  if (dot === -1) return false;
+  const slash = word.indexOf("/", dot + 2);
+  return slash !== -1 && (!path || slash < word.length - 1);
+};
+
+/** The words of `text` written like links, in order. */
+const linksIn = (text: string): ReadonlyArray<string> =>
+  text.split(/\s+/).filter((word) => linkLike(word, true));
+
+/** `text` with each word written like a link, even one ending in a slash, as a space. */
+const withoutLinks = (text: string): string =>
+  text
+    .split(/(\s+)/)
+    .map((part, i) => (i % 2 === 0 && linkLike(part, false) ? " " : part))
+    .join("");
+
 /** Whether `text` has `phrase` as whole words. */
 const hasPhrase = (text: string, phrase: string) =>
   phrase.trim() !== "" &&
@@ -133,14 +157,14 @@ export function scoreCandidate(
   let score = 0;
 
   const ours = new Set(signals.links.map(bareLink));
-  const linked = [...post.links, ...(post.text.match(/\S+\.\S+\/\S+/g) ?? [])]
+  const linked = [...post.links, ...linksIn(post.text)]
     .map(bareLink)
     .find((link) => ours.has(link));
   if (linked !== undefined) score += add(6, `links ${linked}`);
 
   // Words are read from the text without its links, and the host from it
   // without the evening's name: neither counts twice.
-  const words = post.text.replace(/\S+\.\S+\/\S*/g, " ");
+  const words = withoutLinks(post.text);
   const name = displayName(signals.name);
   const named = name.split(/\s+/).length >= 2 && hasPhrase(words, name);
   if (named) score += add(4, `names "${name}"`);

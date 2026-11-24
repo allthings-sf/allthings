@@ -160,20 +160,34 @@ export function toEventVenue(event: ApiEvent): LumaEventVenue {
   };
 }
 
-/** An event's description, as Luma's editor wrote it. */
+/**
+ * An event's description as anyone may read it on Luma: as Luma's editor
+ * wrote it, for an event Luma shows publicly.
+ */
 export interface LumaEventDescription {
   readonly lumaEventId: string;
-  /** Markdown, or null when the event has none. */
+  /**
+   * Markdown, or null when the event has none, or when Luma shows the event
+   * only to its guests or its calendar's members: then its description is
+   * theirs, and none is public.
+   */
   readonly markdown: string | null;
 }
 
-/** An event's description from Luma's answer. */
-export function toEventDescription(event: ApiEvent): LumaEventDescription {
-  const markdown = event.description_md ?? null;
-  return {
+/**
+ * An event's description from Luma's answer, or None when the answer
+ * doesn't say who may see the event: what it describes could be private.
+ */
+export function toEventDescription(
+  event: ApiEvent,
+): Option.Option<LumaEventDescription> {
+  if (event.visibility === undefined) return Option.none();
+  const markdown =
+    event.visibility === "public" ? (event.description_md ?? null) : null;
+  return Option.some({
     lumaEventId: event.id,
     markdown: markdown === null || markdown.trim() === "" ? null : markdown,
-  };
+  });
 }
 
 /** A host of an event, as Luma shows them. */
@@ -249,11 +263,6 @@ export interface LumaApiShape {
     ) => Effect.Effect<Option.Option<LumaEventVenue>, LumaApiError>
   >;
   /**
-   * The event's description, or `None` where Luma does not show us the
-   * event (403, or 404 for one deleted). `None` itself when LUMA_API_KEY is
-   * not set.
-   */
-  /**
    * The event's name, times, visibility and place, or `None` where Luma
    * does not show us the event (403, or 404 for one deleted) or leaves one
    * out. `None` itself when LUMA_API_KEY is not set.
@@ -263,6 +272,12 @@ export interface LumaApiShape {
       lumaEventId: string,
     ) => Effect.Effect<Option.Option<LumaEventDetails>, LumaApiError>
   >;
+  /**
+   * The event's description as anyone may read it (none for an event Luma
+   * shows only to its guests or members), or `None` where Luma does not
+   * show us the event (403, or 404 for one deleted) or doesn't say who may
+   * see it. `None` itself when LUMA_API_KEY is not set.
+   */
   readonly eventDescription: Option.Option<
     (
       lumaEventId: string,
@@ -341,7 +356,7 @@ const make = Effect.gen(function* () {
       getEvent(
         apiKey,
         "LumaApi.eventDescription",
-      )(lumaEventId).pipe(Effect.map(Option.map(toEventDescription))),
+      )(lumaEventId).pipe(Effect.map(Option.flatMap(toEventDescription))),
   );
 
   const eventDetails = Option.map(

@@ -653,7 +653,11 @@ function withPreviewHeaders(response: Response): Response {
 /** How many writes one signer may make: in ten minutes, and in a day. */
 export const writeLimits = { tenMinutes: 20, day: 200 } as const;
 
-/** Everything a collaborator writes, as the audit names it: what the limits count. */
+/**
+ * Everything a collaborator writes, as the audit names it: what the limits
+ * count. A form refused before it is shown to be the signer's own is
+ * audited as `<action>.unverified`, which they don't.
+ */
 const writes = ["comment.add", "round.save", "logistics.confirm"];
 
 /**
@@ -757,6 +761,14 @@ async function post(
     Effect.runPromise(
       Collab.use(f).pipe(Effect.provide(collabLayer(url.value))),
     );
+  /**
+   * Records a refusal in the audit, in the signer's name, and answers with
+   * it. Until the form is shown to be the signer's own, from this page and
+   * with its token, a refusal is recorded as `<action>.unverified`, which
+   * the write limits don't count: another site can send one through the
+   * signer's browser, and it mustn't use up what the signer may write.
+   */
+  let verified = false;
   const refuse = async (
     status: number,
     outcome: "refused" | "invalid" | "limited",
@@ -766,7 +778,7 @@ async function post(
     await run((collab) =>
       collab.record(who, {
         eventId,
-        action: kind.action,
+        action: verified ? kind.action : `${kind.action}.unverified`,
         outcome,
         targetId: null,
         requestId,
@@ -799,6 +811,7 @@ async function post(
       eventId,
     );
   }
+  verified = true;
   const back = new Response(null, {
     status: 303,
     headers: {
