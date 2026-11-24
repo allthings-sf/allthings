@@ -266,11 +266,12 @@ The script runs on a maintainer's machine signed in to the allthings account wit
 
 ```sh
 NODE_OPTIONS=--dns-result-order=ipv4first bunx cf@1.0.0-beta.12 auth create allthings --no-device   # once per machine
+bash infra/scripts/ci-token.sh --plan --rotate  # show the rotation without writing
 bash infra/scripts/ci-token.sh            # create, or update the policies
 bash infra/scripts/ci-token.sh --rotate   # also roll the value and update the secret
 ```
 
-To migrate an existing repository secret, wait for the main-only deploy workflow to land. Before approving that deploy, run `bash infra/scripts/ci-token.sh --rotate` and confirm `gh secret list --repo allthings-sf/allthings --env Production` lists the token. Then remove its invalidated repository copy with `gh secret delete CLOUDFLARE_API_TOKEN --repo allthings-sf/allthings`.
+To migrate an existing repository secret, wait for the main-only deploy workflow to land. Before approving that deploy, inspect the read-only plan above, then run `bash infra/scripts/ci-token.sh --rotate` and confirm `gh secret list --repo allthings-sf/allthings --env Production` lists the token. If writing the new value was interrupted, rerun with `--rotate` to provision a fresh one. Then remove its invalidated repository copy with `gh secret delete CLOUDFLARE_API_TOKEN --repo allthings-sf/allthings`.
 
 ## The studio's Zero Trust token
 

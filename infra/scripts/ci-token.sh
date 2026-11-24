@@ -8,6 +8,7 @@
 # the allthings account; that sign-in may create account tokens, so no Global
 # API Key or token-minting token exists anywhere. Requires gh, jq and bun.
 #
+#   bash infra/scripts/ci-token.sh --plan [--rotate]  # read-only preview
 #   bash infra/scripts/ci-token.sh            # create, or update the policies in place
 #   bash infra/scripts/ci-token.sh --rotate   # also roll the value and update the secret
 #
@@ -20,7 +21,14 @@ repo=allthings-sf/allthings
 environment=Production
 profile=${CF_PROFILE:-allthings}
 rotate=false
-[[ ${1:-} == --rotate ]] && rotate=true
+plan=false
+for arg in "$@"; do
+  case "$arg" in
+    --rotate) rotate=true ;;
+    --plan) plan=true ;;
+    *) echo "Usage: ci-token.sh [--plan] [--rotate]" >&2; exit 2 ;;
+  esac
+done
 
 name=$(jq -er .name "$spec")
 account=$(jq -er .account "$spec")
@@ -55,7 +63,32 @@ policies=$(jq -c --argjson groups "$groups" --arg resource "com.cloudflare.api.a
   | [{effect: "allow", permission_groups: map({id}), resources: {($resource): "*"}}]
 ' "$spec")
 
-id=$(cf accounts tokens list | result | jq -r --arg name "$name" 'map(select(.name == $name)) | first | .id // empty')
+token_id() {
+  cf accounts tokens list | result | jq -er --arg name "$name" '
+    map(select(.name == $name)) |
+    if length > 1 then error("ambiguous token name") else .[0].id // "" end'
+}
+id=$(token_id)
+action="update policies"
+write_token=false
+if [[ -z $id ]]; then
+  action="create token"
+  write_token=true
+elif $rotate; then
+  action="update policies and rotate token"
+  write_token=true
+fi
+echo "Plan: $action for $name"
+jq -r '.permissionGroups[] | "  " + .' "$spec"
+echo "  set CLOUDFLARE_ACCOUNT_ID in $repo/$environment"
+if $write_token; then
+  echo "  set CLOUDFLARE_API_TOKEN in $repo/$environment"
+elif ! gh secret list --repo "$repo" --env "$environment" --json name |
+    jq -e 'any(.[]; .name == "CLOUDFLARE_API_TOKEN")' >/dev/null; then
+  echo "Use --rotate to provision the environment token." >&2
+  exit 1
+fi
+if $plan; then exit 0; fi
 
 set_secret() {
   local value
@@ -69,16 +102,21 @@ gh secret set CLOUDFLARE_ACCOUNT_ID --repo "$repo" --env "$environment" --body "
 if [[ -z $id ]]; then
   echo "→ creating the token"
   cf accounts tokens create --name "$name" --policies "$policies" | result | set_secret
-  echo "✓ created \"$name\" and set CLOUDFLARE_API_TOKEN in $repo/$environment"
-  exit 0
+  id=$(token_id)
+else
+  echo "→ updating the token's policies"
+  cf accounts tokens update "$id" --name "$name" --policies "$policies" | result | jq -e '.id' >/dev/null
+  if $rotate; then
+    echo "→ rolling the token's value"
+    cf accounts tokens roll "$id" | result | jq 'if type == "string" then {value: .} else . end' | set_secret
+  fi
 fi
 
-echo "→ updating the token's policies (its value stays the same)"
-cf accounts tokens update "$id" --name "$name" --policies "$policies" | result | jq -e '.id' >/dev/null
-if $rotate; then
-  echo "→ rolling the token's value"
-  cf accounts tokens roll "$id" | result | jq 'if type == "string" then {value: .} else . end' | set_secret
-  echo "✓ rotated \"$name\" and updated CLOUDFLARE_API_TOKEN in $repo/$environment"
-else
-  echo "✓ \"$name\" now has the policies in ci-token.json"
-fi
+# Read back the account scope and grants, then verify the secret names.
+cf accounts tokens get "$id" | result | jq -e --argjson wanted "$policies" '
+  def grants: map({effect, resources, permission_groups: (.permission_groups | map(.id) | sort)});
+  (.policies | grants) == ($wanted | grants)
+' >/dev/null
+gh secret list --repo "$repo" --env "$environment" --json name |
+  jq -e '([ "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN" ] - map(.name)) == []' >/dev/null
+echo "✓ verified token policies and environment secrets"
