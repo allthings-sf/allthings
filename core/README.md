@@ -2407,15 +2407,12 @@ migrator (`src/migrator.ts`). Production takes migrations from here alone.
   `effect_sql.migrations` as site_reader, in the main-only
   `production-read` environment). A migration applied to production before
   it merges is caught on pull requests only while the pull request that
-  adds it stays open: if that one closes unmerged, a later pull request can
-  take its number and pass, main's production check then fails after that
-  merge, and `migrate` refuses to run, since production's record is no
-  longer a prefix of main's migrations. To recover, add the applied
-  migration back to main exactly as it ran, under its number and name
-  (from the closed pull request's branch), and move the one that took its
-  number, which production never ran, to the next free number: the record
-  is a prefix again, and no applied migration changed. The failure names
-  each migration to renumber, and the number it should take.
+  adds it stays open, so apply one only right before its pull request
+  merges. If that pull request closes unmerged instead, only main's
+  production check catches the clash, after the next merge, and the pull
+  request check can't confirm a fix until it reads production's record
+  again. The failure names each migration to renumber, and the number it
+  should take.
 
 `0001_baseline` is production's schema on 2026-10-04, read from its catalog,
 not a replay of the old Next app's drizzle migrations: production received
