@@ -55,7 +55,7 @@ describe("siteTokenOf", () => {
 describe("withBeaconPolicy", () => {
   test("allows the beacon's script and its reports, and changes nothing else", () => {
     expect(withBeaconPolicy(contentSecurityPolicy.variants)).toBe(
-      "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com",
+      "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com",
     );
   });
 
