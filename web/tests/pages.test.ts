@@ -819,6 +819,25 @@ const sourcesFor = (policy: string, directive: string) => {
   return directives.get(directive) ?? directives.get("default-src") ?? [];
 };
 
+/**
+ * The href of each link in `page`'s head whose rel names a web app
+ * manifest, as an HTML parser finds them (Bun's HTMLRewriter, the Worker's
+ * lol-html), so a link in a comment or with its attributes in another order
+ * reads as the browser reads it.
+ */
+const manifestLinks = async (page: Response) => {
+  const hrefs: Array<string | null> = [];
+  await new HTMLRewriter()
+    .on('head link[rel~="manifest"]', {
+      element: (link) => {
+        hrefs.push(link.getAttribute("href"));
+      },
+    })
+    .transform(page)
+    .text();
+  return hrefs;
+};
+
 describe("the web app manifest", () => {
   it("is this site's own file, which every page links under a policy that lets the browser load it", async (url, _, measured) => {
     const scripted = variants.find((variant) => variant.scripted === true);
@@ -833,10 +852,12 @@ describe("the web app manifest", () => {
       `${measured}/about`,
     ]) {
       const response = await fetch(page);
-      const html = await response.text();
-      const href = /<link rel="manifest" href="([^"]+)"/.exec(html)?.[1];
-      expect([page, href]).toEqual([page, "/manifest.webmanifest"]);
       const policy = response.headers.get("content-security-policy") ?? "";
+      // Exactly one: a browser uses the first and ignores the rest.
+      expect([page, await manifestLinks(response)]).toEqual([
+        page,
+        ["/manifest.webmanifest"],
+      ]);
       expect([page, sourcesFor(policy, "manifest-src")]).toEqual([
         page,
         ["'self'"],
