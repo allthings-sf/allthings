@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-staging
+      # A pending approval can outlast several main pushes. Keep each staging run.
+      queue: max
       cancel-in-progress: false
     environment:
       name: Production
