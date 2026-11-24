@@ -100,10 +100,38 @@ function within(text: string, limit: number, name: string, part: string) {
   }
 }
 
-/** The outline's first Markdown heading, which a deck's title usually is. */
+const isBlank = (char: string | undefined) => char === " " || char === "\t";
+
+/**
+ * The outline's first Markdown heading, which a deck's title usually is: the
+ * first line of one or two #s and a space or tab, without the spaces, tabs
+ * and #s closing it. Undefined when that heading is empty, or there is none.
+ * Each line is read once, front to back, so a long one costs no more than
+ * its length.
+ */
 export function headingOf(outline: string): string | undefined {
-  const heading = /^#{1,2}[ \t]+(.+?)[ \t#]*$/m.exec(outline)?.[1]?.trim();
-  return heading === undefined || heading === "" ? undefined : heading;
+  for (const line of outline.split(/[\n\r\u2028\u2029]/)) {
+    const hashes = line.startsWith("##") ? 2 : line.startsWith("#") ? 1 : 0;
+    if (hashes === 0 || !isBlank(line[hashes])) continue;
+    let start = hashes;
+    while (isBlank(line[start])) start += 1;
+    if (start === line.length) {
+      // Blanks alone: a heading, empty, when there are two or more of them.
+      if (start - hashes >= 2) return undefined;
+      continue;
+    }
+    // The text runs to the closing blanks and #s, keeping at least one character.
+    let end = line.length;
+    while (
+      end > start + 1 &&
+      (isBlank(line[end - 1]) || line[end - 1] === "#")
+    ) {
+      end -= 1;
+    }
+    const heading = line.slice(start, end).trim();
+    return heading === "" ? undefined : heading;
+  }
+  return undefined;
 }
 
 /** The talk `files` and `options` describe, as coach_talk takes it. */
@@ -144,8 +172,6 @@ export function talkToCoach(
       : "open-floor";
   const outline = parts.outline?.text.trim() ?? "";
   const transcript = parts.transcript?.text.trim() ?? "";
-  const title = (options.title ?? headingOf(outline))?.trim();
-  const abstract = options.abstract?.trim();
   if (parts.outline !== undefined) {
     within(outline, coachingLimits.outline, parts.outline.path, "an outline");
   }
@@ -157,6 +183,9 @@ export function talkToCoach(
       "a transcript",
     );
   }
+  // The outline is within its limit before its heading is read.
+  const title = (options.title ?? headingOf(outline))?.trim();
+  const abstract = options.abstract?.trim();
   if (title !== undefined) {
     within(title, coachingLimits.title, "The title", "a title");
   }
