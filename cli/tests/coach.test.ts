@@ -159,6 +159,43 @@ describe("reading a talk's files", () => {
     );
     expect(headingOf("no headings")).toBeUndefined();
   });
+
+  test("a heading reads as the regular expression it replaced read it", () => {
+    const pattern = /^#{1,2}[ \t]+(.+?)[ \t#]*$/m;
+    const before = (outline: string) => {
+      const heading = pattern.exec(outline)?.[1]?.trim();
+      return heading === undefined || heading === "" ? undefined : heading;
+    };
+    for (const outline of [
+      "# Title",
+      "## Title ##",
+      "#\tTabbed\t#\t",
+      "### Too deep\n# Shallow",
+      "##No space\n# Spaced",
+      "# \n# Next",
+      "#  \n# Next",
+      "# ###",
+      "# #tag",
+      "#  # closed #",
+      "intro\r\n## Windows line\r\n",
+      "old mac\r# Carriage\r",
+      "para\u2028# Separated",
+      "# Title \u00a0",
+      "#",
+      "",
+      "text # not a heading",
+      "# a b  c  ##  ",
+    ]) {
+      expect([outline, headingOf(outline)]).toEqual([outline, before(outline)]);
+    }
+  });
+
+  test("a heading's line is read once, however long its spaces run", () => {
+    const outline = `# a${" ".repeat(60_000)}b`;
+    const started = performance.now();
+    expect(headingOf(outline)).toBe(`a${" ".repeat(60_000)}b`);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 });
 
 describe("printing coaching", () => {
