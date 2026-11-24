@@ -349,7 +349,7 @@ describe("the venue visibility", () => {
 /**
  * A fake Luma that, once it has answered about `id` for the `nth` time,
  * holds that answer until `release`: whoever asked has read the evening and
- * has Luma's answer, and goes on only when released. `paused` settles once
+ * has Luma's answer, and goes on only when released. `held` settles once
  * it holds it.
  */
 const heldLuma = (
@@ -359,7 +359,7 @@ const heldLuma = (
 ) => {
   const luma = fakeApi(replies);
   let hold!: () => void;
-  const paused = new Promise<void>((resolve) => {
+  const held = new Promise<void>((resolve) => {
     hold = resolve;
   });
   let release!: () => void;
@@ -382,8 +382,41 @@ const heldLuma = (
       ),
     ),
   ).pipe(Layer.provide(luma.layer));
-  return { layer, paused, release };
+  return { layer, held, release };
 };
+
+/**
+ * `done`, a run asking a {@link heldLuma}. `paused` settles once Luma holds
+ * its answer, and fails as soon as the run ends without that, as one that
+ * never asks that often does, so a test waiting for the hold says why
+ * instead of timing out. Leaving the block it is declared in with `await
+ * using`, however the test ends, lets the run go and waits for it to end,
+ * so no run is left suspended.
+ */
+const heldRun = <A>(
+  luma: { readonly held: Promise<void>; readonly release: () => void },
+  done: Promise<A>,
+) => ({
+  paused: Promise.race([
+    luma.held,
+    done.then(
+      () => Promise.reject(new Error("The run ended before Luma held it")),
+      (cause: unknown) =>
+        Promise.reject(
+          new Error("The run failed before Luma held it", { cause }),
+        ),
+    ),
+  ]),
+  release: luma.release,
+  done,
+  [Symbol.asyncDispose]: async () => {
+    luma.release();
+    await done.then(
+      () => undefined,
+      () => undefined,
+    );
+  },
+});
 
 /**
  * A run that writes, started now on a clock that stands still (so a held
@@ -395,7 +428,7 @@ const startHeld = (
   id: string,
   nth: number,
 ) => {
-  const { layer, paused, release } = heldLuma(replies, id, nth);
+  const luma = heldLuma(replies, id, nth);
   const done = Effect.runPromise(
     LumaVenueVisibility.use((visibility) =>
       visibility.run({ dryRun: false }),
@@ -403,14 +436,14 @@ const startHeld = (
       Effect.provide(
         LumaVenueVisibility.layer.pipe(
           Layer.provide(LumaApi.layer),
-          Layer.provide(Layer.mergeAll(layer, configFrom(withKey))),
+          Layer.provide(Layer.mergeAll(luma.layer, configFrom(withKey))),
           Layer.provideMerge(sqlLayer(db)),
           Layer.provideMerge(clockLayer),
         ),
       ),
     ),
   );
-  return { paused, release, done };
+  return heldRun(luma, done);
 };
 
 /** The upcoming meetup's setting and reveal token, as stored. */
@@ -439,7 +472,7 @@ describe("two runs at once", () => {
     const db = await hidden();
     // A reads the venue as hidden and Luma, asked first, shows it to
     // everyone; A pauses there. Then Luma keeps it to guests.
-    const a = startHeld(
+    await using a = startHeld(
       db,
       {
         ...both,
@@ -473,7 +506,7 @@ describe("two runs at once", () => {
     const db = await hidden();
     // A has announced the reveal and Luma, asked again, still shows the
     // venue; A pauses before writing it. Then Luma keeps it to guests.
-    const a = startHeld(
+    await using a = startHeld(
       db,
       { ...both, "evt-upcoming": [answer("evt-upcoming", "public")] },
       "evt-upcoming",
@@ -502,7 +535,7 @@ describe("two runs at once", () => {
     await db.exec(`UPDATE events SET street_address = NULL,
         short_location = NULL, full_address = NULL
       WHERE slug = '2026-11-05-upcoming'`);
-    const a = startHeld(
+    await using a = startHeld(
       db,
       { ...both, "evt-upcoming": [answer("evt-upcoming", "public")] },
       "evt-upcoming",
@@ -546,26 +579,29 @@ describe("the venue fill, beside a run showing a venue again", () => {
       "evt-upcoming",
       1,
     );
-    const done = Effect.runPromise(
-      LumaVenues.use((venues) => venues.run({ dryRun: false })).pipe(
-        Effect.provide(
-          LumaVenues.layer.pipe(
-            Layer.provide(LumaApi.layer),
-            Layer.provide(Layer.mergeAll(luma.layer, configFrom(withKey))),
-            Layer.provideMerge(sqlLayer(db)),
-            Layer.provideMerge(clockLayer),
+    await using fill = heldRun(
+      luma,
+      Effect.runPromise(
+        LumaVenues.use((venues) => venues.run({ dryRun: false })).pipe(
+          Effect.provide(
+            LumaVenues.layer.pipe(
+              Layer.provide(LumaApi.layer),
+              Layer.provide(Layer.mergeAll(luma.layer, configFrom(withKey))),
+              Layer.provideMerge(sqlLayer(db)),
+              Layer.provideMerge(clockLayer),
+            ),
           ),
         ),
       ),
     );
-    await luma.paused;
+    await fill.paused;
     await db.exec(`UPDATE events SET street_address = '201 Spear St',
         full_address = '201 Spear St, San Francisco, CA 94105, USA'
       WHERE slug = '2026-11-05-upcoming'`);
-    luma.release();
+    fill.release();
     // Its address isn't written over the other's, but the mark is, and the
     // reveal announced is called off.
-    expect(await done).toMatchObject({ written: 0 });
+    expect(await fill.done).toMatchObject({ written: 0 });
     expect(await upcoming(db)).toEqual({
       venue_guests_only: true,
       venue_reveal_token: null,
