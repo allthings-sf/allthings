@@ -88,6 +88,18 @@ elif ! gh secret list --repo "$repo" --env "$environment" --json name |
   echo "Use --rotate to provision the environment token." >&2
   exit 1
 fi
+# Retire the legacy repository secret only after provisioning its replacement.
+repo_has_token() {
+  gh secret list --repo "$repo" --json name | jq 'any(.[]; .name == "CLOUDFLARE_API_TOKEN")'
+}
+legacy=$(repo_has_token)
+if [[ $legacy == true ]]; then
+  if ! $write_token; then
+    echo "Use --rotate to replace the repository credential." >&2
+    exit 1
+  fi
+  echo "  remove the invalidated repository CLOUDFLARE_API_TOKEN after verifying the replacement"
+fi
 if $plan; then exit 0; fi
 
 set_secret() {
@@ -119,4 +131,9 @@ cf accounts tokens get "$id" | result | jq -e --argjson wanted "$policies" '
 ' >/dev/null
 gh secret list --repo "$repo" --env "$environment" --json name |
   jq -e '([ "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN" ] - map(.name)) == []' >/dev/null
+if [[ $legacy == true ]]; then
+  gh secret delete CLOUDFLARE_API_TOKEN --repo "$repo"
+  remaining=$(repo_has_token)
+  [[ $remaining == false ]] || { echo "Repository secret still present." >&2; exit 1; }
+fi
 echo "✓ verified token policies and environment secrets"

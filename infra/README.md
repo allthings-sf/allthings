@@ -271,7 +271,7 @@ bash infra/scripts/ci-token.sh            # create, or update the policies
 bash infra/scripts/ci-token.sh --rotate   # also roll the value and update the secret
 ```
 
-To migrate an existing repository secret, wait for the main-only deploy workflow to land. Before approving that deploy, inspect the read-only plan above, then run `bash infra/scripts/ci-token.sh --rotate` and confirm `gh secret list --repo allthings-sf/allthings --env Production` lists the token. If writing the new value was interrupted, rerun with `--rotate` to provision a fresh one. Then remove its invalidated repository copy with `gh secret delete CLOUDFLARE_API_TOKEN --repo allthings-sf/allthings`.
+To migrate an existing repository secret, wait for the main-only deploy workflow to land. Before approving that deploy, inspect the read-only plan above, then run `bash infra/scripts/ci-token.sh --rotate`. After verifying the grants and environment secret names, the tool removes the invalidated repository token and checks that it is gone. If provisioning was interrupted, rerun with `--rotate` to provision a fresh value. Confirm the new deploy succeeds before using it to validate a production rollout.
 
 ## The studio's Zero Trust token
 
