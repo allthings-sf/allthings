@@ -805,6 +805,73 @@ describe("static assets", () => {
   });
 });
 
+/**
+ * The sources `policy` gives `directive`, or default-src's when it has
+ * none, as a browser falls back for a fetch directive like manifest-src.
+ */
+const sourcesFor = (policy: string, directive: string) => {
+  const directives = new Map<string, ReadonlyArray<string>>();
+  for (const part of policy.split(";")) {
+    const [name = "", ...sources] = part.trim().split(/\s+/);
+    // A browser heeds only a directive's first occurrence.
+    if (!directives.has(name)) directives.set(name, sources);
+  }
+  return directives.get(directive) ?? directives.get("default-src") ?? [];
+};
+
+/**
+ * The href of each link in `page`'s head whose rel names a web app
+ * manifest, as an HTML parser finds them (Bun's HTMLRewriter, the Worker's
+ * lol-html), so a link in a comment or with its attributes in another order
+ * reads as the browser reads it.
+ */
+const manifestLinks = async (page: Response) => {
+  const hrefs: Array<string | null> = [];
+  await new HTMLRewriter()
+    .on('head link[rel~="manifest"]', {
+      element: (link) => {
+        hrefs.push(link.getAttribute("href"));
+      },
+    })
+    .transform(page)
+    .text();
+  return hrefs;
+};
+
+describe("the web app manifest", () => {
+  it("is this site's own file, which every page links under a policy that lets the browser load it", async (url, _, measured) => {
+    const scripted = variants.find((variant) => variant.scripted === true);
+    if (scripted === undefined) throw new Error("No lab variant is scripted");
+    // A page under each policy: the site's, a form's, the lab engine's, a
+    // page that isn't found, and prod's, widened for the beacon.
+    for (const page of [
+      `${url}/`,
+      `${url}/propose`,
+      `${url}${variantPath(scripted.name)}`,
+      `${url}/no-such-page`,
+      `${measured}/about`,
+    ]) {
+      const response = await fetch(page);
+      const policy = response.headers.get("content-security-policy") ?? "";
+      // Exactly one: a browser uses the first and ignores the rest.
+      expect([page, await manifestLinks(response)]).toEqual([
+        page,
+        ["/manifest.webmanifest"],
+      ]);
+      expect([page, sourcesFor(policy, "manifest-src")]).toEqual([
+        page,
+        ["'self'"],
+      ]);
+    }
+    const manifest = await fetch(`${url}/manifest.webmanifest`);
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers.get("content-type")).toBe(
+      "application/manifest+json",
+    );
+    expect(await manifest.json()).toMatchObject({ start_url: "/" });
+  });
+});
+
 describe("every kind of page", () => {
   /** One of each: home, the index, evenings of every kind, people, about,
    * the brand, the code of conduct, privacy, coaching, proposing a talk, the
