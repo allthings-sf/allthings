@@ -1,16 +1,25 @@
 name: Migration numbers
 
 # Two migrations must never take one number (core/src/migration-guard.ts):
-# on every pull request and on main, core's migrations must extend what
-# production has applied, in order, read from effect_sql.migrations as the
-# read-only site_reader role; and a pull request must not add a migration
-# under a number another open pull request adds. A failure says what to
-# renumber, and to what.
+# core's migrations must extend what production has applied, in order, and
+# a pull request must not add a migration under a number another open pull
+# request adds. A failure says what to renumber, and to what.
+#
+# Production's credential (NEON_READER_URL) never reaches a pull request's
+# code. Main's run reads production's record (effect_sql.migrations) as the
+# read-only site_reader role, in the production-read environment only main
+# may use, and publishes it as the production-migrations artifact: on every
+# push to main, every six hours, and when its own check fails. A pull
+# request checks against the newest record a main run of this repository
+# published, or against main's migrations when there is none.
 on:
   push:
     branches: ["main"]
   pull_request:
     types: [opened, synchronize, reopened]
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,7 +32,61 @@ concurrency:
 jobs:
   guard:
     name: 🔢 Migration numbers
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      # The production-migrations artifact of main's last run.
+      actions: read
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: 🍞 Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: 📥 Download core deps
+        working-directory: core
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/bun-install.sh"
+
+      # Only an artifact a run on this repository's main uploaded: a pull
+      # request's run, or a fork's, never counts, whatever it names its own.
+      - name: 📜 Fetch production's record, as main's last run published it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          record="$RUNNER_TEMP/production-migrations.json"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=production-migrations&per_page=100" \
+            --jq "[.artifacts[] | select((.expired | not) and .workflow_run.head_branch == \"main\" and .workflow_run.head_repository_id == $REPOSITORY_ID)] | sort_by(.created_at) | last | .id // empty") || id=""
+          if [ -n "$id" ] && gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$RUNNER_TEMP/record.zip" &&
+            unzip -p "$RUNNER_TEMP/record.zip" production-migrations.json > "$record"; then
+            echo "APPLIED_FILE=$record" >> "$GITHUB_ENV"
+            echo "Production's record from artifact $id."
+          else
+            echo "::notice::No production-migrations artifact from main: checking against main's migrations."
+          fi
+
+      - name: 🔢 Check migration numbers against production's record and open pull requests
+        working-directory: core
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # main's commit to compare with when there's no record: the base, when that is main.
+          MAIN_REF: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.base.sha || 'main' }}
+          NO_PRODUCTION_OK: "true"
+        run: bun run --silent migration-guard
+
+  production:
+    name: 🔢 Migration numbers (production)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production-read
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -44,8 +107,17 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.NEON_READER_URL }}
           GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          # A pull request from a fork gets no secrets: it checks open pull
-          # requests only, and main's run checks production when it merges.
-          NO_PRODUCTION_OK: ${{ github.event.pull_request.head.repo.fork == true }}
+          APPLIED_OUT: ${{ runner.temp }}/production-migrations.json
         run: bun run --silent migration-guard
+
+      # Uploaded even when the check fails, so the pull request that fixes it
+      # is checked against the record that failed.
+      - name: 📜 Publish production's record for pull requests
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-migrations
+          path: ${{ runner.temp }}/production-migrations.json
+          retention-days: 14
+          # None when production couldn't be read: nothing to publish then.
+          if-no-files-found: warn
