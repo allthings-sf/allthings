@@ -21,7 +21,13 @@ describe("opening a link", () => {
         SystemRoot: "D:\\WINDOWS",
       })?.[0],
     ).toBe("D:\\WINDOWS\\System32\\rundll32.exe");
-    for (const SystemRoot of [undefined, "", "Windows"]) {
+    for (const SystemRoot of [
+      undefined,
+      "",
+      "Windows",
+      "\\Windows",
+      "C:Windows",
+    ]) {
       expect(
         openCommand("win32", "https://allthings.dev/", { SystemRoot })?.[0],
       ).toBe("C:\\Windows\\System32\\rundll32.exe");

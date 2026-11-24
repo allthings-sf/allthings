@@ -1,9 +1,11 @@
 import { win32 } from "node:path";
 
-/** Windows' own folder: SystemRoot when it is a full path, else the usual one. */
+/** Windows' own folder: SystemRoot when it names a drive and a full path on it, else the usual one. */
 const windowsRoot = (env: Record<string, string | undefined>): string => {
   const root = env["SystemRoot"];
-  return root !== undefined && win32.isAbsolute(root) ? root : "C:\\Windows";
+  return root !== undefined && /^[A-Za-z]:[\\/]/.test(root)
+    ? root
+    : "C:\\Windows";
 };
 
 /**
