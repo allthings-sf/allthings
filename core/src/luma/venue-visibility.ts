@@ -25,15 +25,16 @@ import type { RehearsedEvening } from "./company-hosts.ts";
  *
  * A venue stored as hidden is shown again only once Luma has said so twice,
  * the second time asked after the run announced the reveal by setting
- * `events.venue_reveal_token` to its own token. Any guests-only answer
- * written meanwhile, by another run or the venue fill, clears the token,
- * and the run shows the venue only if its token is still there. So however
- * runs overlap, an answer older than another run's never shows a venue
- * that run found kept to guests. Comparing the stored setting with the one
- * the run read would not be enough: a run whose newer answer agrees with
- * what is stored writes nothing, so leaves nothing to compare. Hiding needs
- * no such care: an older guests-only answer only keeps a venue hidden
- * until the next run.
+ * `events.venue_reveal_token` to its own token. A guests-only answer, from
+ * another run or the venue fill, clears the token as it is written, and
+ * the run shows the venue only if its token is still there when it locks
+ * the row to show it; one written after that hides the venue again. So
+ * however runs overlap, an older answer never shows a venue that a newer
+ * one, already written, found kept to guests. Comparing the stored
+ * setting with the one the run read would not be enough: a run whose newer
+ * answer agrees with what is stored writes nothing, so leaves nothing to
+ * compare. Hiding needs no such care: an older guests-only answer only
+ * keeps a venue hidden until the next run.
  *
  * Only evenings whose setting changes are written, each with the Clock's
  * now as its updated_at; announcing a reveal, or calling one off, writes

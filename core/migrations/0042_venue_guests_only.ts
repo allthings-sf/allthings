@@ -10,10 +10,11 @@ import { statements } from "./statements.ts";
  * evening starts as public; the sync's next run reads each one ahead.
  *
  * `events.venue_reveal_token` is set only while a run that found Luma
- * showing a hidden venue asks Luma again before showing it: any guests-only
- * answer read meanwhile clears it, and the run shows the venue only if its
- * token is still there. So an answer older than another run's never shows a
- * venue that run found kept to guests. No public surface reads it.
+ * showing a hidden venue asks Luma again before showing it: a guests-only
+ * answer clears it as it is written, and the run shows the venue only if
+ * its token is still there when it locks the row to show it. So an older
+ * answer never shows a venue that a newer one, already written, found kept
+ * to guests. No public surface reads it.
  *
  * site_sync, the role the hourly sync writes as, may read and write both
  * where the role exists (infra/scripts/site-sync.ts); site_reader and the

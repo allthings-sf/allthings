@@ -25,7 +25,8 @@ import { markGuestsOnly } from "./venue-visibility.ts";
  * never replaced: the write checks again that it is missing.
  *
  * Where Luma keeps the venue to guests it marks it so as the answer
- * arrives, and calls off any reveal the visibility step has announced
+ * arrives, and calls off any reveal the visibility step has announced and
+ * not yet written, or hides the venue again if it has
  * (`markGuestsOnly`, src/luma/venue-visibility.ts), whether or not it then
  * writes the address; and it writes the mark again with the address, so an
  * address it fills is never public before the setting is known, though the

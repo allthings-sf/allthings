@@ -540,10 +540,12 @@ answer, so a guests-only venue it fills in is never shown, though the
 visibility step failed or didn't ask about it. Both write a guests-only
 answer as it arrives, whatever else they are still asking. A venue is
 shown again only once Luma has said so twice, the second time asked after
-the run announced the reveal (`events.venue_reveal_token`), which any
-guests-only answer written meanwhile, by another run or the fill, calls
-off: so however runs overlap, an answer older than another's never shows a
-venue the newer one found kept to guests. The fill never clears the mark.
+the run announced the reveal (`events.venue_reveal_token`). A guests-only
+answer, from another run or the fill, clears the token as it is written:
+committed before the reveal locks the row, it calls the reveal off;
+committed after, it hides the venue again. So however runs overlap, an
+older answer never shows a venue that a newer one, already written, found
+kept to guests. The fill never clears the mark.
 Luma alone decides it: an organizer's
 venue (`venue_by_organizer`) is still Luma's to hide. The city is read from
 the address as Luma writes one ("201 Spear St, San Francisco, CA 94105,
