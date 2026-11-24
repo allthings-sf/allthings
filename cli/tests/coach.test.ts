@@ -234,6 +234,18 @@ describe("printing coaching", () => {
     expect(wide).toContain(`\n  ${"界".repeat(15)}…  o\n${" ".repeat(35)}a`);
     expect(wide).toContain(`\n  c0${" ".repeat(29)}  o\n`);
     expect(wide).toContain(`\n  ab界界${" ".repeat(25)}  o\n`);
+    // An emoji and its variation selector are one character, two columns wide.
+    const sequence = formatCoaching(
+      {
+        ...coaching,
+        findings: [{ ...findings[0]!, id: `${"x".repeat(30)}❤️xx` }],
+        strengths: [],
+        unchecked: [],
+      },
+      false,
+      "https://allthings.dev/coach",
+    );
+    expect(sequence).toContain(`\n  ${"x".repeat(30)}…  o\n${" ".repeat(35)}a`);
     // Each finding takes its two lines of 32 columns of name and indent, no more.
     expect(text.length).toBeLessThan(1_000 + 501 * 80);
   });

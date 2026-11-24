@@ -245,18 +245,22 @@ export const checkNameWidth = 32;
 /** The columns `text` takes on a terminal: two for a wide character, none for a combining mark. */
 const columns = (text: string) => Bun.stringWidth(text);
 
+/** What a person sees as one character: a letter with its marks, an emoji with its modifiers. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /**
  * A check's name in at most `checkNameWidth` columns, cut with "…" when
- * wider. It is cut between characters, never inside one.
+ * wider. It is cut between what a person sees as characters, each
+ * measured whole, never inside one.
  */
 const checkName = (id: string) => {
   if (columns(id) <= checkNameWidth) return id;
   let kept = "";
   let width = 0;
-  for (const char of id) {
-    const next = columns(char);
+  for (const { segment } of graphemes.segment(id)) {
+    const next = columns(segment);
     if (width + next > checkNameWidth - 1) break;
-    kept += char;
+    kept += segment;
     width += next;
   }
   return `${kept}…`;
