@@ -13,6 +13,7 @@ import {
   fileOf,
   type MigrationRef,
   migrationOfPath,
+  parseRecord,
 } from "../src/migration-guard.ts";
 import { migratedDatabase } from "./support/database.ts";
 
@@ -95,6 +96,41 @@ describe("checkMigrations", () => {
     );
   });
 
+  test("on a pull request, main's migrations stand where production's would, so a merged one changed is put back", () => {
+    const main = [...upTo10, m(11, "event_description")];
+    expect(
+      checkMigrations({
+        local: [...upTo10, m(11, "renamed")],
+        applied: main,
+        appliedBy: "main",
+        added: [],
+        claims: [],
+      }),
+    ).toEqual([
+      "Main has 0011_event_description, where this branch has 0011_renamed, which it didn't add: merged migrations are never renamed, reordered or removed; merge main, or put 0011_renamed back as 0011_event_description.",
+    ]);
+    expect(
+      checkMigrations({
+        local: upTo10,
+        applied: main,
+        appliedBy: "main",
+        added: [],
+        claims: [],
+      }),
+    ).toEqual([
+      "Main has 0011_event_description, which this branch doesn't have: merge main.",
+    ]);
+    expect(
+      checkMigrations({
+        local: [...main, m(12, "planning")],
+        applied: main,
+        appliedBy: "main",
+        added: [m(12, "planning")],
+        claims: [],
+      }),
+    ).toEqual([]);
+  });
+
   test("two open pull requests taking one number: this one moves to the next free number", () => {
     expect(
       checkMigrations({
@@ -145,6 +181,39 @@ describe("checkMigrations", () => {
 });
 
 describe("migrationOfPath", () => {
+  test("against production's record, a pull request restoring an applied migration passes", () => {
+    // Production applied 0011_a from a pull request that closed unmerged;
+    // main then took 0011 for b. The fix puts 0011_a back and moves b on.
+    expect(
+      checkMigrations({
+        local: [...upTo10, m(11, "a"), m(12, "b")],
+        applied: [...upTo10, m(11, "a")],
+        added: [m(11, "a"), m(12, "b")],
+        claims: [],
+      }),
+    ).toEqual([]);
+  });
+
+  test("takes production's published record only when it is one", () => {
+    expect(
+      parseRecord(JSON.stringify([m(2, "planning"), m(1, "baseline")])),
+    ).toEqual([m(1, "baseline"), m(2, "planning")]);
+    expect(parseRecord("[]")).toEqual([]);
+    for (const text of [
+      "",
+      "not json",
+      "{}",
+      JSON.stringify([{ id: 1 }]),
+      JSON.stringify([{ id: 0, name: "baseline" }]),
+      JSON.stringify([{ id: 1.5, name: "baseline" }]),
+      JSON.stringify([{ id: "1", name: "baseline" }]),
+      JSON.stringify([{ id: 1, name: "../../etc" }]),
+      JSON.stringify([m(1, "baseline"), null]),
+    ]) {
+      expect(parseRecord(text)).toBeNull();
+    }
+  });
+
   test("reads core migration files, and nothing else", () => {
     expect(migrationOfPath("core/migrations/0019_x_user_ids.ts")).toEqual(
       m(19, "x_user_ids"),
