@@ -34,11 +34,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       current: ${{ steps.tip.outputs.current }}
+      attempt: ${{ steps.tip.outputs.attempt }}
     steps:
       - id: tip
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           tip=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
           if ! [[ "$tip" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Could not verify the main commit."
@@ -54,7 +56,12 @@ jobs:
   deploy:
     name: 🚀 Deploy
     needs: check-main
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-main.outputs.current == 'true'
+    # A failed-jobs-only retry reuses outputs from an earlier attempt. Rerun
+    # the entire workflow to check the tip again before retrying deployment.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.check-main.outputs.current == 'true' &&
+      needs.check-main.outputs.attempt == format('{0}', github.run_attempt)
     runs-on: ubuntu-latest
     environment:
       name: Production
