@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-staging
+      # A pending approval can outlast several main pushes. Keep each staging run.
+      queue: max
       cancel-in-progress: false
     environment:
       name: Production
@@ -50,6 +52,16 @@ jobs:
       - name: 🧱 Build web
         working-directory: web
         run: bun run build
+
+      - name: Require the current main commit before deploying
+        run: |
+          # The concurrency lock covers this check and the deploy. A cancelled run
+          # may already have changed staging, so never replay an older main tip.
+          remote=$(git ls-remote --exit-code origin refs/heads/main)
+          if [[ "${remote%%$'\t'*}" != "$GITHUB_SHA" ]]; then
+            echo "::error::Main advanced while this run was queued. Deploy the newer main run."
+            exit 1
+          fi
 
       - name: 🚀 Deploy
         id: deploy
