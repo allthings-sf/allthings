@@ -85,6 +85,7 @@ await db.exec(`
     ('${draft}', 'vic@example.com', 'Vic', 'viewer', NULL, now() - interval '1 day', now() + interval '30 days', NULL),
     ('${draft}', 'simon@example.com', 'Simon', 'round_host', '${round5}', now() - interval '1 day', now() + interval '30 days', NULL),
     ('${draft}', 'busy@example.com', 'Busy', 'commenter', NULL, now() - interval '1 day', now() + interval '30 days', NULL),
+    ('${draft}', 'dana@example.com', 'Dana', 'commenter', NULL, now() - interval '1 day', now() + interval '30 days', NULL),
     ('${draft}', 'gone@example.com', 'Gone', 'commenter', NULL, now() - interval '2 days', now() + interval '30 days', now() - interval '1 day'),
     ('${upcoming}', 'carol@example.com', 'Carol', 'commenter', NULL, now() - interval '1 day', now() + interval '30 days', NULL);
   INSERT INTO planning.brief_sections (id, event_id, position, heading, body, audiences) VALUES
@@ -331,6 +332,60 @@ describe("a comment that is taken", () => {
       author_name: "allthings",
       author_email: organizer,
     });
+  });
+});
+
+describe("the write limits", () => {
+  test("count only forms shown to be the signer's own, from this page with its token", async () => {
+    const dana = await pageToken("dana@example.com");
+    const before = (await comments()).length;
+    for (let i = 0; i < writeLimits.tenMinutes; i++) {
+      expect(
+        (
+          await post({
+            email: "dana@example.com",
+            fields: { token: dana ?? "", on: "evening", body: "x" },
+            headers: { origin: "https://evil.example" },
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await post({
+            email: "dana@example.com",
+            fields: { token: "A".repeat(43), on: "evening", body: "x" },
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect((await comments()).length).toBe(before);
+    expect(
+      (
+        await post({
+          email: "dana@example.com",
+          fields: { token: dana ?? "", on: "evening", body: "Mine." },
+        })
+      ).status,
+    ).toBe(303);
+    expect((await comments()).at(-1)?.body).toBe("Mine.");
+    // Every refusal is still in the audit, under an action the limits
+    // don't count.
+    const { rows } = await db.query<{
+      action: string;
+      outcome: string;
+      n: number;
+    }>(
+      `SELECT action, outcome, count(*)::int AS n FROM planning.collab_audit
+       WHERE actor_email = 'dana@example.com' GROUP BY action, outcome ORDER BY action`,
+    );
+    expect(rows).toEqual([
+      { action: "comment.add", outcome: "ok", n: 1 },
+      {
+        action: "comment.add.unverified",
+        outcome: "refused",
+        n: writeLimits.tenMinutes * 2,
+      },
+    ]);
   });
 });
 

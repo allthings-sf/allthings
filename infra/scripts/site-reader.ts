@@ -9,9 +9,10 @@
  * because roles made there join neon_superuser: Neon's own "reader" role can
  * insert, create roles and bypass row-level security.
  *
- * The new connection string goes straight into the repository's
- * NEON_READER_URL secret and a 1Password item, for deploys from a maintainer's
- * machine; it is never printed. Run it from the repository root with the
+ * The new connection string goes straight into NEON_READER_URL in each of
+ * READER_ENVIRONMENTS (and the repository's, while workflows read it),
+ * and a 1Password item for deploys from a maintainer's machine; it is
+ * never printed. Run it from the repository root with the
  * owner's connection string in the environment, passed without printing it:
  *
  *   OWNER_URL=$(bunx neonctl@latest connection-string br-round-dust-a6avtg0r \
@@ -26,11 +27,26 @@ import {
   connectionStringFor,
   newPassword,
   provisionLoginRole,
+  requireMainOnly,
   storeConnectionString,
 } from "./login-role.ts";
 import { siteTables } from "../../core/src/site-tables.ts";
 
 export const SITE_READER = "site_reader";
+
+/**
+ * The environments NEON_READER_URL is a secret of, each deploying only from
+ * main (requireMainOnly): production-read, for the checks that read
+ * production on main and on their schedules (the migration guard, hero
+ * photos, completeness). deploy.yaml's staging deploy still reads the
+ * repository secret, so a rotation keeps that current too
+ * (STILL_IN_REPOSITORY), until its environment holds one; then that
+ * environment joins this list and the repository secret goes.
+ */
+export const READER_ENVIRONMENTS = ["production-read"] as const;
+
+/** deploy.yaml's staging deploy still reads the repository's NEON_READER_URL. */
+const STILL_IN_REPOSITORY = true;
 
 /**
  * The tables the public site reads (core's src/site-tables.ts, whose rows'
@@ -71,6 +87,7 @@ async function main(): Promise<void> {
   const owner = process.env["OWNER_URL"];
   if (!owner) throw new Error("OWNER_URL is required (see this file's header)");
   const vault = process.env["VAULT"] ?? "allthings";
+  await requireMainOnly(READER_ENVIRONMENTS);
 
   const password = newPassword();
   const sql = new Bun.SQL(owner);
@@ -86,13 +103,15 @@ async function main(): Promise<void> {
   await storeConnectionString({
     value: connectionStringFor(owner, SITE_READER, password),
     secret: "NEON_READER_URL",
+    environments: READER_ENVIRONMENTS,
+    repository: STILL_IN_REPOSITORY,
     item,
     vault,
     notes:
       "Read-only connection to production for Hyperdrive on every non-prod stage. Rotate with infra/scripts/site-reader.ts in allthings-sf/allthings.",
   });
   console.log(
-    `✓ ${SITE_READER} ${created ? "created" : "has a new password"}, SELECT on ${SITE_TABLES.length} tables; NEON_READER_URL and 1Password ("${item}" in ${vault}) updated`,
+    `✓ ${SITE_READER} ${created ? "created" : "has a new password"}, SELECT on ${SITE_TABLES.length} tables; NEON_READER_URL (${[...READER_ENVIRONMENTS, ...(STILL_IN_REPOSITORY ? ["the repository"] : [])].join(", ")}) and 1Password ("${item}" in ${vault}) updated`,
   );
 }
 

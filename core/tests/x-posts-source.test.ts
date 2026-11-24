@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigProvider, Effect, Layer } from "effect";
@@ -125,6 +125,67 @@ describe("XPostsSource.xApi", () => {
     );
     await read(directory, asked);
     expect(asked).toEqual(["/2/tweets", "/2/tweets", "/2/tweets"]);
+  });
+
+  test("reads kept answers only from a directory no one else may write", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "x-cache-"));
+    directories.push(directory);
+    const asked: Array<string> = [];
+    await read(directory, asked);
+    const [entry] = await readdir(directory);
+    const forged = structuredClone(answer);
+    forged.data[0]!.text = "not what X said";
+    await Bun.write(join(directory, entry!), JSON.stringify(forged));
+    // Another account may write there now: what it holds may be anyone's.
+    await chmod(directory, 0o777);
+    const posts = await read(directory, asked);
+    expect(posts.get("1")?.text).toBe("human <> agent");
+    expect(asked).toEqual(["/2/tweets", "/2/tweets"]);
+    // Nor is anything kept there.
+    expect(await Bun.file(join(directory, entry!)).json()).toEqual(forged);
+    await chmod(directory, 0o700);
+    expect((await read(directory, asked)).get("1")?.text).toBe(
+      "not what X said",
+    );
+  });
+
+  test("stops at a page token it has already followed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "x-cache-"));
+    directories.push(directory);
+    let requests = 0;
+    const looping = XPostsSource.xApi({ directory, day: "2026-10-03" }).pipe(
+      Layer.provide(
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              requests += 1;
+              // A page with no posts that points back at itself, then,
+              // past what any run should read, a failure to end the test.
+              return HttpClientResponse.fromWeb(
+                request,
+                requests > 50
+                  ? new Response(null, { status: 400 })
+                  : Response.json({ meta: { next_token: "again" } }),
+              );
+            }),
+          ),
+        ),
+      ),
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ X_BEARER_TOKEN: "test" }),
+        ),
+      ),
+    );
+    const posts = await Effect.runPromise(
+      Effect.gen(function* () {
+        const source = yield* XPostsSource;
+        return yield* source.ownPosts("42", "2026-07-05T00:00:00.000Z", 100);
+      }).pipe(Effect.provide(looping)),
+    );
+    expect(posts).toEqual([]);
+    expect(requests).toBe(2);
   });
 
   test("never asks X for more of someone's posts than it may read", async () => {

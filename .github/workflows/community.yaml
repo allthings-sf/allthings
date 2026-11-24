@@ -9,6 +9,10 @@ name: Community snapshot
 # site_sync (NEON_SYNC_URL), through the same snapshot: the day's first value
 # stays, and the Worker leaves a source alone once the day has it. It fails
 # only on what someone has to act on, as the sync's step does.
+#
+# NEON_SYNC_URL, a write role, is a secret of the production-sync
+# environment, which only main may use: a dispatch on any other branch is
+# refused before its code runs.
 on:
   schedule:
     # Four times a day; the first stores the day's number.
@@ -26,6 +30,7 @@ jobs:
   github:
     name: 🐙 GitHub's numbers
     runs-on: ubuntu-latest
+    environment: production-sync
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

@@ -12,9 +12,9 @@ import { heroPhotoProblems, wallPhotos } from "../src/hero-photos.ts";
  * to those in src/faces.ts. A photo must be an image on media.allthings.dev
  * attached to the evening it names, and that evening one of ours,
  * published and over; a face must be a profile with a photo there who has
- * been on stage at one of those evenings. CI runs it on pull requests that
- * change the picks or how they're read, on main, and weekly
- * (.github/workflows/hero-photos.yaml).
+ * been on stage at one of those evenings. CI runs it on main and weekly
+ * (.github/workflows/hero-photos.yaml); pull requests don't get
+ * production's credential.
  *
  *   bun run hero-photos
  *

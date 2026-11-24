@@ -6,23 +6,16 @@ name: Hero photos
 # the read-only site_reader role and fails if a page can't show one of them:
 # an image that is gone, off media.allthings.dev, not the named evening's,
 # or of an evening that is a draft, someone else's, or still ahead; or a
-# face without a photo there, or who hasn't been on stage. It runs
-# when a pull request changes the photos or how they're read, on main, and
-# weekly, since production can change under the file.
+# face without a photo there, or who hasn't been on stage. It runs on
+# main and weekly, since production can change under the file. It doesn't
+# run on pull requests: NEON_READER_URL is a secret of the production-read
+# environment, which only main may use, so no pull request's code runs
+# with it. A pull request that changes the photos is checked by main's run
+# once it merges, or before, by `bun run hero-photos` in core/ with
+# DATABASE_URL set.
 on:
   push:
     branches: ["main"]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "core/backfill/wall-photos.json"
-      - "core/backfill/faces.json"
-      - "core/src/hero-photos.ts"
-      - "core/src/faces.ts"
-      - "core/src/community.ts"
-      - "core/src/catalog.ts"
-      - "core/scripts/hero-photos.ts"
-      - ".github/workflows/hero-photos.yaml"
   schedule:
     - cron: "0 16 * * 1"
   workflow_dispatch:
@@ -37,9 +30,8 @@ concurrency:
 jobs:
   check:
     name: 🖼️ Hero photos
-    # A pull request from a fork gets no secrets; main's run checks it.
-    if: github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
+    environment: production-read
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
