@@ -220,10 +220,15 @@ describe.skipIf(studioRun)("the draft refresh", () => {
     });
   });
 
-  test("keeps a stored draft address hidden when the feed publishes it without an API key", async () => {
+  test("keeps a stored draft address hidden when the feed publishes it without an API key, and calls off a reveal announced before", async () => {
     await run([answer({ location_visibility: "guests-only" })], false);
     const before = await stored();
     expect(before?.["full_address"]).toContain("1070 Maryland St");
+    // A run announced a reveal while the evening was public, before it
+    // became the draft it is now.
+    await db.exec(`UPDATE events
+      SET venue_reveal_token = '00000000-0000-4000-8000-0000000000aa'
+      WHERE luma_event_id = 'evt-draft'`);
 
     const feed = [
       "BEGIN:VCALENDAR",
@@ -277,6 +282,16 @@ describe.skipIf(studioRun)("the draft refresh", () => {
         fullAddress: null,
       },
     ]);
+    // That reveal rests on an answer from before the evening was published
+    // again, so it must find no token to show the venue by.
+    expect(
+      (
+        await db.query(
+          `SELECT venue_guests_only, venue_reveal_token FROM events
+           WHERE luma_event_id = 'evt-draft'`,
+        )
+      ).rows[0],
+    ).toEqual({ venue_guests_only: true, venue_reveal_token: null });
   });
 
   test("does nothing without LUMA_API_KEY", async () => {

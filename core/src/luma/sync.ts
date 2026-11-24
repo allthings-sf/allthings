@@ -25,7 +25,8 @@ import { venueArchive } from "./venue-archive.ts";
  *   hides from the start (Luma shows it to guests only) is filled in from
  *   Luma's API instead (src/luma/venues.ts).
  * - When a draft becomes public, its venue is guests-only until the API
- *   confirms it is public.
+ *   confirms it is public, and any reveal announced before is called off
+ *   (`venue_reveal_token`): its answers predate the publication.
  * - The site, once the event exists: slug, tagline, attendee limit, and every
  *   other column and related row (talks, hosts, photos, recording, flags).
  *   The sync writes slug, tagline and attendee limit for new events only.
@@ -387,6 +388,8 @@ const make = Effect.gen(function* () {
           end_date = excluded.end_date,
           is_draft = excluded.is_draft,
           venue_guests_only = e.venue_guests_only OR (e.is_draft AND NOT excluded.is_draft),
+          venue_reveal_token = CASE WHEN e.is_draft AND NOT excluded.is_draft
+            THEN NULL ELSE e.venue_reveal_token END,
           street_address = ${venue("street_address")},
           short_location = ${venue("short_location")},
           full_address = ${venue("full_address")},
