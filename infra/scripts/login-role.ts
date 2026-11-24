@@ -1,8 +1,9 @@
 /**
  * What site-reader.ts and site-sync.ts share: a login role created by the
  * database owner with SQL (never Neon's console or API, whose roles join
- * neon_superuser), a fresh password, and its connection string stored in a
- * repository secret and 1Password without ever being printed.
+ * neon_superuser), a fresh password, and its connection string stored as a
+ * secret of environments that deploy only from main, and in 1Password,
+ * without ever being printed.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -126,38 +127,111 @@ export function connectionStringFor(
   return url.toString();
 }
 
+/** What GitHub says of an environment and its deployment branch policies. */
+export interface EnvironmentSettings {
+  readonly can_admins_bypass?: boolean;
+  readonly deployment_branch_policy?: {
+    readonly protected_branches?: boolean;
+    readonly custom_branch_policies?: boolean;
+  } | null;
+}
+export interface BranchPolicies {
+  readonly branch_policies: ReadonlyArray<{
+    readonly name: string;
+    readonly type?: string;
+  }>;
+}
+
 /**
- * Writes `value` to the repository secret `secret`, then to a new 1Password
- * item `item` in `vault`, and only then archives the items it replaces, so
- * 1Password always holds a working value (1Password's own API Credential
- * template, passed as a file only this user can read and removed right
- * after: op ignores the values of a template piped on stdin). The role's
- * password has already changed when this runs, so each failure says which
- * store has the new value and to rerun the script.
+ * Whether an environment deploys only from main, admins included: one
+ * branch policy, main, and no bypass. A job in it on any other branch, a
+ * pull request's included, is refused before it starts, so its secrets
+ * never reach that branch's code, as a repository secret's would.
+ */
+export const deploysOnlyFromMain = (
+  settings: EnvironmentSettings,
+  policies: BranchPolicies,
+): boolean =>
+  settings.can_admins_bypass === false &&
+  settings.deployment_branch_policy?.custom_branch_policies === true &&
+  policies.branch_policies.length === 1 &&
+  policies.branch_policies[0]?.name === "main" &&
+  (policies.branch_policies[0].type ?? "branch") === "branch";
+
+/**
+ * Fails unless every one of `environments` deploys only from main
+ * ({@link deploysOnlyFromMain}). Each script runs it before it changes the
+ * role's password, so a refusal changes nothing.
+ */
+export async function requireMainOnly(
+  environments: ReadonlyArray<string>,
+): Promise<void> {
+  for (const environment of environments) {
+    const path = `repos/${repo}/environments/${encodeURIComponent(environment)}`;
+    const settings = JSON.parse(
+      await run(["gh", "api", path]),
+    ) as EnvironmentSettings;
+    const policies = JSON.parse(
+      await run(["gh", "api", `${path}/deployment-branch-policies`]),
+    ) as BranchPolicies;
+    if (!deploysOnlyFromMain(settings, policies)) {
+      throw new Error(
+        `The ${environment} environment must deploy only from main, with no admin bypass, before a production credential goes in it. Nothing was changed.`,
+      );
+    }
+  }
+}
+
+/**
+ * Writes `value` as the secret `secret` of each of `environments` (each
+ * checked with {@link requireMainOnly} first; none keeps it in 1Password
+ * alone), then to a new 1Password item `item` in `vault`, and only then
+ * archives the items it replaces, so 1Password always holds a working value
+ * (1Password's own API Credential template, passed as a file only this user
+ * can read and removed right after: op ignores the values of a template
+ * piped on stdin). The role's password has already changed when this runs,
+ * so each failure says which store has the new value and to rerun the
+ * script.
  */
 export async function storeConnectionString(options: {
   value: string;
   secret: string;
+  environments: ReadonlyArray<string>;
   item: string;
   vault: string;
   notes: string;
 }): Promise<void> {
-  try {
-    await run(
-      ["gh", "secret", "set", options.secret, "--repo", repo],
-      options.value,
-    );
-  } catch (cause) {
-    throw new Error(
-      `The role's password has changed, but ${options.secret} and 1Password ("${options.item}") still hold the old one. Rerun this script once GitHub secret writes work.`,
-      { cause },
-    );
+  for (const environment of options.environments) {
+    try {
+      await run(
+        [
+          "gh",
+          "secret",
+          "set",
+          options.secret,
+          "--repo",
+          repo,
+          "--env",
+          environment,
+        ],
+        options.value,
+      );
+    } catch (cause) {
+      throw new Error(
+        `The role's password has changed, but ${options.secret} in the ${environment} environment (and any listed after it) and 1Password ("${options.item}") still hold the old one. Rerun this script once GitHub secret writes work.`,
+        { cause },
+      );
+    }
   }
   try {
     await storeItem(options);
   } catch (cause) {
     throw new Error(
-      `${options.secret} has the new value, but 1Password ("${options.item}") may not: ${cause instanceof Error ? cause.message : String(cause)}. Rerun this script once 1Password answers.`,
+      `${
+        options.environments.length > 0
+          ? `${options.secret} in ${options.environments.join(" and ")} has the new value, but 1Password ("${options.item}") may not`
+          : `1Password ("${options.item}") may not have the new value`
+      }: ${cause instanceof Error ? cause.message : String(cause)}. Rerun this script once 1Password answers.`,
       { cause },
     );
   }

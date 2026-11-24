@@ -25,8 +25,9 @@ import { table } from "../src/migrator.ts";
  * From the environment, never .env files:
  * - DATABASE_URL: production as site_reader, which may read the record
  *   (effect_sql.migrations) and nothing else of the migrator's. It is only
- *   read. Without it the run fails, unless NO_PRODUCTION_OK=true (a pull
- *   request from a fork gets no secrets), when the other check still runs.
+ *   read. Without it the run fails, unless NO_PRODUCTION_OK=true (pull
+ *   requests, which production's credential never reaches), when the other
+ *   check still runs.
  * - GITHUB_REPOSITORY, GITHUB_TOKEN: to list the open pull requests and the
  *   files each adds.
  * - PR_NUMBER: this pull request; unset on main, which adds nothing.
