@@ -95,6 +95,58 @@ describe("scoreCandidate", () => {
     ).toBe(6);
   });
 
+  test("only a word with a dot and, past it, a slash is read as a link", () => {
+    const linked = (text: string) =>
+      scoreCandidate(signals, post({ text })).reasons.filter((reason) =>
+        reason.startsWith("+6 links"),
+      );
+    // Anywhere in the text, after any whitespace.
+    expect(linked("e.g.\tlu.ma/event/evt-react\nsee you")).toEqual([
+      "+6 links lu.ma/event/evt-react",
+    ]);
+    expect(linked("https://lu.ma/event/evt-react")).toEqual([
+      "+6 links lu.ma/event/evt-react",
+    ]);
+    // A dot first, a slash with nothing after it, or a slash right after
+    // the dot is not a link.
+    for (const text of [
+      ".lu.ma",
+      "lu.ma/",
+      "lu./ma",
+      "lu.ma",
+      "lu/ma.event",
+      "evt-react/lu.ma",
+    ]) {
+      expect(linked(text)).toEqual([]);
+    }
+  });
+
+  test("a link in the text is not read as words", () => {
+    // The host is in the link only: it isn't named.
+    expect(
+      scoreCandidate(signals, post({ text: "acme.example/globex tonight" }))
+        .reasons,
+    ).toEqual([]);
+    // A link ending in a slash is a link too.
+    expect(
+      scoreCandidate(signals, post({ text: "acme.example/ and Globex" }))
+        .reasons,
+    ).toEqual(["+1 names Globex"]);
+  });
+
+  test("a long post is scored in time, whatever its words", () => {
+    // Bluesky allows 3000 bytes of text, X far more: words of dots and
+    // combining marks, and none with a slash.
+    for (const text of [
+      "a.\u0301".repeat(1000),
+      `${"a.".repeat(5000)} ${".".repeat(5000)}`,
+    ]) {
+      const started = performance.now();
+      scoreCandidate(signals, post({ text }));
+      expect(performance.now() - started).toBeLessThan(50);
+    }
+  });
+
   test("everything a post can say, on the night, by someone on stage", () => {
     expect(
       scoreCandidate(
