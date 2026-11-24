@@ -1,3 +1,4 @@
+import { columns, sizes } from "allthings-brand/src/layout.ts";
 import type { PortraitsById } from "allthings-core/src/portraits.ts";
 import type { YearEvening, YearView } from "allthings-core/src/year.ts";
 import { DateTime } from "effect";
@@ -87,6 +88,15 @@ function People({ people }: { readonly people: YearEvening["onStage"] }) {
   );
 }
 
+/**
+ * How wide depth.css shows an evening's photo: the last five of its row's
+ * twelve columns, and the page's width on a phone, where it comes first.
+ */
+const eveningPhotoSizes = sizes(
+  { span: 5, parts: 1, gap: 0 },
+  { below: "m", span: columns, parts: 1, gap: 0 },
+);
+
 /** One evening of the year: its words, and its photo when it has one. */
 function EveningEntry({
   entry,
@@ -146,7 +156,7 @@ function EveningEntry({
           <Photo
             photo={photo}
             mode={images}
-            sizes={screenShare(40, 100)}
+            sizes={eveningPhotoSizes}
             widest={960}
           />
         </div>
