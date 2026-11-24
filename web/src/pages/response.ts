@@ -17,6 +17,7 @@ const policy = (imgSrc: string, scripts = false, form = false) =>
     "style-src 'self'",
     "font-src 'self'",
     `img-src ${imgSrc}`,
+    "manifest-src 'self'",
     "base-uri 'none'",
     form ? "form-action 'self'" : "form-action 'none'",
     "frame-ancestors 'none'",
@@ -25,6 +26,8 @@ const policy = (imgSrc: string, scripts = false, form = false) =>
 /**
  * How pages are sent. They run no scripts and load nothing from other
  * origins, and the Content-Security-Policy makes browsers hold them to it.
+ * Each page's head links this site's web app manifest (document.tsx),
+ * which `manifest-src` allows: `default-src 'none'` would refuse it.
  * On prod, the Worker then adds Cloudflare's Web Analytics beacon to each
  * page answered 200 and widens the policy by exactly what it needs
  * (web-analytics.ts).

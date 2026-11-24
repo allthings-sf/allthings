@@ -108,7 +108,7 @@ const migrationsCheck: CustomCheck = {
 
 ${numbered([
   "Forward only, and never edited after merge: no migration that exists on the base branch is modified, renamed or deleted. To change something, the pull request adds a migration.",
-  "Each new core migration is migrations/NNNN_short_name.ts with the next id after the last, default-exporting statements([...]), listed in core/migrations/index.ts with no id skipped. Its number must be free: CI's migration guard (Migration numbers) compares it with what production has applied and with other open pull requests, and when it fails, the migration takes the number it names.",
+  "Each new core migration is migrations/NNNN_short_name.ts with the next id after the last, default-exporting statements([...]), listed in core/migrations/index.ts with no id skipped. Its number must be free: CI's migration guard (Migration numbers) compares it with what production has applied (on a pull request, as main's last run published it) and with other open pull requests, and when it fails, the migration takes the number it names.",
   "No CREATE INDEX CONCURRENTLY: each migration runs in one transaction with the others pending.",
   "The lines a migration creates are added to core/tests/fixtures/production-schema.txt.",
   "The code already on main keeps running on the migrated schema: a column or table is added before code uses it, and a drop or rename is a later migration, after the code stops using the old shape.",
