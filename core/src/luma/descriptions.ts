@@ -27,7 +27,11 @@ import { descriptionHtml, descriptionSummary } from "./description.ts";
  *   the description is empty and the summary NULL; a NULL description means
  *   the event was never asked about. An event Luma does not show us (403,
  *   404) keeps what it has, and is marked asked (an empty description) if
- *   it had nothing, so it holds no place in a capped run.
+ *   it had nothing, so it holds no place in a capped run. Only a
+ *   description anyone may read on Luma is imported: an event Luma now
+ *   shows only to its guests or members has none, so what was stored is
+ *   emptied, and an answer that doesn't say who may see the event is taken
+ *   as one Luma does not show us.
  * - The site: `events.description` and `events.tagline`, which the import
  *   never reads or writes. Pages show the site's description before Luma's,
  *   and the summary only while the tagline is a placeholder
