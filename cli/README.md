@@ -6,7 +6,7 @@ allthings from your terminal: what's coming up, who's on stage and how to get in
 curl -fsSL https://allthings.dev/install.bash | bash
 ```
 
-That installs the latest stable release, `allthings` 2, in `~/.allthings/bin`.
+That installs the latest stable release in `~/.allthings/bin` after checking its SHA-256 digest. Older releases without a `SHA256SUMS` file need jq or Python 3 to read GitHub’s published asset digest. The installer refuses a binary without a published checksum.
 
 It is also on npm as `allthings`, for Bun:
 

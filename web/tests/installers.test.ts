@@ -91,6 +91,69 @@ describe("the CLI's installers", () => {
     }
   });
 
+  test("verifies the selected asset before replacing or running the CLI", async () => {
+    const temp = await mkdtemp(join(tmpdir(), "allthings-checksum-"));
+    const binary = "#!/bin/sh\necho verified-cli\n";
+    const digest = new Bun.CryptoHasher("sha256").update(binary).digest("hex");
+    const curl = join(temp, "tools/curl");
+    await Bun.write(
+      curl,
+      [
+        "#!/usr/bin/env bash",
+        'url="${!#}"',
+        'case "$url" in',
+        '  */releases/tags/*) printf "%s" "$METADATA" ;;',
+        '  */SHA256SUMS) [[ -z "$METADATA" ]] || exit 22; printf "%s  %s\\n" "$DIGEST" "$ASSET" ;;',
+        '  */allthings-bun-*) printf "%s" "$BINARY" > "$3" ;;',
+        "  *) exit 22 ;;",
+        "esac",
+      ].join("\n"),
+    );
+    await chmod(curl, 0o755);
+    const os = process.platform;
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    const asset = `allthings-bun-${os}-${arch}`;
+    const installed = join(temp, "bin/allthings");
+    const run = (checksum: string, filename = asset, metadata = "") =>
+      Bun.spawnSync(["bash", "cli/install.bash"], {
+        cwd: new URL("../..", import.meta.url).pathname,
+        env: {
+          PATH: `${join(temp, "tools")}:/usr/bin:/bin`,
+          HOME: temp,
+          ALLTHINGS_HOME: temp,
+          ALLTHINGS_VERSION: "2.8.1",
+          BINARY: binary,
+          ASSET: filename,
+          DIGEST: checksum,
+          METADATA: metadata,
+        },
+      });
+    try {
+      await Bun.write(installed, "existing install");
+      const metadata = (checksum: string | null) =>
+        JSON.stringify({ assets: [{ name: asset, digest: checksum }] });
+      for (const result of [
+        run("0".repeat(64)),
+        run(digest, "other"),
+        run("", asset, metadata(null)),
+      ]) {
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout.toString()).not.toContain("verified-cli");
+      }
+      expect(await Bun.file(installed).text()).toBe("existing install");
+      for (const verified of [
+        run(digest),
+        run("", asset, metadata(`sha256:${digest}`)),
+      ]) {
+        expect(verified.exitCode).toBe(0);
+        expect(verified.stdout.toString()).toContain("verified-cli");
+      }
+      expect(await Bun.file(installed).text()).toBe(binary);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
   test("are bash that parses", async () => {
     const scripts = [
       ...installers.map(([, source]) => source),
