@@ -61,9 +61,21 @@ jobs:
           # as its read-only role.
           NEON_READER_URL: ${{ secrets.NEON_READER_URL }}
         run: |
-          bun alchemy deploy --stage staging --yes --no-input > deploy.log 2>&1
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
+          bun alchemy deploy --stage staging --yes --no-input > "$log" 2>&1 || {
+            status=$?
+            reason="check the staging stack and Alchemy state"
+            if grep -Eqi 'unauthorized|forbidden|authentication|permission denied|authorization' "$log"; then
+              reason="check the environment credential and Cloudflare grants"
+            elif grep -Eqi 'timed out|timeout|ECONNRESET|fetch failed' "$log"; then
+              reason="check connectivity to Cloudflare and the state store"
+            fi
+            echo "::error::Staging deploy failed (exit $status). Next step: $reason."
+            exit "$status"
+          }
           # The stack returns the Web Worker's URL as its webUrl output.
-          url=$(sed -nE "s/^ *webUrl: '(https:[^']+)'.*/\1/p" deploy.log | tail -1)
+          url=$(sed -nE "s/^ *webUrl: '(https:[^']+)'.*/\1/p" "$log" | tail -1)
           test -n "$url"
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed \`staging\`: $url" >> "$GITHUB_STEP_SUMMARY"
