@@ -10,7 +10,7 @@
  * insert, create roles and bypass row-level security.
  *
  * The new connection string goes straight into NEON_READER_URL in each of
- * READER_ENVIRONMENTS (and the repository's, while deploy.yaml reads it),
+ * READER_ENVIRONMENTS (and the repository's, while workflows read it),
  * and a 1Password item for deploys from a maintainer's machine; it is
  * never printed. Run it from the repository root with the
  * owner's connection string in the environment, passed without printing it:
@@ -37,15 +37,15 @@ export const SITE_READER = "site_reader";
 /**
  * The environments NEON_READER_URL is a secret of, each deploying only from
  * main (requireMainOnly): production-read, for the checks that read
- * production on main and on their schedules (migrations, hero photos,
- * completeness). Pull requests never get it. deploy.yaml's stages still read
- * the repository secret, so a rotation keeps that current too
- * (STILL_IN_REPOSITORY); their environment joins this list once it deploys
- * only from main, and the repository secret goes.
+ * production on main and on their schedules (hero photos, completeness).
+ * The migration guard and deploy.yaml's stages still read the repository
+ * secret, so a rotation keeps that current too (STILL_IN_REPOSITORY), until
+ * they read it from an environment only main may use; then the repository
+ * secret goes.
  */
 export const READER_ENVIRONMENTS = ["production-read"] as const;
 
-/** deploy.yaml's stages still read the repository's NEON_READER_URL. */
+/** The migration guard and deploy.yaml still read the repository's NEON_READER_URL. */
 const STILL_IN_REPOSITORY = true;
 
 /**

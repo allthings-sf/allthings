@@ -2,10 +2,9 @@
  * The guard against two migrations taking one number (core/scripts/
  * migration-guard.ts runs it on every pull request and on main): a
  * branch's core migrations must extend what production has applied, in
- * order (on a pull request, which never reads production, what main has),
- * and a pull request must not add a migration under a number production
- * or another open pull request already has. Each problem says exactly what
- * to renumber, and to what.
+ * order, and a pull request must not add a migration under a number
+ * production or another open pull request already has. Each problem says
+ * exactly what to renumber, and to what.
  */
 
 /** A core migration as the migrator knows it: core/migrations/NNNN_name.ts. */
@@ -22,13 +21,8 @@ export interface Claim extends MigrationRef {
 export interface GuardInput {
   /** This checkout's core migrations, in id order. */
   readonly local: ReadonlyArray<MigrationRef>;
-  /**
-   * Production's record of applied migrations, in id order; or, where
-   * production can't be read (a pull request), the base branch's.
-   */
+  /** Production's record of applied migrations, in id order. */
   readonly applied: ReadonlyArray<MigrationRef>;
-  /** Whose list `applied` is: production's (the default) or main's. */
-  readonly appliedBy?: "production" | "main";
   /** The migrations this pull request adds; none on main. */
   readonly added: ReadonlyArray<MigrationRef>;
   /** The migrations every other open pull request adds. */
@@ -48,8 +42,6 @@ const same = (a: MigrationRef, b: MigrationRef) =>
  */
 export function checkMigrations(input: GuardInput): ReadonlyArray<string> {
   const { local, applied, added, claims } = input;
-  const main = input.appliedBy === "main";
-  const has = main ? "Main has" : "Production has applied";
   const isAdded = (m: MigrationRef) => added.some((a) => same(a, m));
   // Numbers anyone has: production, this branch's base, other open pulls.
   const taken = [
@@ -79,12 +71,12 @@ export function checkMigrations(input: GuardInput): ReadonlyArray<string> {
     if (here !== undefined && same(here, done)) continue;
     if (here === undefined) {
       problems.push(
-        `${has} ${applied
+        `Production has applied ${applied
           .slice(index)
           .map(fileOf)
           .join(
             ", ",
-          )}, which this branch doesn't have: merge main${main ? "" : ", which has them"}.`,
+          )}, which this branch doesn't have: merge main, which has them.`,
       );
       break;
     }
@@ -92,11 +84,11 @@ export function checkMigrations(input: GuardInput): ReadonlyArray<string> {
       // This pull request's migrations from here on sit where production's are.
       const ours = local.slice(index).filter(isAdded);
       problems.push(
-        `${has} ${fileOf(done)}, where this pull request has ${fileOf(here)}: merge main, then ${ours.map(renumber).join("; ")}.`,
+        `Production has applied ${fileOf(done)}, where this pull request has ${fileOf(here)}: merge main, then ${ours.map(renumber).join("; ")}.`,
       );
     } else {
       problems.push(
-        `${has} ${fileOf(done)}, where this branch has ${fileOf(here)}, which it didn't add: ${main ? "merged" : "applied"} migrations are never renamed, reordered or removed; merge main, or put ${fileOf(here)} back as ${fileOf(done)}.`,
+        `Production has applied ${fileOf(done)}, where this branch has ${fileOf(here)}, which it didn't add: applied migrations are never renamed, reordered or removed; merge main, or put ${fileOf(here)} back as ${fileOf(done)}.`,
       );
     }
     break;

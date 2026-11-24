@@ -1,18 +1,11 @@
 name: Migration numbers
 
-# Two migrations must never take one number (core/src/migration-guard.ts).
-# On every pull request, core's migrations must extend main's, in order
-# (read from GitHub: at the pull request's base when it targets main, at
-# main otherwise), and a migration it
-# adds must not take a number another open pull request adds. On main, they
-# must extend what production has applied, read from effect_sql.migrations
-# as the read-only site_reader role. A failure says what to renumber, and
-# to what.
-#
-# Production's credential (NEON_READER_URL) is a secret of the
-# production-read environment, which only main may use, so no pull
-# request's code ever runs with it, whoever opens it. Main's run checks
-# production once a pull request merges.
+# Two migrations must never take one number (core/src/migration-guard.ts):
+# on every pull request and on main, core's migrations must extend what
+# production has applied, in order, read from effect_sql.migrations as the
+# read-only site_reader role; and a pull request must not add a migration
+# under a number another open pull request adds. A failure says what to
+# renumber, and to what.
 on:
   push:
     branches: ["main"]
@@ -30,38 +23,7 @@ concurrency:
 jobs:
   guard:
     name: 🔢 Migration numbers
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    steps:
-      - name: ⬇️ Checkout repo
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: 🍞 Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.3.14
-
-      - name: 📥 Download core deps
-        working-directory: core
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/bun-install.sh"
-
-      - name: 🔢 Check migration numbers against main and open pull requests
-        working-directory: core
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          # main's commit to compare with: the base, when that is main.
-          MAIN_REF: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.base.sha || 'main' }}
-          NO_PRODUCTION_OK: "true"
-        run: bun run --silent migration-guard
-
-  production:
-    name: 🔢 Migration numbers (production)
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: production-read
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -82,4 +44,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.NEON_READER_URL }}
           GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # A pull request from a fork gets no secrets: it checks open pull
+          # requests only, and main's run checks production when it merges.
+          NO_PRODUCTION_OK: ${{ github.event.pull_request.head.repo.fork == true }}
         run: bun run --silent migration-guard

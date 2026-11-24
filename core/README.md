@@ -2396,23 +2396,11 @@ migrator (`src/migrator.ts`). Production takes migrations from here alone.
   `tests/fixtures/production-schema.txt`, which is production's catalog once
   every migration here has run (`bun run migrate`, below).
 - Its number must be free: CI's migration guard (`bun run migration-guard`,
-  `src/migration-guard.ts`) fails when a pull request's migrations don't
-  extend main's, in order, or when it adds a migration under a number
-  another open pull request adds. The guard gets no production credential
-  on a pull request, so a green check there isn't a check against
-  production (deploy.yaml's previews still read the repository's
-  `NEON_READER_URL` until they deploy from an environment of their own):
-  main's run is (`🔢 Migration numbers (production)`), failing when main's
-  migrations don't extend what production has applied, in order (it reads
-  `effect_sql.migrations` as site_reader, in the main-only
-  `production-read` environment). A migration applied to production before
-  it merges is caught on pull requests only while the pull request that
-  adds it stays open, so apply one only right before its pull request
-  merges. If that pull request closes unmerged instead, only main's
-  production check catches the clash, after the next merge, and the pull
-  request check can't confirm a fix until it reads production's record
-  again. The failure names each migration to renumber, and the number it
-  should take.
+  `src/migration-guard.ts`, on every pull request and on main) fails when a
+  branch's migrations don't extend what production has applied, in order
+  (it reads `effect_sql.migrations` as site_reader), or when a pull request
+  adds a migration under a number another open pull request adds. The
+  failure names each migration to renumber, and the number it should take.
 
 `0001_baseline` is production's schema on 2026-10-04, read from its catalog,
 not a replay of the old Next app's drizzle migrations: production received

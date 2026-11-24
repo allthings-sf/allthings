@@ -25,15 +25,11 @@ import { table } from "../src/migrator.ts";
  * From the environment, never .env files:
  * - DATABASE_URL: production as site_reader, which may read the record
  *   (effect_sql.migrations) and nothing else of the migrator's. It is only
- *   read. Without it the run fails, unless NO_PRODUCTION_OK=true (pull
- *   requests, which production's credential never reaches): then the
- *   branch must extend main's migrations at MAIN_REF instead, read from
- *   GitHub, and the other check still runs.
+ *   read. Without it the run fails, unless NO_PRODUCTION_OK=true (a pull
+ *   request from a fork gets no secrets), when the other check still runs.
  * - GITHUB_REPOSITORY, GITHUB_TOKEN: to list the open pull requests and the
- *   files each adds, and main's migrations.
+ *   files each adds.
  * - PR_NUMBER: this pull request; unset on main, which adds nothing.
- * - MAIN_REF: main's commit to compare with: the pull request's base when
- *   it targets main (the commit it merges into), or main itself.
  */
 
 const env = (name: string) => {
@@ -56,66 +52,36 @@ const appliedInProduction = Effect.gen(function* () {
   );
 }).pipe(Effect.provide(Database.layer));
 
-/** One answer from GitHub's REST API, for this repository's `path`. */
-const githubGet = async <A>(path: string): Promise<A> => {
-  const repository = env("GITHUB_REPOSITORY");
-  const token = env("GITHUB_TOKEN");
-  if (repository === undefined || token === undefined) {
-    throw new Error("GITHUB_REPOSITORY and GITHUB_TOKEN are required");
-  }
-  const response = await fetch(
-    `https://api.github.com/repos/${repository}/${path}`,
-    {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${token}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`GitHub answered ${response.status} for ${path}`);
-  }
-  return (await response.json()) as A;
-};
-
 /** GitHub's REST API, every page of a list. */
 const githubList = <A>(path: string) =>
   Effect.tryPromise({
     try: async () => {
+      const repository = env("GITHUB_REPOSITORY");
+      const token = env("GITHUB_TOKEN");
+      if (repository === undefined || token === undefined) {
+        throw new Error("GITHUB_REPOSITORY and GITHUB_TOKEN are required");
+      }
       const items: Array<A> = [];
       for (let page = 1; ; page++) {
         const separator = path.includes("?") ? "&" : "?";
-        const batch = await githubGet<Array<A>>(
-          `${path}${separator}per_page=100&page=${page}`,
+        const response = await fetch(
+          `https://api.github.com/repos/${repository}/${path}${separator}per_page=100&page=${page}`,
+          {
+            headers: {
+              accept: "application/vnd.github+json",
+              authorization: `Bearer ${token}`,
+              "x-github-api-version": "2022-11-28",
+            },
+          },
         );
+        if (!response.ok) {
+          throw new Error(`GitHub answered ${response.status} for ${path}`);
+        }
+        const batch = (await response.json()) as Array<A>;
         items.push(...batch);
         if (batch.length < 100) return items;
       }
     },
-    catch: (cause) =>
-      cause instanceof Error ? cause : new Error(String(cause)),
-  });
-
-/**
- * The core migrations at `ref` (a commit or branch), in id order, read from
- * GitHub rather than this checkout, so they are what main has, whatever the
- * pull request changed.
- */
-const migrationsAt = (ref: string) =>
-  Effect.tryPromise({
-    try: async () =>
-      (
-        await githubGet<Array<{ path: string; type: string }>>(
-          `contents/core/migrations?ref=${encodeURIComponent(ref)}`,
-        )
-      )
-        .flatMap((entry) => {
-          const migration =
-            entry.type === "file" ? migrationOfPath(entry.path) : null;
-          return migration === null ? [] : [migration];
-        })
-        .toSorted((a, b) => a.id - b.id),
     catch: (cause) =>
       cause instanceof Error ? cause : new Error(String(cause)),
   });
@@ -152,18 +118,10 @@ const command = Command.make("migration-guard", {}, () =>
         ),
       );
     }
-    const main = env("MAIN_REF");
-    const applied = production
-      ? yield* appliedInProduction
-      : main === undefined
-        ? []
-        : yield* migrationsAt(main);
-    const appliedBy = production ? "production" : "main";
+    const applied = production ? yield* appliedInProduction : [];
     if (!production) {
       yield* Console.log(
-        main === undefined
-          ? "No production URL and no MAIN_REF: checking open pull requests only."
-          : `No production URL (pull requests never get it): checking against main's migrations at ${main}, and open pull requests.`,
+        "No production URL (a pull request from a fork): checking open pull requests only.",
       );
     }
 
@@ -181,20 +139,14 @@ const command = Command.make("migration-guard", {}, () =>
 
     yield* Console.log(
       [
-        `${production ? "Production has applied" : "Main has"}: ${applied.length === 0 ? "(not read)" : `${applied.length}, up to ${fileOf(applied.at(-1) ?? { id: 0, name: "" })}`}`,
+        `Production has applied: ${applied.length === 0 ? "(not read)" : `${applied.length}, up to ${fileOf(applied.at(-1) ?? { id: 0, name: "" })}`}`,
         `This branch has: ${local.length}, up to ${fileOf(local.at(-1) ?? { id: 0, name: "" })}`,
         `This pull request adds: ${added.length === 0 ? "none" : added.map(fileOf).join(", ")}`,
         `Other open pull requests add: ${claims.length === 0 ? "none" : claims.map((c) => `${fileOf(c)} (#${c.pr})`).join(", ")}`,
       ].join("\n"),
     );
 
-    const problems = checkMigrations({
-      local,
-      applied,
-      appliedBy,
-      added,
-      claims,
-    });
+    const problems = checkMigrations({ local, applied, added, claims });
     if (problems.length > 0) {
       return yield* Effect.fail(
         new Error(
