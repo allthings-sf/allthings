@@ -37,15 +37,15 @@ export const SITE_READER = "site_reader";
 /**
  * The environments NEON_READER_URL is a secret of, each deploying only from
  * main (requireMainOnly): production-read, for the checks that read
- * production on main and on their schedules (hero photos, completeness).
- * The migration guard and deploy.yaml's stages still read the repository
- * secret, so a rotation keeps that current too (STILL_IN_REPOSITORY), until
- * they read it from an environment only main may use; then the repository
- * secret goes.
+ * production on main and on their schedules (the migration guard, hero
+ * photos, completeness). deploy.yaml's staging deploy still reads the
+ * repository secret, so a rotation keeps that current too
+ * (STILL_IN_REPOSITORY), until its environment holds one; then that
+ * environment joins this list and the repository secret goes.
  */
 export const READER_ENVIRONMENTS = ["production-read"] as const;
 
-/** The migration guard and deploy.yaml still read the repository's NEON_READER_URL. */
+/** deploy.yaml's staging deploy still reads the repository's NEON_READER_URL. */
 const STILL_IN_REPOSITORY = true;
 
 /**
