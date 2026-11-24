@@ -11,10 +11,10 @@
  *
  * Like site_reader it is created with SQL by the database owner, never in
  * Neon's console or API, because roles made there join neon_superuser. The
- * connection string goes straight into the repository's NEON_SYNC_URL secret
- * and a 1Password item; it is never printed. Run it from the repository root
- * with the owner's connection string in the environment, passed without
- * printing it:
+ * connection string goes straight into NEON_SYNC_URL in each of
+ * SYNC_ENVIRONMENTS and a 1Password item; it is never printed. Run it from
+ * the repository root with the owner's connection string in the
+ * environment, passed without printing it:
  *
  *   OWNER_URL=$(bunx neonctl@latest connection-string br-round-dust-a6avtg0r \
  *     --project-id wispy-sea-75401301 --role-name neondb_owner --database-name neondb) \
@@ -29,12 +29,21 @@ import {
   connectionStringFor,
   newPassword,
   provisionLoginRole,
+  requireMainOnly,
   type Statements,
   storeConnectionString,
 } from "./login-role.ts";
 import { grantedQuery } from "./studio.ts";
 
 export const SITE_SYNC = "site_sync";
+
+/**
+ * The environments NEON_SYNC_URL is a secret of, each deploying only from
+ * main (requireMainOnly): production-sync, for the community snapshot's
+ * scheduled runs (.github/workflows/community.yaml). No other workflow, and
+ * no branch but main, gets this write role.
+ */
+export const SYNC_ENVIRONMENTS = ["production-sync"] as const;
 
 interface ColumnGrants {
   readonly select?: ReadonlyArray<string>;
@@ -379,7 +388,7 @@ async function plan(owner: string, vault: string): Promise<void> {
           delta.length === 0
             ? "Its privileges would stay as they are."
             : `Its privileges would change:\n${delta.join("\n")}`,
-          `Its connection string would go to NEON_SYNC_URL and 1Password, "${item}" (credential) in ${vault}.`,
+          `Its connection string would go to NEON_SYNC_URL (${SYNC_ENVIRONMENTS.join(", ")}) and 1Password, "${item}" (credential) in ${vault}.`,
           "Nothing was changed. Run it again without --dry-run to do it.",
         ].join("\n"),
       );
@@ -401,6 +410,7 @@ async function main(): Promise<void> {
   const owner = process.env["OWNER_URL"];
   if (!owner) throw new Error("OWNER_URL is required (see this file's header)");
   const vault = process.env["VAULT"] ?? "allthings";
+  await requireMainOnly(SYNC_ENVIRONMENTS);
   if (process.argv.includes("--dry-run")) return plan(owner, vault);
 
   const password = newPassword();
@@ -425,13 +435,14 @@ async function main(): Promise<void> {
   await storeConnectionString({
     value: connectionStringFor(owner, SITE_SYNC, password),
     secret: "NEON_SYNC_URL",
+    environments: SYNC_ENVIRONMENTS,
     item,
     vault,
     notes:
       "The hourly Luma sync's connection to production (its Worker's Hyperdrive). Rotate with infra/scripts/site-sync.ts in allthings-sf/allthings.",
   });
   console.log(
-    `✓ ${SITE_SYNC} ${created ? "created" : "has a new password"}, exactly SITE_SYNC_GRANTS on ${Object.keys(SITE_SYNC_GRANTS).length} tables; NEON_SYNC_URL and 1Password ("${item}" in ${vault}) updated`,
+    `✓ ${SITE_SYNC} ${created ? "created" : "has a new password"}, exactly SITE_SYNC_GRANTS on ${Object.keys(SITE_SYNC_GRANTS).length} tables; NEON_SYNC_URL (${SYNC_ENVIRONMENTS.join(", ")}) and 1Password ("${item}" in ${vault}) updated`,
   );
 }
 
