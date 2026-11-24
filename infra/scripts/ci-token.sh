@@ -120,7 +120,8 @@ else
   cf accounts tokens update "$id" --name "$name" --policies "$policies" | result | jq -e '.id' >/dev/null
   if $rotate; then
     echo "→ rolling the token's value"
-    cf accounts tokens roll "$id" | result | jq 'if type == "string" then {value: .} else . end' | set_secret
+    # --rotate is the caller's confirmation. cf exits without a value if it cannot prompt.
+    cf accounts tokens roll "$id" --force | result | jq 'if type == "string" then {value: .} else . end' | set_secret
   fi
 fi
 
