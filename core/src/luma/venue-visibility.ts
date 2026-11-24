@@ -111,7 +111,13 @@ export interface VenueVisibilityOptions {
 
 /** The service: one run of the venue visibility check. */
 export interface LumaVenueVisibilityShape {
-  /** Asks Luma and, unless `dryRun`, writes what changed, all or nothing. */
+  /**
+   * Asks Luma and, unless `dryRun`, writes what changed. Not all or
+   * nothing: a guests-only answer is written as it arrives and stays
+   * written though a later question fails, which then writes nothing more,
+   * so a venue is shown again only by a run that got every answer it asked
+   * for and found Luma still showing it when asked again.
+   */
   readonly run: (
     options: VenueVisibilityOptions,
   ) => Effect.Effect<VenueVisibility, LumaApiError | DataSourceError>;
