@@ -611,7 +611,11 @@ published event, matches hosts to profiles as `src/luma/people.ts` plans it,
 and writes `event_people` (its own rows only), `profiles.luma_user_id`, and
 `events.luma_guest_count` and `luma_checked_in_count`, in one statement.
 
-Hosts are matched by Luma user id, then by exact name with a review line.
+Hosts are matched by Luma user id, then, for a host of an event our calendar
+manages, by exact name with a review line. A Luma user picks their own name,
+so a host whom only other calendars' events list (Luma's `access: "view"`) is
+never linked by name: the plan reports them with the `--link usr-…=<profile
+id>` that would link them, for an organizer to decide.
 A host whose Luma user id is a hosting company's (`sponsors.luma_user_id`,
 from `backfill/hosts.json`) is that company: it is attached to the event as
 a hosting company (`event_sponsors`, only ever added), never matched to a
