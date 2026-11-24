@@ -29,12 +29,20 @@ describe("choosing a mode", () => {
       "/\t\\elsewhere.example",
       "/%2E//elsewhere.example",
       "/./\t/elsewhere.example",
+      "/\t/[",
     ] as const) {
       const sent = location(path, `${encodeURI(path)}?theme=dark`);
       expect([path, sent?.startsWith("//")]).toEqual([path, false]);
       expect([path, /[\t\n\r\\]/.test(sent ?? "")]).toEqual([path, false]);
       expect([path, new URL(sent ?? "", site).origin]).toEqual([path, site]);
     }
+  });
+
+  test("goes home from a path that would name another host", () => {
+    expect(
+      location("/\t/elsewhere.example", "/%09/elsewhere.example?theme=dark"),
+    ).toBe("/");
+    expect(location("/\t/[", "/%09/%5B?theme=dark")).toBe("/");
   });
 
   test("keeps the page's own path, as the URL parser writes it", () => {

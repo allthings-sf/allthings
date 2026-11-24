@@ -57,15 +57,16 @@ const base = "http://localhost";
 /**
  * `path` and `search` as a Location on this site, read as a browser reads
  * it: the URL parser drops tabs and line breaks and resolves dot segments
- * first. A path that would then name another host goes to the home page;
+ * first. A path that would then name another host, or none the parser
+ * reads, goes to the home page;
  * any other is sent as the parser writes it, its leading slashes kept to
  * one, so the browser reads it as this site's path too.
  */
 function onThisSite(path: string, search: string): `/${string}` {
   // "?" and "#" in a path are the path's own: escaped, they stay in it.
   const escaped = path.replaceAll("?", "%3F").replaceAll("#", "%23");
-  const target = new URL(`${escaped}${search}`, base);
-  if (target.origin !== base) return "/";
+  const target = URL.parse(`${escaped}${search}`, base);
+  if (target === null || target.origin !== base) return "/";
   return `/${target.pathname.replace(/^\/+/, "")}${target.search}`;
 }
 
