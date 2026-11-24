@@ -169,6 +169,14 @@ describe("reading a proposal in", () => {
         message: '"ada\\u0000@example.com" doesn\'t read as an email address.',
       },
     ]);
+    // JSON leaves C1 controls as they are; the problem's quote escapes them.
+    const c1 = readProposal({ ...sent, email: "ada\u0085example.com" });
+    expect(c1.ok ? [] : c1.problems).toEqual([
+      {
+        field: "email",
+        message: '"ada\\u0085example.com" doesn\'t read as an email address.',
+      },
+    ]);
   });
 
   test("holds links to four, each https, none twice", () => {
@@ -192,7 +200,7 @@ describe("reading a proposal in", () => {
       '"https://a.example/\\u001b[2J" isn\'t an https:// link.',
     );
     expect(links(["https://a.example/\u009b2J"])).toBe(
-      '"https://a.example/\u009b2J" isn\'t an https:// link.',
+      '"https://a.example/\\u009b2J" isn\'t an https:// link.',
     );
   });
 });

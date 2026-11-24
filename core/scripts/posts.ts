@@ -371,7 +371,9 @@ const sweepText = (report: SweepReport, at: DateTime.Utc) =>
     `New (${report.added.length}):`,
     ...report.added.map(candidateText),
     `Found again (${report.known.length}):`,
-    ...report.known.map((c) => `  ${terminalText(c.url)} → ${c.outcome}`),
+    ...report.known.map(
+      (c) => `  ${terminalText(c.url)} → ${terminalText(c.outcome)}`,
+    ),
     `Waiting for review (${report.waiting.length}):`,
     ...report.waiting.map((post) => `  ${pendingLines(post).join("\n    ")}`),
     ...(report.waiting.length === 0
