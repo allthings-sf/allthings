@@ -1,35 +1,47 @@
 on:
     push:
         tags:
-            - '*'
+            - '[0-9]*.[0-9]*.[0-9]*'
 
 name: Release a New Version of the CLI
 
 permissions:
-    contents: write
- 
+    contents: read
+
 jobs:
-    releaseandpublish:
-        name: Release on Github
+    verify:
+        name: Verify release tag
+        if: github.ref_type == 'tag' && !github.event.deleted
         runs-on: ubuntu-latest
+        steps:
+            - name: Fetch tag and main
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Require the tagged CLI version to be on main
+              run: |
+                  git merge-base --is-ancestor HEAD origin/main
+                  test "$GITHUB_REF_NAME" = "$(jq -er .version cli/package.json)"
+
+    releaseandpublish:
+        name: Release on GitHub
+        needs: verify
+        runs-on: ubuntu-latest
+        environment: npm-release
+        permissions:
+            # Only the approved job can create the release and upload assets.
+            contents: write
         steps:
             - name: ⬇️ Checkout repo
               uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
               with:
                   fetch-depth: 0
-                  fetch-tags: false
                   persist-credentials: false
-               
+
             - name: ⎔ Setup bun
               uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-            - name: 🔎 Check the tag matches the CLI version
-              run: |
-                  VERSION=$(jq -r .version cli/package.json)
-                  if [ "$GITHUB_REF_NAME" != "$VERSION" ]; then
-                    echo "::error::Tag $GITHUB_REF_NAME does not match cli/package.json version $VERSION"
-                    exit 1
-                  fi
 
             - name: 📥 Download deps
               run: bash "$GITHUB_WORKSPACE/.github/scripts/bun-install.sh"
@@ -38,30 +50,22 @@ jobs:
             - name: 🔨 Compiling the different versions
               run: make build-all-cli
 
-            - name: 🏷 Create GitHub Release
-              run: |
-                  TAG_NAME=${GITHUB_REF_NAME}
-                  TAG_MESSAGE=$(git tag -l --format='%(contents)' "$TAG_NAME")
-                  # Hyphenated tags (2.0.0-alpha.1) are prereleases; the installer skips them.
-                  PRERELEASE=()
-                  if [[ "$TAG_NAME" == *-* ]]; then PRERELEASE=(--prerelease); fi
-                  gh release create "${TAG_NAME}" --title "Release ${TAG_NAME}" --notes "${TAG_MESSAGE}" "${PRERELEASE[@]}"
+            - name: Publish the release with all five binaries
+              working-directory: cli
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: 🚀 Upload Assets
+                  GH_TOKEN: ${{ github.token }}
               run: |
-                  ASSET_PLATFORMS=("bun-linux-x64" "bun-linux-arm64" "bun-windows-x64.exe" "bun-darwin-x64" "bun-darwin-arm64")
-                  for platform in "${ASSET_PLATFORMS[@]}"; do
-                    if [ -f "cli/allthings-$platform" ]; then
-                      gh release upload "${GITHUB_REF_NAME}" "cli/allthings-$platform" --clobber
-                      echo "✅ Uploaded file for platform $platform"
-                    else
-                      echo "❌ File for platform $platform not found, skipping."
-                    fi
-                  done
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  assets=(allthings-bun-{linux-x64,linux-arm64,windows-x64.exe,darwin-x64,darwin-arm64})
+                  for asset in "${assets[@]}"; do test -s "$asset"; done
+                  sha256sum "${assets[@]}" > SHA256SUMS
+                  prerelease=()
+                  if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+                  # An administrator can move a tag while approval or compilation is pending.
+                  # Fetch the current tag into FETCH_HEAD and peel annotated tags to commits.
+                  git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME"
+                  test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$(git rev-parse HEAD)"
+                  gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag \
+                    --title "Release $GITHUB_REF_NAME" "${prerelease[@]}" "${assets[@]}" SHA256SUMS
 
     # Its own job, after the GitHub release, so the release never waits on
     # npm and a failed publish can be re-run alone.
@@ -72,8 +76,7 @@ jobs:
         # Publishing waits for a person: the npm-release environment needs
         # esthor's approval (admins can't bypass it) and runs only for version
         # tags. npm's trusted publisher names this environment, so npm takes
-        # the OIDC token only from a run that was approved here. GitHub's
-        # release and its binaries (the job above) don't wait.
+        # the OIDC token only from a run that was approved here.
         environment: npm-release
         # One publish at a time, none cancelled and up to 100 waiting (queue: max):
         # each run reads npm's latest only after the one before has moved it.
