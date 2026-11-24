@@ -1,6 +1,12 @@
 import { createInterface } from "node:readline";
 import { run } from "./cli.ts";
-import { openCommand } from "./open.ts";
+
+const opener =
+  process.platform === "darwin"
+    ? ["open"]
+    : process.platform === "win32"
+      ? ["cmd", "/c", "start", ""]
+      : ["xdg-open"];
 
 /**
  * Asks one question on the terminal: the line typed, or null when the input
@@ -39,11 +45,9 @@ export async function main(legacy: boolean): Promise<never> {
     // (`propose`); a script or an agent never is.
     ...(process.stdin.isTTY && process.stdout.isTTY ? { prompt: ask } : {}),
     openUrl: async (url) => {
-      const command = openCommand(process.platform, url, process.env);
-      if (command === undefined) return;
       // The link is already printed, so a missing opener (no xdg-open) is fine.
       try {
-        await Bun.spawn([...command], {
+        await Bun.spawn([...opener, url], {
           stdout: "ignore",
           stderr: "ignore",
         }).exited;
