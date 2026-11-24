@@ -13,14 +13,13 @@ import { migratedDatabase, sqlLayer } from "./support/database.ts";
  * 2099 and those over ended in 2020.
  */
 
-/** Every migration before 0042, as production has them before it. */
-const before = Migrator.fromRecord(
-  Object.fromEntries(
-    Object.entries(migrations).filter(([key]) => key < "0042"),
-  ),
-);
+/** The migrations before `id`, as production had them then. */
+const before = (id: string) =>
+  Migrator.fromRecord(
+    Object.fromEntries(Object.entries(migrations).filter(([key]) => key < id)),
+  );
 
-const db = await migratedDatabase(before);
+const db = await migratedDatabase(before("0042"));
 afterAll(() => db.close());
 
 /** Each evening, and whether its venue starts hidden. */
@@ -79,7 +78,7 @@ test("hides the venue of each evening the venue visibility will ask about, until
   }
   expect(
     await Effect.runPromise(
-      Migrations.run().pipe(Effect.provide(sqlLayer(db))),
+      Migrations.run(before("0043")).pipe(Effect.provide(sqlLayer(db))),
     ),
   ).toEqual([{ id: 42, name: "venue_guests_only" }]);
   const stored = await db.query<{
