@@ -202,7 +202,9 @@ function addFrom(
       yield* Console.log(terminalText(`not a post: ${url}`));
     }
     yield* Console.log(
-      `${urls.length} posts in ${file}; review them with: bun run posts pending --slug ${slug}`,
+      terminalText(
+        `${urls.length} posts in ${file}; review them with: bun run posts pending --slug ${slug}`,
+      ),
     );
   }).pipe(Effect.provide(layer));
 }
@@ -276,7 +278,7 @@ const apply = Command.make(
               }
             : {}),
         });
-        yield* Console.log(`${entry.slug}: ${describe(result)}`);
+        yield* Console.log(`${terminalText(entry.slug)}: ${describe(result)}`);
       }
     }).pipe(Effect.provide(layer)),
 ).pipe(Command.withDescription("Add every post a backfill file lists."));
@@ -363,7 +365,7 @@ const day = (instant: DateTime.Utc) => DateTime.formatIso(instant).slice(0, 10);
 /** A sweep, as the agent running the evening reads it. */
 const sweepText = (report: SweepReport, at: DateTime.Utc) =>
   [
-    `${report.slug}, swept ${DateTime.formatIso(at)}: posts from ${day(report.window.since)} to ${day(report.window.until)} (${Object.entries(
+    `${terminalText(report.slug)}, swept ${DateTime.formatIso(at)}: posts from ${day(report.window.since)} to ${day(report.window.until)} (${Object.entries(
       report.searched,
     )
       .map(([platform, n]) => `${platform}: ${n}`)
@@ -498,7 +500,7 @@ const pending = Command.make(
           : rows
               .map(
                 (post) =>
-                  `${post.eventSlug} ${pendingLines(post).join("\n  ")}`,
+                  `${terminalText(post.eventSlug)} ${pendingLines(post).join("\n  ")}`,
               )
               .join("\n") || "No pending posts.",
       );
@@ -536,10 +538,14 @@ const statusCommand = (name: "approve" | "hide") =>
         // As JSON, a missing or ambiguous post is an answer like any other
         // (the MCP tools show it); in text, it is a failure the shell sees.
         if (change._tag === "NotFound" && !json) {
-          yield* Effect.fail(new Error(`No stored post at ${url}`));
+          yield* Effect.fail(
+            new Error(`No stored post at ${terminalText(url)}`),
+          );
         }
         if (change._tag === "Ambiguous" && !json) {
-          yield* Effect.fail(new Error(`Several stored posts match ${url}`));
+          yield* Effect.fail(
+            new Error(`Several stored posts match ${terminalText(url)}`),
+          );
         }
       }).pipe(Effect.provide(Database.scriptLayer)),
   ).pipe(
@@ -587,7 +593,9 @@ const move = Command.make(
           moved._tag === "NoSuchEvening" ||
           moved._tag === "Ambiguous")
       ) {
-        yield* Effect.fail(new Error(`Did not move ${url}: ${moved._tag}`));
+        yield* Effect.fail(
+          new Error(`Did not move ${terminalText(url)}: ${moved._tag}`),
+        );
       }
     }).pipe(Effect.provide(Database.scriptLayer)),
 ).pipe(
