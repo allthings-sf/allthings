@@ -4,6 +4,7 @@ import { Cause, DateTime, Effect, Exit, Layer } from "effect";
 import { approvalToken } from "../src/approval.ts";
 import { parseBrief } from "../src/collab/brief.ts";
 import { Collab } from "../src/collab/collab.ts";
+import { Role } from "../src/collab/model.ts";
 import { clockAt, seededDatabase, sqlLayer } from "./support/database.ts";
 
 /**
