@@ -805,6 +805,52 @@ describe("static assets", () => {
   });
 });
 
+/**
+ * The sources `policy` gives `directive`, or default-src's when it has
+ * none, as a browser falls back for a fetch directive like manifest-src.
+ */
+const sourcesFor = (policy: string, directive: string) => {
+  const directives = new Map<string, ReadonlyArray<string>>();
+  for (const part of policy.split(";")) {
+    const [name = "", ...sources] = part.trim().split(/\s+/);
+    // A browser heeds only a directive's first occurrence.
+    if (!directives.has(name)) directives.set(name, sources);
+  }
+  return directives.get(directive) ?? directives.get("default-src") ?? [];
+};
+
+describe("the web app manifest", () => {
+  it("is this site's own file, which every page links under a policy that lets the browser load it", async (url, _, measured) => {
+    const scripted = variants.find((variant) => variant.scripted === true);
+    if (scripted === undefined) throw new Error("No lab variant is scripted");
+    // A page under each policy: the site's, a form's, the lab engine's, a
+    // page that isn't found, and prod's, widened for the beacon.
+    for (const page of [
+      `${url}/`,
+      `${url}/propose`,
+      `${url}${variantPath(scripted.name)}`,
+      `${url}/no-such-page`,
+      `${measured}/about`,
+    ]) {
+      const response = await fetch(page);
+      const html = await response.text();
+      const href = /<link rel="manifest" href="([^"]+)"/.exec(html)?.[1];
+      expect([page, href]).toEqual([page, "/manifest.webmanifest"]);
+      const policy = response.headers.get("content-security-policy") ?? "";
+      expect([page, sourcesFor(policy, "manifest-src")]).toEqual([
+        page,
+        ["'self'"],
+      ]);
+    }
+    const manifest = await fetch(`${url}/manifest.webmanifest`);
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers.get("content-type")).toBe(
+      "application/manifest+json",
+    );
+    expect(await manifest.json()).toMatchObject({ start_url: "/" });
+  });
+});
+
 describe("every kind of page", () => {
   /** One of each: home, the index, evenings of every kind, people, about,
    * the brand, the code of conduct, privacy, coaching, proposing a talk, the
