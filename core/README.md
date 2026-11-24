@@ -546,6 +546,9 @@ committed before the reveal locks the row, it calls the reveal off;
 committed after, it hides the venue again. So however runs overlap, an
 older answer never shows a venue that a newer one, already written, found
 kept to guests. The fill never clears the mark.
+Until Luma has been asked, a venue is hidden: migration 0042 started every
+evening the sync asks about hidden, as a draft just published starts, so
+none was public before the sync's first run had asked Luma about it.
 Luma alone decides it: an organizer's
 venue (`venue_by_organizer`) is still Luma's to hide. The city is read from
 the address as Luma writes one ("201 Spear St, San Francisco, CA 94105,
