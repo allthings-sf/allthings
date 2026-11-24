@@ -415,104 +415,73 @@ describe("parseBrief", () => {
   test("keeps subheadings and code fences in the body, in the roles' own order", () => {
     expect(
       parseBrief(
-        "## Writing your round\n<!-- for: round_host, viewer -->\n### The bar\n```\n## not a section\n```\n",
+        "## Writing your round\n<!-- for: round_host, viewer -->\n### The bar\n```\n### a subheading, in the code\n```\n",
       ),
     ).toEqual([
       {
         position: 1,
         heading: "Writing your round",
-        body: "### The bar\n```\n## not a section\n```",
+        body: "### The bar\n```\n### a subheading, in the code\n```",
         audiences: ["viewer", "round_host"],
       },
     ]);
   });
 });
 
-describe("parseBrief's code fences", () => {
+describe("parseBrief's sections", () => {
   const section = (heading: string, audience: string, body: string) =>
     `## ${heading}\n<!-- for: ${audience} -->\n${body}`;
 
-  test("a fence closes only on a run of its own character at least as long, with nothing else after it", () => {
-    const example = "````md\n```\nan example\n````";
+  test('a "## " line starts a section wherever it is: no fence or HTML carries one section into another', () => {
+    for (const opening of [
+      "````md\n```\nan example\n",
+      "<!--\n",
+      "<div>\n```\n",
+    ]) {
+      expect(
+        parseBrief(
+          section("The pitch", "viewer", opening) +
+            section("Venues", "organizer", "Door code 1234."),
+        ),
+      ).toEqual([
+        {
+          position: 1,
+          heading: "The pitch",
+          body: opening.trimEnd(),
+          audiences: ["viewer"],
+        },
+        {
+          position: 2,
+          heading: "Venues",
+          body: "Door code 1234.",
+          audiences: ["organizer"],
+        },
+      ]);
+    }
+  });
+
+  test('a "## " line in a code example is a section, and the refusal says how to keep it in the code', () => {
     expect(
-      parseBrief(
-        [
-          section("The pitch", "viewer", example),
-          section("Venues", "organizer", "Door code 1234.\n```\nx\n```"),
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        position: 1,
-        heading: "The pitch",
-        body: example,
-        audiences: ["viewer"],
-      },
-      {
-        position: 2,
-        heading: "Venues",
-        body: "Door code 1234.\n```\nx\n```",
-        audiences: ["organizer"],
-      },
+      parseBrief(section("A", "viewer", "```\n## not a section\nx\n```")),
+    ).toBe(
+      `Section "not a section" (line 4) doesn't say who it is for. Its first line must be <!-- for: … --> with roles from ${Role.literals.join(", ")}. A "## " line starts a section even inside a code fence: indent it to keep it in the code.`,
+    );
+    const indented = "```\n  ## in the code\n```";
+    expect(parseBrief(section("A", "viewer", indented))).toEqual([
+      { position: 1, heading: "A", body: indented, audiences: ["viewer"] },
     ]);
-    for (const inside of ["```js", "~~~", "``` x"]) {
-      const body = `\`\`\`\n${inside}\n## not a section\n\`\`\``;
+  });
+
+  test('fences and raw HTML without a "## " line stay in the body', () => {
+    for (const body of [
+      "Text.\n<!--\n```\n-->",
+      "````\n```\nx\n````",
+      "```\nx",
+    ]) {
       expect(parseBrief(section("A", "viewer", body))).toEqual([
         { position: 1, heading: "A", body, audiences: ["viewer"] },
       ]);
     }
-    // Up to three spaces before it and spaces after it, or a longer run.
-    for (const closing of ["   ```", "```  ", "`````", "```~"]) {
-      const sections = parseBrief(
-        section("A", "viewer", `\`\`\`\nx\n${closing}\n`) +
-          section("B", "organizer", "y"),
-      );
-      expect(Array.isArray(sections) ? sections.length : sections).toBe(2);
-    }
-  });
-
-  test("what isn't a fence opens none", () => {
-    for (const line of ["    ```", "``` a`b", "``"]) {
-      const sections = parseBrief(
-        section("A", "viewer", `${line}\n`) + section("B", "organizer", "y"),
-      );
-      expect(Array.isArray(sections) ? sections.length : sections).toBe(2);
-    }
-  });
-
-  test("a run inside raw HTML, as Marked reads the brief, opens no fence", () => {
-    const comment = "Text.\n<!--\n```\n-->";
-    expect(parseBrief(section("A", "viewer", comment))).toEqual([
-      { position: 1, heading: "A", body: comment, audiences: ["viewer"] },
-    ]);
-    const sections = parseBrief(
-      section("A", "viewer", "<div>\n```\n</div>\n\n") +
-        section("B", "organizer", "y\n```\nx\n```"),
-    );
-    expect(
-      Array.isArray(sections)
-        ? sections.map(({ heading, audiences }) => [heading, audiences])
-        : sections,
-    ).toEqual([
-      ["A", ["viewer"]],
-      ["B", ["organizer"]],
-    ]);
-  });
-
-  test("keeps a fence left open at the end, where it holds no heading", () => {
-    expect(parseBrief(section("A", "viewer", "```\nx\n"))).toEqual([
-      { position: 1, heading: "A", body: "```\nx", audiences: ["viewer"] },
-    ]);
-  });
-
-  test("refuses a fence that never closes over a heading", () => {
-    expect(
-      parseBrief(
-        section("A", "viewer", "````\n```\n") + section("B", "organizer", "y"),
-      ),
-    ).toBe(
-      "Line 3 opens a code fence that never closes. Close it with ````, so the sections after it stay their own.",
-    );
   });
 });
 

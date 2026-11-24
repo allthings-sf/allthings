@@ -1,5 +1,4 @@
 import { Schema } from "effect";
-import { Lexer } from "marked";
 import { type BriefSection, Role } from "./model.ts";
 
 /**
@@ -20,16 +19,13 @@ import { type BriefSection, Role } from "./model.ts";
  * Who a section is for is never assumed: a section without its line is
  * refused, so nothing reaches a collaborator by default. Organizers see
  * every section whatever it says. `###` and deeper stay in the body, as
- * does anything inside a code fence. A `---` rule at a section's end is
- * dropped: in the file it separates sections, and the page draws its own.
+ * does a code fence. A `---` rule at a section's end is dropped: in the
+ * file it separates sections, and the page draws its own.
  *
- * Code fences are the ones Marked, which shows each section
- * (web/src/preview/brief.ts), reads in the brief as a whole: a shorter run
- * of backticks, or one with an info string, inside a fence stays in it, and
- * a run inside raw HTML, such as a comment, opens none. So a section never
- * holds a heading the page would show as another's. A fence that never
- * closes over a "## " line is refused: it would carry every section after
- * it into its own.
+ * A `## ` line always starts a section, inside a code fence or raw HTML
+ * too. Each section is shown on its own, so nothing a section holds can
+ * reach another section's audience, whatever Markdown reads as code: to
+ * keep a `## ` line in a code example, indent it.
  */
 
 export const maxSections = 50;
@@ -38,69 +34,18 @@ const maxBody = 20000;
 
 const isRole = Schema.is(Role);
 
-/** Whether `line` closes the code fence `run` opened, as Marked reads one. */
-const closesFence = (line: string, run: string): boolean => {
-  const indented = /^ {0,3}/.exec(line)?.[0].length ?? 0;
-  return (
-    line.startsWith(run, indented) &&
-    /^[`~]* *$/.test(line.slice(indented + run.length))
-  );
-};
-
-/**
- * The lines (from 0) inside a fenced code block, as Marked reads `markdown`
- * as a whole, and the first such block that never closes over a "## "
- * line: its line (from 1) and the run that would close it.
- */
-function fencedLines(markdown: string): {
-  readonly inside: ReadonlySet<number>;
-  readonly unclosed: { readonly line: number; readonly run: string } | null;
-} {
-  const inside = new Set<number>();
-  let unclosed: { line: number; run: string } | null = null;
-  let offset = 0;
-  let line = 0;
-  for (const token of new Lexer({ gfm: true }).lex(markdown)) {
-    // Every block's raw text is the brief's, in order, but for a link
-    // definition Marked rewrites, which holds no fence.
-    const at = markdown.indexOf(token.raw, offset);
-    if (at === -1 || token.raw === "") continue;
-    for (let i = offset; i < at; i++) if (markdown[i] === "\n") line += 1;
-    const first = line;
-    const rows = token.raw.replace(/\n$/, "").split("\n");
-    for (let i = at; i < at + token.raw.length; i++) {
-      if (markdown[i] === "\n") line += 1;
-    }
-    offset = at + token.raw.length;
-    const run = /^ {0,3}(`{3,}|~{3,})/.exec(token.raw)?.[1];
-    if (token.type !== "code" || run === undefined) continue;
-    for (let row = 0; row < rows.length; row++) inside.add(first + row);
-    // One left open matters only where it holds a "## " line: a heading
-    // meant as a section's, which would become the one before's.
-    const closed = rows.length > 1 && closesFence(rows.at(-1) ?? "", run);
-    const holdsHeading = rows.some((row) => row.startsWith("## "));
-    if (!closed && holdsHeading && unclosed === null) {
-      unclosed = { line: first + 1, run };
-    }
-  }
-  return { inside, unclosed };
-}
-
 /** The sections `markdown` holds, or why it can't be stored. */
 export function parseBrief(
   markdown: string,
 ): ReadonlyArray<BriefSection> | string {
-  // Line ends as Marked reads them.
-  const source = markdown.replace(/\r\n?/g, "\n");
-  const lines = source.split("\n");
-  const fences = fencedLines(source);
+  const lines = markdown.replaceAll("\r\n", "\n").split("\n");
   const sections: Array<{
     heading: string;
     lines: Array<string>;
     line: number;
   }> = [];
   for (const [index, line] of lines.entries()) {
-    const heading = fences.inside.has(index) ? null : /^## (.*)$/.exec(line);
+    const heading = /^## (.*)$/.exec(line);
     if (heading !== null) {
       sections.push({
         heading: (heading[1] ?? "").trim(),
@@ -119,9 +64,6 @@ export function parseBrief(
     ) {
       return `Line ${index + 1} comes before the first "## " section. Put it in a section, so it says who it is for.`;
     }
-  }
-  if (fences.unclosed !== null) {
-    return `Line ${fences.unclosed.line} opens a code fence that never closes. Close it with ${fences.unclosed.run}, so the sections after it stay their own.`;
   }
   if (sections.length === 0) return 'The brief has no "## " sections.';
   if (sections.length > maxSections) {
@@ -143,7 +85,14 @@ export function parseBrief(
             section.lines[first] ?? "",
           );
     if (audience === null) {
-      return `${where} doesn't say who it is for. Its first line must be <!-- for: … --> with roles from ${Role.literals.join(", ")}.`;
+      // Said for a "## " line after a fence the section before left open:
+      // most likely a line of a code example.
+      const before = sections[index - 1]?.lines ?? [];
+      const open =
+        before.filter((line) => /^ {0,3}(`{3,}|~{3,})/.test(line)).length %
+          2 ===
+        1;
+      return `${where} doesn't say who it is for. Its first line must be <!-- for: … --> with roles from ${Role.literals.join(", ")}.${open ? ' A "## " line starts a section even inside a code fence: indent it to keep it in the code.' : ""}`;
     }
     const named = (audience[1] ?? "")
       .split(",")
