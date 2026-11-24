@@ -103,10 +103,17 @@ fi
 if $plan; then exit 0; fi
 
 set_secret() {
-  local value
+  local value attempt
   value=$(jq -er '.value | strings | select(length > 0)') || return 1
   [[ -n $value ]] || return 1
-  printf '%s' "$value" | gh secret set CLOUDFLARE_API_TOKEN --env "$environment" --repo "$repo"
+  for attempt in 1 2 3; do
+    if printf '%s' "$value" | gh secret set CLOUDFLARE_API_TOKEN --env "$environment" --repo "$repo"; then
+      return 0
+    fi
+    if (( attempt < 3 )); then sleep "$attempt"; fi
+  done
+  echo "Could not publish the new token. Run ci-token.sh --rotate again to recover." >&2
+  return 1
 }
 
 gh secret set CLOUDFLARE_ACCOUNT_ID --repo "$repo" --env "$environment" --body "$account"
@@ -137,4 +144,4 @@ if [[ $legacy == true ]]; then
   remaining=$(repo_has_token)
   [[ $remaining == false ]] || { echo "Repository secret still present." >&2; exit 1; }
 fi
-echo "✓ verified token policies and environment secrets"
+echo "✓ verified token policies and environment secret names"
