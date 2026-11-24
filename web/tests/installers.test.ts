@@ -102,7 +102,8 @@ describe("the CLI's installers", () => {
         "#!/usr/bin/env bash",
         'url="${!#}"',
         'case "$url" in',
-        '  */SHA256SUMS) printf "%s  %s\\n" "$DIGEST" "$ASSET" ;;',
+        '  */releases/tags/*) printf "%s" "$METADATA" ;;',
+        '  */SHA256SUMS) [[ -z "$METADATA" ]] || exit 22; printf "%s  %s\\n" "$DIGEST" "$ASSET" ;;',
         '  */allthings-bun-*) printf "%s" "$BINARY" > "$3" ;;',
         "  *) exit 22 ;;",
         "esac",
@@ -113,7 +114,7 @@ describe("the CLI's installers", () => {
     const arch = process.arch === "arm64" ? "arm64" : "x64";
     const asset = `allthings-bun-${os}-${arch}`;
     const installed = join(temp, "bin/allthings");
-    const run = (checksum: string, filename = asset) =>
+    const run = (checksum: string, filename = asset, metadata = "") =>
       Bun.spawnSync(["bash", "cli/install.bash"], {
         cwd: new URL("../..", import.meta.url).pathname,
         env: {
@@ -124,18 +125,29 @@ describe("the CLI's installers", () => {
           BINARY: binary,
           ASSET: filename,
           DIGEST: checksum,
+          METADATA: metadata,
         },
       });
     try {
       await Bun.write(installed, "existing install");
-      for (const result of [run("0".repeat(64)), run(digest, "other")]) {
+      const metadata = (checksum: string | null) =>
+        JSON.stringify({ assets: [{ name: asset, digest: checksum }] });
+      for (const result of [
+        run("0".repeat(64)),
+        run(digest, "other"),
+        run("", asset, metadata(null)),
+      ]) {
         expect(result.exitCode).toBe(1);
         expect(result.stdout.toString()).not.toContain("verified-cli");
       }
       expect(await Bun.file(installed).text()).toBe("existing install");
-      const verified = run(digest);
-      expect(verified.exitCode).toBe(0);
-      expect(verified.stdout.toString()).toContain("verified-cli");
+      for (const verified of [
+        run(digest),
+        run("", asset, metadata(`sha256:${digest}`)),
+      ]) {
+        expect(verified.exitCode).toBe(0);
+        expect(verified.stdout.toString()).toContain("verified-cli");
+      }
       expect(await Bun.file(installed).text()).toBe(binary);
     } finally {
       await rm(temp, { recursive: true, force: true });
