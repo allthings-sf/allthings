@@ -2398,15 +2398,19 @@ migrator (`src/migrator.ts`). Production takes migrations from here alone.
 - Its number must be free: CI's migration guard (`bun run migration-guard`,
   `src/migration-guard.ts`) fails when a pull request's migrations don't
   extend main's, in order, or when it adds a migration under a number
-  another open pull request adds. Pull requests never get production's
-  credential, so a green check there isn't a check against production:
+  another open pull request adds. The guard gets no production credential
+  on a pull request, so a green check there isn't a check against
+  production (deploy.yaml's previews still read the repository's
+  `NEON_READER_URL` until they deploy from an environment of their own):
   main's run is (`🔢 Migration numbers (production)`), failing when main's
   migrations don't extend what production has applied, in order (it reads
   `effect_sql.migrations` as site_reader, in the main-only
   `production-read` environment). A migration applied to production before
-  it merges is still caught on pull requests, through the open pull request
-  that adds it. The failure names each migration to renumber, and the
-  number it should take.
+  it merges is caught on pull requests only while the pull request that
+  adds it stays open: if that one closes unmerged, a later pull request can
+  take its number and pass, main's production check then fails after that
+  merge, and `migrate` refuses the migration until it is renumbered. The
+  failure names each migration to renumber, and the number it should take.
 
 `0001_baseline` is production's schema on 2026-10-04, read from its catalog,
 not a replay of the old Next app's drizzle migrations: production received

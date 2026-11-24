@@ -27,12 +27,13 @@ import { table } from "../src/migrator.ts";
  *   (effect_sql.migrations) and nothing else of the migrator's. It is only
  *   read. Without it the run fails, unless NO_PRODUCTION_OK=true (pull
  *   requests, which production's credential never reaches): then the
- *   branch must extend BASE_SHA's migrations instead, read from GitHub,
- *   and the other check still runs.
+ *   branch must extend main's migrations at MAIN_REF instead, read from
+ *   GitHub, and the other check still runs.
  * - GITHUB_REPOSITORY, GITHUB_TOKEN: to list the open pull requests and the
- *   files each adds, and BASE_SHA's migrations.
+ *   files each adds, and main's migrations.
  * - PR_NUMBER: this pull request; unset on main, which adds nothing.
- * - BASE_SHA: the commit this pull request merges into.
+ * - MAIN_REF: main's commit to compare with: the pull request's base when
+ *   it targets main (the commit it merges into), or main itself.
  */
 
 const env = (name: string) => {
@@ -97,16 +98,16 @@ const githubList = <A>(path: string) =>
   });
 
 /**
- * The core migrations at commit `sha`, in id order, read from GitHub rather
- * than this checkout, so a pull request's base is what main has, whatever
- * the pull request changed.
+ * The core migrations at `ref` (a commit or branch), in id order, read from
+ * GitHub rather than this checkout, so they are what main has, whatever the
+ * pull request changed.
  */
-const migrationsAt = (sha: string) =>
+const migrationsAt = (ref: string) =>
   Effect.tryPromise({
     try: async () =>
       (
         await githubGet<Array<{ path: string; type: string }>>(
-          `contents/core/migrations?ref=${encodeURIComponent(sha)}`,
+          `contents/core/migrations?ref=${encodeURIComponent(ref)}`,
         )
       )
         .flatMap((entry) => {
@@ -151,18 +152,18 @@ const command = Command.make("migration-guard", {}, () =>
         ),
       );
     }
-    const base = env("BASE_SHA");
+    const main = env("MAIN_REF");
     const applied = production
       ? yield* appliedInProduction
-      : base === undefined
+      : main === undefined
         ? []
-        : yield* migrationsAt(base);
+        : yield* migrationsAt(main);
     const appliedBy = production ? "production" : "main";
     if (!production) {
       yield* Console.log(
-        base === undefined
-          ? "No production URL and no BASE_SHA: checking open pull requests only."
-          : `No production URL (pull requests never get it): checking against main's migrations at ${base}, and open pull requests.`,
+        main === undefined
+          ? "No production URL and no MAIN_REF: checking open pull requests only."
+          : `No production URL (pull requests never get it): checking against main's migrations at ${main}, and open pull requests.`,
       );
     }
 

@@ -2,7 +2,8 @@ name: Migration numbers
 
 # Two migrations must never take one number (core/src/migration-guard.ts).
 # On every pull request, core's migrations must extend main's, in order
-# (main's read from GitHub at the pull request's base), and a migration it
+# (read from GitHub: at the pull request's base when it targets main, at
+# main otherwise), and a migration it
 # adds must not take a number another open pull request adds. On main, they
 # must extend what production has applied, read from effect_sql.migrations
 # as the read-only site_reader role. A failure says what to renumber, and
@@ -51,7 +52,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # main's commit to compare with: the base, when that is main.
+          MAIN_REF: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.base.sha || 'main' }}
           NO_PRODUCTION_OK: "true"
         run: bun run --silent migration-guard
 
