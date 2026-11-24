@@ -50,10 +50,43 @@ mkdir -p "$bin_dir"
 download=$(mktemp "$bin_dir/.allthings.XXXXXX")
 trap 'rm -f "$download"' EXIT
 base="https://github.com/$repo/releases/download/$version"
-# Releases before the rename ship the binary as atw-cli-<platform>.
-if ! curl -fsL -o "$download" "$base/allthings-$platform" &&
-  ! curl -fsSL -o "$download" "$base/atw-cli-$platform"; then
-  echo "Release $version has no binary for $platform." >&2
+asset="allthings-$platform"
+if ! curl -fsL -o "$download" "$base/$asset"; then
+  # Releases before the rename used the atw-cli prefix.
+  asset="atw-cli-$platform"
+  if ! curl -fsSL -o "$download" "$base/$asset"; then
+    echo "Release $version has no binary for $platform." >&2
+    exit 1
+  fi
+fi
+
+if manifest=$(curl -fsL "$base/SHA256SUMS"); then
+  expected=$(awk -v asset="$asset" 'NF == 2 && $2 == asset { print $1 }' <<<"$manifest")
+else
+  # Existing releases predate SHA256SUMS. GitHub publishes its own digest
+  # per asset in the release metadata. Never accept an undigested binary.
+  metadata=$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$version")
+  if command -v jq >/dev/null; then
+    digest=$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest // empty' <<<"$metadata")
+  else
+    digest=$(python3 -c 'import json, sys
+print(next((a.get("digest") or "" for a in json.load(sys.stdin)["assets"] if a["name"] == sys.argv[1]), ""))' "$asset" <<<"$metadata")
+  fi
+  expected="${digest#sha256:}"
+  [[ "$digest" == "sha256:$expected" ]] || { echo "No SHA-256 digest for $asset." >&2; exit 1; }
+fi
+
+if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Release $version has no valid SHA-256 checksum for $asset." >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null; then
+  actual=$(sha256sum < "$download")
+else
+  actual=$(shasum -a 256 < "$download")
+fi
+if [[ "${actual%% *}" != "$expected" ]]; then
+  echo "Checksum mismatch for $asset." >&2
   exit 1
 fi
 chmod 755 "$download"
