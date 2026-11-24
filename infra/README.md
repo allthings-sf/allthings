@@ -262,6 +262,8 @@ bunx cf@1.0.0-beta.12 --profile allthings alerting policies test <id>
 
 GitHub Actions deploys with an account-owned token that has only the permissions listed in [`ci-token.json`](ci-token.json). [`scripts/ci-token.sh`](scripts/ci-token.sh) applies that file. Creating or rotating a token writes its value straight into the main-only, reviewer-protected `Production` environment's `CLOUDFLARE_API_TOKEN` secret. With an existing token, the default invocation only reconciles permissions. Alchemy binds its state-store secret to a Worker, which requires Secrets Store Write. When staging declares something that needs a permission group the token lacks, add it to `ci-token.json` in the same PR, then rerun the script after it merges. A declaration it can already deploy (a binding that provisions nothing, such as an Analytics Engine dataset; one more KV namespace) leaves the file as it is.
 
+The `Production` environment protects the account credential used for staging. An agent working for the maintainer may use the designated reviewer's account to approve a deploy only after verifying that the run is a push from this repository's main, its commit is on main, the workflow at that commit deploys only the `staging` stage, and every other applicable check on that commit has passed. A release to production requires the maintainer's own approval.
+
 The script runs on a maintainer's machine signed in to the allthings account with Cloudflare's CLI, whose sign-in may create account tokens, so no Global API Key or token-minting token exists anywhere. Run it from the repository root:
 
 ```sh
