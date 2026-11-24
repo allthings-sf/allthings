@@ -1,16 +1,17 @@
 name: Migration numbers
 
 # Two migrations must never take one number (core/src/migration-guard.ts).
-# On every pull request, a migration it adds must not take a number another
-# open pull request adds. On main, core's migrations must also extend what
-# production has applied, in order, read from effect_sql.migrations as the
-# read-only site_reader role. A failure says what to renumber, and to what.
+# On every pull request, core's migrations must extend main's, in order
+# (main's read from GitHub at the pull request's base), and a migration it
+# adds must not take a number another open pull request adds. On main, they
+# must extend what production has applied, read from effect_sql.migrations
+# as the read-only site_reader role. A failure says what to renumber, and
+# to what.
 #
 # Production's credential (NEON_READER_URL) is a secret of the
 # production-read environment, which only main may use, so no pull
-# request's code ever runs with it, whoever opens it. A pull request is
-# checked against main's migrations and every other open pull request's;
-# main's run checks production once it merges.
+# request's code ever runs with it, whoever opens it. Main's run checks
+# production once a pull request merges.
 on:
   push:
     branches: ["main"]
@@ -45,11 +46,12 @@ jobs:
         working-directory: core
         run: bash "$GITHUB_WORKSPACE/.github/scripts/bun-install.sh"
 
-      - name: 🔢 Check migration numbers against open pull requests
+      - name: 🔢 Check migration numbers against main and open pull requests
         working-directory: core
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           NO_PRODUCTION_OK: "true"
         run: bun run --silent migration-guard
 

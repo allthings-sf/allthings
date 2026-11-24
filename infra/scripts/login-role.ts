@@ -185,7 +185,9 @@ export async function requireMainOnly(
 /**
  * Writes `value` as the secret `secret` of each of `environments` (each
  * checked with {@link requireMainOnly} first; none keeps it in 1Password
- * alone), then to a new 1Password item `item` in `vault`, and only then
+ * alone), and of the repository too when `repository` is set (only while a
+ * workflow still reads the repository's), then to a new 1Password item
+ * `item` in `vault`, and only then
  * archives the items it replaces, so 1Password always holds a working value
  * (1Password's own API Credential template, passed as a file only this user
  * can read and removed right after: op ignores the values of a template
@@ -197,11 +199,21 @@ export async function storeConnectionString(options: {
   value: string;
   secret: string;
   environments: ReadonlyArray<string>;
+  repository?: boolean;
   item: string;
   vault: string;
   notes: string;
 }): Promise<void> {
-  for (const environment of options.environments) {
+  const targets = [
+    ...options.environments.map((environment) => ({
+      flags: ["--env", environment],
+      where: `the ${environment} environment`,
+    })),
+    ...(options.repository === true
+      ? [{ flags: [], where: "the repository" }]
+      : []),
+  ];
+  for (const target of targets) {
     try {
       await run(
         [
@@ -211,14 +223,13 @@ export async function storeConnectionString(options: {
           options.secret,
           "--repo",
           repo,
-          "--env",
-          environment,
+          ...target.flags,
         ],
         options.value,
       );
     } catch (cause) {
       throw new Error(
-        `The role's password has changed, but ${options.secret} in the ${environment} environment (and any listed after it) and 1Password ("${options.item}") still hold the old one. Rerun this script once GitHub secret writes work.`,
+        `The role's password has changed, but ${options.secret} in ${target.where} (and any listed after it) and 1Password ("${options.item}") still hold the old one. Rerun this script once GitHub secret writes work.`,
         { cause },
       );
     }
@@ -228,8 +239,8 @@ export async function storeConnectionString(options: {
   } catch (cause) {
     throw new Error(
       `${
-        options.environments.length > 0
-          ? `${options.secret} in ${options.environments.join(" and ")} has the new value, but 1Password ("${options.item}") may not`
+        targets.length > 0
+          ? `${options.secret} in ${targets.map((target) => target.where).join(" and ")} has the new value, but 1Password ("${options.item}") may not`
           : `1Password ("${options.item}") may not have the new value`
       }: ${cause instanceof Error ? cause.message : String(cause)}. Rerun this script once 1Password answers.`,
       { cause },
