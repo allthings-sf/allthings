@@ -10,6 +10,8 @@ import {
   listProposals,
   planDecision,
   proposalLimits,
+  proposalLine,
+  proposalLines,
   readProposal,
   recordProposal,
 } from "../src/proposals.ts";
@@ -185,6 +187,52 @@ describe("reading a proposal in", () => {
     );
     expect(links(["https://a.example/with space"])).toBe(
       '"https://a.example/with space" isn\'t an https:// link.',
+    );
+    expect(links(["https://a.example/\u001b[2J"])).toBe(
+      '"https://a.example/\\u001b[2J" isn\'t an https:// link.',
+    );
+    expect(links(["https://a.example/\u009b2J"])).toBe(
+      '"https://a.example/\u009b2J" isn\'t an https:// link.',
+    );
+  });
+});
+
+describe("showing a proposal", () => {
+  const stored = {
+    id: "00000000-0000-4000-8000-000000000001",
+    title: "Effect\u009b in production",
+    abstract: "Errors as values.\nRetries\u001b[2J.",
+    format: "talk",
+    name: "Ada\u001b]0;x\u0007 Lovelace",
+    email: "ada@example.com",
+    about: "Builds \u001b[1mthings\u001b[0m.",
+    links: ["https://github.com/ada\u001b[2K"],
+    notes: null,
+    source: "site",
+    recordedBy: null,
+    status: "new",
+    decidedAt: null,
+    decidedBy: null,
+    decisionNote: "ok\u007f",
+    event: null,
+    createdAt: "2026-11-24T00:00:00.000Z",
+    updatedAt: "2026-11-24T00:00:00.000Z",
+  } as const;
+
+  test("prints what was sent, never a control character", () => {
+    const lines = proposalLines(stored);
+    const controls = (line: string) =>
+      Array.from(line).filter((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+      });
+    for (const line of [...lines, proposalLine(stored)]) {
+      expect([line, controls(line)]).toEqual([line, []]);
+    }
+    expect(lines).toContain("link: https://github.com/ada\\u001b[2K");
+    expect(lines).toContain("  Retries\\u001b[2J.");
+    expect(lines[3]).toStartWith(
+      "from: Ada\\u001b]0;x\\u0007 Lovelace <ada@example.com>",
     );
   });
 });

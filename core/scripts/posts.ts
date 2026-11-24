@@ -19,6 +19,7 @@ import {
   postUrlsIn,
 } from "../src/posts/add.ts";
 import {
+  type CandidateReport,
   CandidateSearches,
   eveningSignals,
   findCandidates,
@@ -27,6 +28,7 @@ import {
 } from "../src/posts/candidates.ts";
 import {
   pendingJson,
+  pendingLines,
   pendingPosts,
   movePost,
   setPostStatus,
@@ -34,6 +36,7 @@ import {
 import { PostSources } from "../src/posts/sources.ts";
 import { EventPostWriter } from "../src/posts/store.ts";
 import { sweep, type SweepReport, sweepWindow } from "../src/posts/sweep.ts";
+import { terminalText } from "../src/terminal.ts";
 
 /**
  * Posts about events (src/posts/) in the Postgres at DATABASE_URL.
@@ -68,13 +71,19 @@ const dryRunFlag = Flag.Boolean("dry-run").pipe(
   Flag.withDefault(false),
 );
 
-const describe = (result: AddPostResult): string => {
-  if (result._tag === "Added") return `added ${result.url}`;
-  if (result._tag === "Exists") {
-    return `already there: ${result.url} (${result.eventSlug}, ${result.status})`;
-  }
-  return `would add ${result.post.url}: ${result.post.authorName}, ${DateTime.formatIso(result.post.postedAt)}`;
-};
+/** One added post's outcome, on one line, as text from outside is shown (src/terminal.ts). */
+const describe = (result: AddPostResult): string =>
+  terminalText(
+    result._tag === "Added"
+      ? `added ${result.url}`
+      : result._tag === "Exists"
+        ? `already there: ${result.url} (${result.eventSlug}, ${result.status})`
+        : `would add ${result.post.url}: ${result.post.authorName}, ${DateTime.formatIso(result.post.postedAt)}`,
+  );
+
+/** A post a search found, in two lines: its score, link and outcome, then why it scored so. */
+const candidateText = (c: CandidateReport["candidates"][number]) =>
+  `  ${c.score} ${terminalText(c.url)} → ${terminalText(c.outcome)}\n    ${terminalText(c.reasons.join(", "))}`;
 
 const asJson = (result: AddPostResult) =>
   result._tag === "WouldAdd"
@@ -184,10 +193,14 @@ function addFrom(
     }
     for (const r of results) {
       yield* Console.log(
-        "failed" in r ? `failed ${r.url}: ${r.failed}` : describe(r.result),
+        "failed" in r
+          ? terminalText(`failed ${r.url}: ${r.failed}`)
+          : describe(r.result),
       );
     }
-    for (const url of ignored) yield* Console.log(`not a post: ${url}`);
+    for (const url of ignored) {
+      yield* Console.log(terminalText(`not a post: ${url}`));
+    }
     yield* Console.log(
       `${urls.length} posts in ${file}; review them with: bun run posts pending --slug ${slug}`,
     );
@@ -328,10 +341,7 @@ const find = Command.make(
                   `${report.slug} (${Object.entries(report.searched)
                     .map(([platform, n]) => `${platform}: ${n}`)
                     .join("; ")})`,
-                  ...report.candidates.map(
-                    (c) =>
-                      `  ${c.score} ${c.url} → ${c.outcome}\n    ${c.reasons.join(", ")}`,
-                  ),
+                  ...report.candidates.map(candidateText),
                 ].join("\n"),
               )
               .join("\n"),
@@ -359,17 +369,11 @@ const sweepText = (report: SweepReport, at: DateTime.Utc) =>
       .map(([platform, n]) => `${platform}: ${n}`)
       .join("; ")})`,
     `New (${report.added.length}):`,
-    ...report.added.map(
-      (c) =>
-        `  ${c.score} ${c.url} → ${c.outcome}\n    ${c.reasons.join(", ")}`,
-    ),
+    ...report.added.map(candidateText),
     `Found again (${report.known.length}):`,
-    ...report.known.map((c) => `  ${c.url} → ${c.outcome}`),
+    ...report.known.map((c) => `  ${terminalText(c.url)} → ${c.outcome}`),
     `Waiting for review (${report.waiting.length}):`,
-    ...report.waiting.map(
-      (post) =>
-        `  ${post.url}\n    ${post.authorName} (${post.authorHandle ?? "-"}), ${DateTime.formatIso(post.postedAt)}\n    ${post.text.replace(/\s+/g, " ").slice(0, 200)}`,
-    ),
+    ...report.waiting.map((post) => `  ${pendingLines(post).join("\n    ")}`),
     ...(report.waiting.length === 0
       ? []
       : [
@@ -492,7 +496,7 @@ const pending = Command.make(
           : rows
               .map(
                 (post) =>
-                  `${post.eventSlug} ${post.url}\n  ${post.authorName} (${post.authorHandle ?? "-"}), ${DateTime.formatIso(post.postedAt)}\n  ${post.text.replace(/\s+/g, " ").slice(0, 200)}`,
+                  `${post.eventSlug} ${pendingLines(post).join("\n  ")}`,
               )
               .join("\n") || "No pending posts.",
       );
@@ -517,13 +521,15 @@ const statusCommand = (name: "approve" | "hide") =>
         yield* Console.log(
           json
             ? JSON.stringify(change, null, 2)
-            : change._tag === "Changed"
-              ? `${change.url} (${change.eventSlug}): ${change.from} → ${change.to}`
-              : change._tag === "Unchanged"
-                ? `${change.url}: already ${change.status}`
-                : change._tag === "Ambiguous"
-                  ? `${change.url}: several stored posts match, name one by its URL: ${change.matches.join(", ")}`
-                  : `${change.url}: no stored post`,
+            : terminalText(
+                change._tag === "Changed"
+                  ? `${change.url} (${change.eventSlug}): ${change.from} → ${change.to}`
+                  : change._tag === "Unchanged"
+                    ? `${change.url}: already ${change.status}`
+                    : change._tag === "Ambiguous"
+                      ? `${change.url}: several stored posts match, name one by its URL: ${change.matches.join(", ")}`
+                      : `${change.url}: no stored post`,
+              ),
         );
         // As JSON, a missing or ambiguous post is an answer like any other
         // (the MCP tools show it); in text, it is a failure the shell sees.
@@ -559,15 +565,17 @@ const move = Command.make(
       yield* Console.log(
         json
           ? JSON.stringify(moved, null, 2)
-          : moved._tag === "Moved"
-            ? `${moved.url}: ${moved.from} → ${moved.to} (still ${moved.status})`
-            : moved._tag === "Unchanged"
-              ? `${moved.url}: already on ${moved.eventSlug}`
-              : moved._tag === "NoSuchEvening"
-                ? `${moved.url}: no evening has the slug ${moved.slug}`
-                : moved._tag === "Ambiguous"
-                  ? `${moved.url}: several stored posts match, name one by its URL: ${moved.matches.join(", ")}`
-                  : `${moved.url}: no stored post`,
+          : terminalText(
+              moved._tag === "Moved"
+                ? `${moved.url}: ${moved.from} → ${moved.to} (still ${moved.status})`
+                : moved._tag === "Unchanged"
+                  ? `${moved.url}: already on ${moved.eventSlug}`
+                  : moved._tag === "NoSuchEvening"
+                    ? `${moved.url}: no evening has the slug ${moved.slug}`
+                    : moved._tag === "Ambiguous"
+                      ? `${moved.url}: several stored posts match, name one by its URL: ${moved.matches.join(", ")}`
+                      : `${moved.url}: no stored post`,
+            ),
       );
       // As JSON, every outcome is an answer (the MCP tool shows it); in
       // text, one that moved nothing it should have is a failure.

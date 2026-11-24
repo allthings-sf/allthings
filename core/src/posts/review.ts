@@ -2,6 +2,7 @@ import { DateTime, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { orDataSourceError } from "../sql.ts";
+import { terminalText } from "../terminal.ts";
 import { canonicalUrl, parsePostUrl } from "./urls.ts";
 
 /**
@@ -200,6 +201,22 @@ export const movePost = (url: string, slug: string) =>
       status: row.status,
     } satisfies PostMove;
   });
+
+/**
+ * A pending post in three lines, as an organizer reviews it in a terminal:
+ * its link; who posted it and when; and the first 200 characters of its
+ * text, on one line. What its author wrote is shown as it is, any control
+ * character in it as its escape (src/terminal.ts).
+ */
+export const pendingLines = (
+  post: PendingPost,
+): readonly [string, string, string] => [
+  terminalText(post.url),
+  terminalText(
+    `${post.authorName} (${post.authorHandle ?? "-"}), ${DateTime.formatIso(post.postedAt)}`,
+  ),
+  terminalText(post.text.replace(/\s+/g, " ").slice(0, 200)),
+];
 
 /** A pending post as JSON, its time in ISO 8601. */
 export const pendingJson = (post: PendingPost) => ({
