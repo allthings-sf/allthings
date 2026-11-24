@@ -5,6 +5,7 @@ import { orDataSourceError } from "../sql.ts";
 import { LumaApi, type LumaApiError } from "./api.ts";
 import { locationPlaceholderPattern } from "./feed.ts";
 import { type EventRow, venueColumns } from "./sync.ts";
+import { markGuestsOnly } from "./venue-visibility.ts";
 
 /**
  * Fills in the venues Luma's calendar feed hides. While an event's venue is
@@ -23,14 +24,20 @@ import { type EventRow, venueColumns } from "./sync.ts";
  * so a venue name an organizer typed stays. A venue written meanwhile is
  * never replaced: the write checks again that it is missing.
  *
- * With the address it writes Luma's guests-only setting from the same
- * answer (`events.venue_guests_only`, src/luma/venue-visibility.ts), so an
+ * Where Luma keeps the venue to guests it marks it so as the answer
+ * arrives, and calls off any reveal the visibility step has announced
+ * (`markGuestsOnly`, src/luma/venue-visibility.ts), whether or not it then
+ * writes the address; and it writes the mark again with the address, so an
  * address it fills is never public before the setting is known, though the
- * visibility step failed this run or didn't ask about the evening.
+ * visibility step failed this run or didn't ask about the evening. It
+ * never clears the mark: its answer may be older than one another run has
+ * just read, so only the visibility step shows a venue again, once Luma
+ * has said so twice.
  *
- * Every event written gets the Clock's now as its updated_at. All of Luma's
- * answers are read before the database is written, in one statement: a
- * failure anywhere writes nothing. Without LUMA_API_KEY it does nothing.
+ * Every event written gets the Clock's now as its updated_at. The
+ * addresses wait for all of Luma's answers, and are written in one
+ * statement: a failure asking about any event writes none.
+ * Without LUMA_API_KEY it does nothing.
  */
 
 /** Events asked about at once, far under the API's 200 requests a minute. */
@@ -139,7 +146,9 @@ const make = Effect.gen(function* () {
           street_address = ${fill("street_address")},
           short_location = ${fill("short_location")},
           full_address = ${fill("full_address")},
-          venue_guests_only = c.guests_only,
+          venue_guests_only = e.venue_guests_only OR c.guests_only,
+          venue_reveal_token = CASE WHEN c.guests_only
+            THEN NULL ELSE e.venue_reveal_token END,
           updated_at = ${at}::timestamptz
         FROM jsonb_to_recordset(${rows}::jsonb) AS c(
           event_id uuid, street_address text, short_location text,
@@ -168,10 +177,18 @@ const make = Effect.gen(function* () {
           const answers = yield* Effect.forEach(
             unplaced,
             (event: Unplaced) =>
-              Effect.map(eventVenue(event.lumaEventId), (venue) => ({
-                event,
-                venue,
-              })),
+              Effect.gen(function* () {
+                const venue = yield* eventVenue(event.lumaEventId);
+                // Marked at once, whether or not its address is written.
+                if (!dryRun && Option.isSome(venue) && venue.value.guestsOnly) {
+                  yield* markGuestsOnly(
+                    sql,
+                    event.eventId,
+                    yield* DateTime.now,
+                  );
+                }
+                return { event, venue };
+              }),
             { concurrency },
           );
           const filled: Array<VenueFill> = [];

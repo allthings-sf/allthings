@@ -9,16 +9,24 @@ import { statements } from "./statements.ts";
  * `publicVenue`); once the evening is over, the venue shows again. Every
  * evening starts as public; the sync's next run reads each one ahead.
  *
- * site_sync, the role the hourly sync writes as, may read and write it
+ * `events.venue_reveal_token` is set only while a run that found Luma
+ * showing a hidden venue asks Luma again before showing it: any guests-only
+ * answer read meanwhile clears it, and the run shows the venue only if its
+ * token is still there. So an answer older than another run's never shows a
+ * venue that run found kept to guests. No public surface reads it.
+ *
+ * site_sync, the role the hourly sync writes as, may read and write both
  * where the role exists (infra/scripts/site-sync.ts); site_reader and the
  * studio read every column of `events` already.
  */
 export const venueGuestsOnly: ReadonlyArray<string> = [
   `ALTER TABLE "public"."events" ADD COLUMN "venue_guests_only" boolean DEFAULT false NOT NULL`,
+  `ALTER TABLE "public"."events" ADD COLUMN "venue_reveal_token" uuid`,
   `DO $grant$
   BEGIN
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'site_sync') THEN
-      GRANT SELECT ("venue_guests_only"), UPDATE ("venue_guests_only")
+      GRANT SELECT ("venue_guests_only", "venue_reveal_token"),
+        UPDATE ("venue_guests_only", "venue_reveal_token")
         ON "public"."events" TO site_sync;
     END IF;
   END

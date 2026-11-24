@@ -20,13 +20,33 @@ import type { RehearsedEvening } from "./company-hosts.ts";
  * or shown. An evening over keeps what was last read; its venue shows
  * again whatever it says. The feed sync hides a draft's venue on
  * publication until the API confirms it is public. The venue fill
- * (src/luma/venues.ts) writes Luma's setting with each address it fills.
+ * (src/luma/venues.ts) marks a venue guests-only with each address it
+ * fills where Luma says so, and never clears the mark.
  *
- * Only evenings whose stored setting differs from Luma's are written, each
- * with the Clock's now as its updated_at. All of Luma's answers are read
- * before the database is written, in one statement: a failure anywhere
- * writes nothing. An evening Luma doesn't show us keeps what it has.
- * Without LUMA_API_KEY it does nothing.
+ * A venue stored as hidden is shown again only once Luma has said so twice,
+ * the second time asked after the run announced the reveal by setting
+ * `events.venue_reveal_token` to its own token. Any guests-only answer
+ * written meanwhile, by another run or the venue fill, clears the token,
+ * and the run shows the venue only if its token is still there. So however
+ * runs overlap, an answer older than another run's never shows a venue
+ * that run found kept to guests. Comparing the stored setting with the one
+ * the run read would not be enough: a run whose newer answer agrees with
+ * what is stored writes nothing, so leaves nothing to compare. Hiding needs
+ * no such care: an older guests-only answer only keeps a venue hidden
+ * until the next run.
+ *
+ * Only evenings whose setting changes are written, each with the Clock's
+ * now as its updated_at; announcing a reveal, or calling one off, writes
+ * the token alone, so a run that changes nothing leaves the data's version
+ * as it was. Each write is one statement that locks the rows it writes and
+ * decides on each as it stands then. A guests-only answer is written as it
+ * arrives (`markGuestsOnly`), whatever the run is still asking: hiding is
+ * never wrong to keep, and another run about to show the venue must see it
+ * at once. The rest waits for all of Luma's answers: a failure asking about
+ * any evening writes nothing more. A failure asking again leaves the
+ * venue hidden, its reveal announced, until a later answer settles it. An
+ * evening Luma doesn't show us keeps what it has. Without LUMA_API_KEY it
+ * does nothing.
  */
 
 /** Evenings asked about at once, far under the API's 200 requests a minute. */
@@ -66,7 +86,7 @@ export type VenueVisibility =
       readonly changed: ReadonlyArray<VisibilityChange>;
       /** Of those, the Luma ids of evenings Luma does not show us. */
       readonly unavailable: ReadonlyArray<string>;
-      /** Evenings written; null for a dry run. */
+      /** Evenings whose setting this run changed; null for a dry run. */
       readonly written: number | null;
     };
 
@@ -96,7 +116,109 @@ export interface LumaVenueVisibilityShape {
   ) => Effect.Effect<VenueVisibility, LumaApiError | DataSourceError>;
 }
 
-const Written = Schema.Struct({ written: Schema.Int });
+/**
+ * What one answer does to its evening:
+ * - `hide`: Luma keeps the venue to guests. It is marked so, and any reveal
+ *   announced is called off.
+ * - `announce`: Luma shows a venue stored as hidden. The run announces the
+ *   reveal with its token, replacing any other run's (whose reveal then
+ *   shows nothing), and asks Luma again.
+ * - `reveal`: asked again, Luma still shows it. It is shown, if the run's
+ *   token is still there.
+ * - `withdraw`: asked again, Luma doesn't show us the evening. The run's
+ *   token is taken back, and the venue stays hidden.
+ */
+const Action = Schema.Literals(["hide", "announce", "reveal", "withdraw"]);
+type Action = typeof Action.Type;
+
+/** One evening, and what its answer does to it. */
+interface Settlement {
+  readonly eventId: string;
+  readonly action: Action;
+}
+
+/** An evening a write wrote, why, and whether its setting changed. */
+const Settled = Schema.Struct({
+  eventId: Schema.String,
+  action: Action,
+  changed: Schema.Boolean,
+});
+
+/**
+ * Writes what each answer does to its evening (`Action`), in one
+ * statement, with `token` the run's own (none to hide alone). Each row it
+ * writes is locked
+ * first and decided on as it stands then, so a write another run commits
+ * meanwhile is taken into account, never overwritten. Rows that need
+ * nothing are left alone. Returns each evening written.
+ */
+const settle = (
+  sql: SqlClient,
+  actions: ReadonlyArray<Settlement>,
+  token: string | null,
+  now: DateTime.Utc,
+) => {
+  if (actions.length === 0) return Effect.succeed([]);
+  const rows = JSON.stringify(
+    actions.map(({ eventId, action }) => ({ event_id: eventId, action })),
+  );
+  return sql`
+    WITH c AS (
+      SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS c(
+        event_id uuid, action text)
+    ), locked AS (
+      SELECT e.id, c.action,
+        (c.action = 'hide' AND NOT e.venue_guests_only)
+          OR c.action = 'reveal' AS changed
+      FROM events e JOIN c ON c.event_id = e.id
+      WHERE CASE c.action
+        WHEN 'hide' THEN
+          NOT e.venue_guests_only OR e.venue_reveal_token IS NOT NULL
+        WHEN 'announce' THEN e.venue_guests_only
+        WHEN 'reveal' THEN
+          e.venue_guests_only AND e.venue_reveal_token = ${token}::uuid
+        WHEN 'withdraw' THEN e.venue_reveal_token = ${token}::uuid
+      END
+      -- In one order, so two runs writing the same rows never deadlock.
+      ORDER BY e.id
+      FOR UPDATE OF e
+    ), written AS (
+      UPDATE events e SET
+        venue_guests_only = CASE l.action
+          WHEN 'hide' THEN true
+          WHEN 'reveal' THEN false
+          ELSE e.venue_guests_only
+        END,
+        venue_reveal_token = CASE WHEN l.action = 'announce'
+          THEN ${token}::uuid END,
+        updated_at = CASE WHEN l.changed
+          THEN ${DateTime.formatIso(now)}::timestamptz ELSE e.updated_at END
+      FROM locked l
+      WHERE e.id = l.id
+      RETURNING e.id::text AS "eventId", l.action, l.changed
+    )
+    SELECT "eventId", action, changed FROM written`.pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Settled))),
+    orDataSourceError,
+  );
+};
+
+/**
+ * Marks `eventId`'s venue guests-only, as Luma has just answered, and calls
+ * off any reveal announced for it (`events.venue_reveal_token`), at once:
+ * whatever else a run is still asking, since hiding is never wrong to keep
+ * and a run about to show the venue must see the answer first. The venue
+ * fill (src/luma/venues.ts) marks each venue Luma keeps to guests with it
+ * too. Whether its setting changed.
+ */
+export const markGuestsOnly = (
+  sql: SqlClient,
+  eventId: string,
+  now: DateTime.Utc,
+) =>
+  Effect.map(settle(sql, [{ eventId, action: "hide" }], null, now), (rows) =>
+    rows.some(({ changed }) => changed),
+  );
 
 const make = Effect.gen(function* () {
   const api = yield* LumaApi;
@@ -168,33 +290,6 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const write = (
-    changes: ReadonlyArray<VisibilityChange>,
-    now: DateTime.Utc,
-  ) => {
-    const rows = JSON.stringify(
-      changes.map((change) => ({
-        event_id: change.eventId,
-        guests_only: change.guestsOnly,
-      })),
-    );
-    return sql`
-      WITH written AS (
-        UPDATE events e SET
-          venue_guests_only = c.guests_only,
-          updated_at = ${DateTime.formatIso(now)}::timestamptz
-        FROM jsonb_to_recordset(${rows}::jsonb) AS c(
-          event_id uuid, guests_only boolean)
-        WHERE e.id = c.event_id AND e.venue_guests_only <> c.guests_only
-        RETURNING 1
-      )
-      SELECT count(*)::int AS written FROM written`.pipe(
-      Effect.flatMap(([row]) => Schema.decodeUnknownEffect(Written)(row)),
-      Effect.map(({ written }) => written),
-      orDataSourceError,
-    );
-  };
-
   const run = ({ dryRun, maxEvents, rehearsed = [] }: VenueVisibilityOptions) =>
     Option.match(api.eventVenue, {
       onNone: () =>
@@ -204,24 +299,88 @@ const make = Effect.gen(function* () {
         }),
       onSome: (eventVenue) =>
         Effect.gen(function* () {
+          /** The run's own token; none for a dry run, which writes nothing. */
+          const token = dryRun
+            ? null
+            : yield* Effect.sync(() => crypto.randomUUID());
+          /** Evenings whose setting this run changed. */
+          let changes = 0;
+          /** Luma's answers, each guests-only one marked as it arrives. */
+          const ask = (asked: ReadonlyArray<Ahead>) =>
+            Effect.forEach(
+              asked,
+              (evening) =>
+                Effect.gen(function* () {
+                  const venue = yield* eventVenue(evening.lumaEventId);
+                  if (
+                    token !== null &&
+                    Option.isSome(venue) &&
+                    venue.value.guestsOnly
+                  ) {
+                    const now = yield* DateTime.now;
+                    if (yield* markGuestsOnly(sql, evening.eventId, now)) {
+                      changes++;
+                    }
+                  }
+                  return { evening, venue };
+                }),
+              { concurrency },
+            );
           const evenings = yield* read(
             yield* DateTime.now,
             maxEvents ?? null,
             dryRun ? rehearsed : [],
           );
-          const answers = yield* Effect.forEach(
-            evenings,
-            (evening: Ahead) =>
-              Effect.map(eventVenue(evening.lumaEventId), (venue) => ({
-                evening,
-                venue,
-              })),
-            { concurrency },
+          const answers = yield* ask(evenings);
+          /** Luma's latest answer for each evening, by id. */
+          const latest = new Map(
+            answers.map(({ evening, venue }) => [evening.eventId, venue]),
           );
+          let written: number | null = null;
+          if (token !== null) {
+            const announced = new Set(
+              (yield* settle(
+                sql,
+                answers.flatMap(
+                  ({ evening, venue }): ReadonlyArray<Settlement> =>
+                    Option.isSome(venue) &&
+                    !venue.value.guestsOnly &&
+                    evening.guestsOnly
+                      ? [{ eventId: evening.eventId, action: "announce" }]
+                      : [],
+                ),
+                token,
+                yield* DateTime.now,
+              )).map(({ eventId }) => eventId),
+            );
+            const again = yield* ask(
+              evenings.filter(({ eventId }) => announced.has(eventId)),
+            );
+            for (const { evening, venue } of again) {
+              latest.set(evening.eventId, venue);
+            }
+            // A guests-only answer was marked as it arrived, calling off
+            // the reveal; the rest show the venue, or take the token back.
+            const shown = yield* settle(
+              sql,
+              again.flatMap(
+                ({ evening, venue }): ReadonlyArray<Settlement> =>
+                  Option.isNone(venue)
+                    ? [{ eventId: evening.eventId, action: "withdraw" }]
+                    : venue.value.guestsOnly
+                      ? []
+                      : [{ eventId: evening.eventId, action: "reveal" }],
+              ),
+              token,
+              yield* DateTime.now,
+            );
+            written = changes + shown.filter(({ changed }) => changed).length;
+          }
           const guestsOnly: Array<string> = [];
           const changed: Array<VisibilityChange> = [];
           const unavailable: Array<string> = [];
-          for (const { evening, venue } of answers) {
+          for (const evening of evenings) {
+            const venue = latest.get(evening.eventId) ?? Option.none();
             if (Option.isNone(venue)) {
               unavailable.push(evening.lumaEventId);
               continue;
@@ -236,11 +395,6 @@ const make = Effect.gen(function* () {
               });
             }
           }
-          const written = dryRun
-            ? null
-            : changed.length === 0
-              ? 0
-              : yield* write(changed, yield* DateTime.now);
           return {
             _tag: "Planned",
             asked: evenings.length,

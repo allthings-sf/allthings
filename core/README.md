@@ -535,9 +535,16 @@ full. `src/luma/venue-visibility.ts` keeps Luma's setting in
 `events.venue_guests_only`: the hourly sync asks Luma's API about every
 published evening not over with a Luma page, whatever venue is stored, and
 writes the ones that changed, before the venue fill runs; and the fill
-writes Luma's setting with each address it fills, from the same answer, so
-a guests-only venue it fills in is never shown, though the visibility step
-failed or didn't ask about it. Luma alone decides it: an organizer's
+marks a venue guests-only with each address it fills, from the same
+answer, so a guests-only venue it fills in is never shown, though the
+visibility step failed or didn't ask about it. Both write a guests-only
+answer as it arrives, whatever else they are still asking. A venue is
+shown again only once Luma has said so twice, the second time asked after
+the run announced the reveal (`events.venue_reveal_token`), which any
+guests-only answer written meanwhile, by another run or the fill, calls
+off: so however runs overlap, an answer older than another's never shows a
+venue the newer one found kept to guests. The fill never clears the mark.
+Luma alone decides it: an organizer's
 venue (`venue_by_organizer`) is still Luma's to hide. The city is read from
 the address as Luma writes one ("201 Spear St, San Francisco, CA 94105,
 USA"): the part before the state, when it follows a numbered street

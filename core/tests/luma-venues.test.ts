@@ -258,20 +258,24 @@ describe("the fill", () => {
       )
     ).rows[0]?.venue_guests_only;
 
-  test("writes Luma's guests-only setting with the address, from the same answer", async () => {
+  test("marks the venue guests-only with the address, from the same answer, and never clears the mark", async () => {
     const hidden = await database();
     expect(await guestsOnly(hidden)).toBe(false);
     await fill(hidden);
     expect(await guestsOnly(hidden)).toBe(true);
 
-    const shown = await database();
-    await shown.exec(
+    // Its answer may be older than a guests-only one another run has just
+    // read and found nothing to write for: only the visibility step, which
+    // asks again first, shows a venue again.
+    const kept = await database();
+    await kept.exec(
       `UPDATE events SET venue_guests_only = true WHERE slug = '2026-11-05-upcoming'`,
     );
-    await fill(shown, {
+    await fill(kept, {
       "evt-upcoming": [answer("evt-upcoming", coderabbit, "public")],
     });
-    expect(await guestsOnly(shown)).toBe(false);
+    expect(await venue(kept)).toMatchObject({ full_address: coderabbit });
+    expect(await guestsOnly(kept)).toBe(true);
   });
 
   test("never fills a venue the organizers keep", async () => {

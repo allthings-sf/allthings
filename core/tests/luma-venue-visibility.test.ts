@@ -1,12 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { PGlite } from "@electric-sql/pglite";
 import { DateTime, Effect, Exit, Layer } from "effect";
+import { HttpClient } from "effect/http";
 import { LumaApi } from "../src/luma/api.ts";
 import {
   LumaVenueVisibility,
   type VenueVisibility,
   type VenueVisibilityOptions,
 } from "../src/luma/venue-visibility.ts";
+import { LumaVenues } from "../src/luma/venues.ts";
 import {
   clockAt,
   clockLayer,
@@ -311,12 +313,327 @@ describe("the venue visibility", () => {
     expect(await stored(db)).toEqual(before);
   });
 
-  test("a failure asking about any evening writes nothing", async () => {
-    const db = await database();
-    const before = await stored(db);
+  test("a failure asking about any evening writes nothing but the guests-only answers already read", async () => {
+    // Luma keeps failing about the evening live now, until the retries run
+    // out; meanwhile it keeps the upcoming one to guests, which is marked.
+    const marked = await database();
+    const before = await stored(marked);
     await expect(
-      check(db, { ...both, "evt-endsnow": [{ status: 401 }] }),
+      check(marked, { ...both, "evt-endsnow": [{ status: 503 }] }),
     ).rejects.toThrow();
+    expect(await stored(marked)).toEqual({
+      ...before,
+      "2026-11-05-upcoming": {
+        guestsOnly: true,
+        updatedAt: "2026-10-03T19:00:00.000Z",
+      },
+    });
+    // Luma would show the upcoming one's venue again: that waits for every
+    // answer, so nothing is written.
+    const kept = await database();
+    await kept.exec(
+      `UPDATE events SET venue_guests_only = true WHERE slug = '2026-11-05-upcoming'`,
+    );
+    const hidden = await stored(kept);
+    await expect(
+      check(kept, {
+        "evt-upcoming": [answer("evt-upcoming", "public")],
+        "evt-endsnow": [{ status: 503 }],
+      }),
+    ).rejects.toThrow();
+    expect(await stored(kept)).toEqual(hidden);
+    expect((await upcoming(kept))?.venue_reveal_token).toBeNull();
+  });
+});
+
+/**
+ * A fake Luma that, once it has answered about `id` for the `nth` time,
+ * holds that answer until `release`: whoever asked has read the evening and
+ * has Luma's answer, and goes on only when released. `paused` settles once
+ * it holds it.
+ */
+const heldLuma = (
+  replies: Readonly<Record<string, ReadonlyArray<Reply>>>,
+  id: string,
+  nth: number,
+) => {
+  const luma = fakeApi(replies);
+  let hold!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    hold = resolve;
+  });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = 0;
+  const layer = Layer.effect(
+    HttpClient.HttpClient,
+    Effect.map(HttpClient.HttpClient, (inner) =>
+      HttpClient.make((request, url) =>
+        Effect.gen(function* () {
+          const response = yield* inner.execute(request);
+          if (url.searchParams.get("event_id") === id && ++asked === nth) {
+            hold();
+            yield* Effect.promise(() => released);
+          }
+          return response;
+        }),
+      ),
+    ),
+  ).pipe(Layer.provide(luma.layer));
+  return { layer, paused, release };
+};
+
+/**
+ * A run that writes, started now on a clock that stands still (so a held
+ * answer never times out), with Luma held as {@link heldLuma} holds it.
+ */
+const startHeld = (
+  db: PGlite,
+  replies: Readonly<Record<string, ReadonlyArray<Reply>>>,
+  id: string,
+  nth: number,
+) => {
+  const { layer, paused, release } = heldLuma(replies, id, nth);
+  const done = Effect.runPromise(
+    LumaVenueVisibility.use((visibility) =>
+      visibility.run({ dryRun: false }),
+    ).pipe(
+      Effect.provide(
+        LumaVenueVisibility.layer.pipe(
+          Layer.provide(LumaApi.layer),
+          Layer.provide(Layer.mergeAll(layer, configFrom(withKey))),
+          Layer.provideMerge(sqlLayer(db)),
+          Layer.provideMerge(clockLayer),
+        ),
+      ),
+    ),
+  );
+  return { paused, release, done };
+};
+
+/** The upcoming meetup's setting and reveal token, as stored. */
+const upcoming = async (db: PGlite) =>
+  (
+    await db.query<{
+      venue_guests_only: boolean;
+      venue_reveal_token: string | null;
+    }>(
+      `SELECT venue_guests_only, venue_reveal_token FROM events
+       WHERE slug = '2026-11-05-upcoming'`,
+    )
+  ).rows[0];
+
+describe("two runs at once", () => {
+  /** The seed, its upcoming meetup's venue kept to guests. */
+  const hidden = async () => {
+    const db = await database();
+    await db.exec(
+      `UPDATE events SET venue_guests_only = true WHERE slug = '2026-11-05-upcoming'`,
+    );
+    return db;
+  };
+
+  test("a run whose answer is older than another run's never shows a venue that run found kept to guests", async () => {
+    const db = await hidden();
+    // A reads the venue as hidden and Luma, asked first, shows it to
+    // everyone; A pauses there. Then Luma keeps it to guests.
+    const a = startHeld(
+      db,
+      {
+        ...both,
+        "evt-upcoming": [
+          answer("evt-upcoming", "public"),
+          answer("evt-upcoming"),
+        ],
+      },
+      "evt-upcoming",
+      1,
+    );
+    await a.paused;
+    // B reads it as hidden too, and Luma says it is: nothing to write.
+    const b = await check(db, both);
+    expect(b.result).toMatchObject({ changed: [], written: 0 });
+    // A goes on with its older answer, and must not show the venue.
+    a.release();
+    const result = await a.done;
+    expect(await upcoming(db)).toEqual({
+      venue_guests_only: true,
+      venue_reveal_token: null,
+    });
+    expect(result).toMatchObject({
+      guestsOnly: ["2026-11-05-upcoming"],
+      changed: [],
+      written: 0,
+    });
+  });
+
+  test("a guests-only answer read while a run asks again calls off the venue it was about to show", async () => {
+    const db = await hidden();
+    // A has announced the reveal and Luma, asked again, still shows the
+    // venue; A pauses before writing it. Then Luma keeps it to guests.
+    const a = startHeld(
+      db,
+      { ...both, "evt-upcoming": [answer("evt-upcoming", "public")] },
+      "evt-upcoming",
+      2,
+    );
+    await a.paused;
+    expect((await upcoming(db))?.venue_reveal_token).not.toBeNull();
+    // B's answer, the newest, keeps it hidden and calls off A's reveal.
+    const b = await check(db, both);
+    expect(b.result).toMatchObject({ changed: [], written: 0 });
+    expect(await upcoming(db)).toEqual({
+      venue_guests_only: true,
+      venue_reveal_token: null,
+    });
+    a.release();
+    const result = await a.done;
+    expect(result).toMatchObject({ written: 0 });
+    expect(await upcoming(db)).toEqual({
+      venue_guests_only: true,
+      venue_reveal_token: null,
+    });
+  });
+
+  test("the venue fill's guests-only answer, read while a run asks again, calls off that run's reveal", async () => {
+    const db = await hidden();
+    await db.exec(`UPDATE events SET street_address = NULL,
+        short_location = NULL, full_address = NULL
+      WHERE slug = '2026-11-05-upcoming'`);
+    const a = startHeld(
+      db,
+      { ...both, "evt-upcoming": [answer("evt-upcoming", "public")] },
+      "evt-upcoming",
+      2,
+    );
+    await a.paused;
+    const luma = fakeApi({ "evt-upcoming": [answer("evt-upcoming")] });
+    const fill = await Effect.runPromise(
+      settle(LumaVenues.use((venues) => venues.run({ dryRun: false }))).pipe(
+        Effect.provide(
+          LumaVenues.layer.pipe(
+            Layer.provide(LumaApi.layer),
+            Layer.provide(Layer.mergeAll(luma.layer, configFrom(withKey))),
+            Layer.provideMerge(sqlLayer(db)),
+            Layer.provideMerge(clockLayer),
+          ),
+        ),
+      ),
+    );
+    expect(fill).toMatchObject({ written: 1 });
+    a.release();
+    expect(await a.done).toMatchObject({ written: 0 });
+    expect(await upcoming(db)).toEqual({
+      venue_guests_only: true,
+      venue_reveal_token: null,
+    });
+  });
+});
+
+describe("the venue fill, beside a run showing a venue again", () => {
+  test("marks a venue Luma keeps to guests, and calls off the reveal, though another fill wrote the address meanwhile", async () => {
+    const db = await database();
+    await db.exec(`UPDATE events SET venue_guests_only = true,
+        venue_reveal_token = '00000000-0000-4000-8000-0000000000aa',
+        street_address = NULL, short_location = NULL, full_address = NULL
+      WHERE slug = '2026-11-05-upcoming'`);
+    // This fill has read the evening without a venue, and Luma keeps it
+    // to guests; it pauses there, while another fill writes an address.
+    const luma = heldLuma(
+      { "evt-upcoming": [answer("evt-upcoming")] },
+      "evt-upcoming",
+      1,
+    );
+    const done = Effect.runPromise(
+      LumaVenues.use((venues) => venues.run({ dryRun: false })).pipe(
+        Effect.provide(
+          LumaVenues.layer.pipe(
+            Layer.provide(LumaApi.layer),
+            Layer.provide(Layer.mergeAll(luma.layer, configFrom(withKey))),
+            Layer.provideMerge(sqlLayer(db)),
+            Layer.provideMerge(clockLayer),
+          ),
+        ),
+      ),
+    );
+    await luma.paused;
+    await db.exec(`UPDATE events SET street_address = '201 Spear St',
+        full_address = '201 Spear St, San Francisco, CA 94105, USA'
+      WHERE slug = '2026-11-05-upcoming'`);
+    luma.release();
+    // Its address isn't written over the other's, but the mark is, and the
+    // reveal announced is called off.
+    expect(await done).toMatchObject({ written: 0 });
+    expect(await upcoming(db)).toEqual({
+      venue_guests_only: true,
+      venue_reveal_token: null,
+    });
+  });
+});
+
+describe("showing a venue again", () => {
+  /** The seed, its upcoming meetup's venue kept to guests. */
+  const hidden = async () => {
+    const db = await database();
+    await db.exec(
+      `UPDATE events SET venue_guests_only = true WHERE slug = '2026-11-05-upcoming'`,
+    );
+    return db;
+  };
+
+  test("asks Luma again first, and shows it only if Luma still does", async () => {
+    const shown = await hidden();
+    const twice = await check(shown, {
+      ...both,
+      "evt-upcoming": [answer("evt-upcoming", "public")],
+    });
+    expect(twice.asked).toEqual([
+      "evt-endsnow",
+      "evt-upcoming",
+      "evt-upcoming",
+    ]);
+    expect(twice.result).toMatchObject({
+      changed: [{ slug: "2026-11-05-upcoming", guestsOnly: false }],
+      written: 1,
+    });
+    expect(await upcoming(shown)).toEqual({
+      venue_guests_only: false,
+      venue_reveal_token: null,
+    });
+
+    const kept = await hidden();
+    const before = await stored(kept);
+    const again = await check(kept, {
+      ...both,
+      "evt-upcoming": [
+        answer("evt-upcoming", "public"),
+        answer("evt-upcoming"),
+      ],
+    });
+    expect(again.result).toMatchObject({
+      guestsOnly: ["2026-11-05-upcoming"],
+      changed: [],
+      written: 0,
+    });
+    expect(await stored(kept)).toEqual(before);
+    expect((await upcoming(kept))?.venue_reveal_token).toBeNull();
+  });
+
+  test("keeps it hidden when Luma, asked again, doesn't show us the evening", async () => {
+    const db = await hidden();
+    const before = await stored(db);
+    const { result } = await check(db, {
+      ...both,
+      "evt-upcoming": [answer("evt-upcoming", "public"), { status: 404 }],
+    });
+    expect(result).toMatchObject({
+      changed: [],
+      unavailable: ["evt-upcoming"],
+      written: 0,
+    });
     expect(await stored(db)).toEqual(before);
+    expect((await upcoming(db))?.venue_reveal_token).toBeNull();
   });
 });

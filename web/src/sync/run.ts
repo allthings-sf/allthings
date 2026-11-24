@@ -158,12 +158,13 @@ export const syncLimits = {
     postSearch: { within: "7 days", maxEvents: 10, window: "5 minutes" },
   },
   /**
-   * Within 50 subrequests: the feed is one, each venue visibility, venue,
+   * Within 50 subrequests: the feed is one, each venue visibility one (two
+   * for a venue shown again, which Luma is asked about twice), each venue,
    * draft, evening asked for its hosts and description one, and each image
    * at most six (a cover lookup and its fallback, a download and three
    * redirects), so two venue visibilities, two venues, a draft, an
    * evening's hosts, two descriptions and two images of each kind are at
-   * most 45.
+   * most 47.
    */
   free: {
     startBefore: "35 seconds",
@@ -177,11 +178,11 @@ export const syncLimits = {
     companyHosts: { within: "7 days", maxEvents: 1 },
     descriptions: { window: "30 seconds", maxEvents: 2 },
     followers: { maxProfiles: 2, staleAfter: "7 days", window: "30 seconds" },
-    // What the 50 subrequests leave after the steps before it (45).
+    // What the 50 subrequests leave after the steps before it (47).
     postSearch: {
       within: "7 days",
       maxEvents: 1,
-      maxRequests: 4,
+      maxRequests: 2,
       window: "30 seconds",
     },
   },
