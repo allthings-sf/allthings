@@ -192,8 +192,8 @@ export async function requireMainOnly(
  * (1Password's own API Credential template, passed as a file only this user
  * can read and removed right after: op ignores the values of a template
  * piped on stdin). The role's password has already changed when this runs,
- * so each failure says which store has the new value and to rerun the
- * script.
+ * so it tries every store, whatever fails before it, and then names each
+ * one still holding the old value and says to rerun the script.
  */
 export async function storeConnectionString(options: {
   value: string;
@@ -213,6 +213,9 @@ export async function storeConnectionString(options: {
       ? [{ flags: [], where: "the repository" }]
       : []),
   ];
+  // Every store is tried: one that fails never keeps the others on the old
+  // password, which no longer works.
+  const stale: Array<{ readonly where: string; readonly cause: unknown }> = [];
   for (const target of targets) {
     try {
       await run(
@@ -228,22 +231,19 @@ export async function storeConnectionString(options: {
         options.value,
       );
     } catch (cause) {
-      throw new Error(
-        `The role's password has changed, but ${options.secret} in ${target.where} (and any listed after it) and 1Password ("${options.item}") still hold the old one. Rerun this script once GitHub secret writes work.`,
-        { cause },
-      );
+      stale.push({ where: `${options.secret} in ${target.where}`, cause });
     }
   }
   try {
     await storeItem(options);
   } catch (cause) {
+    stale.push({ where: `1Password ("${options.item}")`, cause });
+  }
+  const first = stale[0];
+  if (first !== undefined) {
     throw new Error(
-      `${
-        targets.length > 0
-          ? `${options.secret} in ${targets.map((target) => target.where).join(" and ")} has the new value, but 1Password ("${options.item}") may not`
-          : `1Password ("${options.item}") may not have the new value`
-      }: ${cause instanceof Error ? cause.message : String(cause)}. Rerun this script once 1Password answers.`,
-      { cause },
+      `The role's password has changed, but ${stale.map((store) => store.where).join(" and ")} may still hold the old one: ${first.cause instanceof Error ? first.cause.message : String(first.cause)}. Rerun this script once ${stale.length === 1 ? "it answers" : "they answer"}.`,
+      { cause: first.cause },
     );
   }
 }
