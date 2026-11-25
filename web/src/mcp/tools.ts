@@ -515,6 +515,7 @@ export function registerTools(
       inputSchema: toolInputs.get_year,
       outputSchema: outputSchema(Schema.Struct(Contract.Year.fields)),
       annotations: readOnly,
+      _meta: toolView("get_year"),
     },
     (input) => call("get_year", input),
   );

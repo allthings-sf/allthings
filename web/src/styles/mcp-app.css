@@ -50,7 +50,8 @@ p,
 ol,
 ul,
 dl,
-dd {
+dd,
+figure {
   margin: 0;
 }
 
@@ -671,11 +672,247 @@ html[data-direction="back"]::view-transition-new(stage) {
   animation-name: at-enter-back;
 }
 
+/* A year of evenings (year.ts): the statement, the figures, the photos,
+   the year month by month, where we met, and every evening. */
+
+.year-page {
+  gap: var(--at-space-6);
+}
+
+.year-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+  border-top: var(--at-stroke-heavy) solid var(--at-text);
+  padding-top: var(--at-space-3);
+}
+
+.statement {
+  max-width: var(--at-measure-statement);
+  font-size: var(--at-type-lead-size);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.statement-lead {
+  font-weight: 800;
+}
+
+.statement-after {
+  color: var(--at-meta);
+  font-weight: 500;
+}
+
+.year-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-8);
+}
+
+.figures dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--at-size-tile-s), 1fr));
+  gap: var(--at-space-4) var(--at-layout-gutter);
+}
+
+.figure {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--at-space-1);
+  border-top: var(--at-stroke-rule) solid var(--at-text);
+  padding-top: var(--at-space-2);
+  animation: at-rise 420ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.figure:nth-child(2) {
+  animation-delay: 60ms;
+}
+
+.figure:nth-child(3) {
+  animation-delay: 120ms;
+}
+
+.figure:nth-child(4) {
+  animation-delay: 180ms;
+}
+
+.figure dd {
+  font-size: var(--at-font-size-figure);
+  font-weight: 800;
+  font-stretch: 112%;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  text-indent: var(--at-type-event-lockup-inset);
+  font-variant-numeric: tabular-nums;
+}
+
+.photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--at-size-tile-s), 1fr));
+  gap: var(--at-space-3);
+}
+
+.photo-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+}
+
+.photo-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: var(--at-surface);
+  transition: filter 200ms ease-out;
+}
+
+.photo-link:hover .photo-image {
+  filter: saturate(1.15) contrast(1.05);
+}
+
+.photo-caption {
+  overflow-wrap: anywhere;
+}
+
+/* Month by month: the year's twelve months on the grid's twelve columns. */
+
+.months {
+  display: grid;
+  grid-template-columns: repeat(var(--at-grid-columns), minmax(0, 1fr));
+  gap: 0 var(--at-space-2);
+}
+
+.month {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+  border-top: var(--at-stroke-rule) solid var(--at-text);
+  padding: var(--at-space-2) 0 var(--at-space-3);
+}
+
+.month-quiet {
+  border-top-color: var(--at-rule);
+}
+
+.month-quiet .month-name {
+  opacity: 0.6;
+}
+
+.month-evenings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-1);
+}
+
+.month-evening {
+  font-size: var(--at-type-meta-size);
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: break-word;
+}
+
+/* Where we met: dots on the city's east side (map.ts). */
+
+.map-figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+}
+
+.map {
+  display: block;
+  width: 100%;
+  max-width: var(--at-size-media);
+  height: auto;
+}
+
+.map-dot {
+  fill: var(--at-link);
+  fill-opacity: 0.2;
+  stroke: var(--at-link);
+  stroke-width: var(--at-stroke-rule);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: at-pop 520ms cubic-bezier(0.2, 0, 0, 1.4) both;
+}
+
+.map-quiet {
+  fill: var(--at-rule);
+}
+
+.map-label {
+  fill: var(--at-text);
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.map-count {
+  fill: var(--at-text);
+  font-size: var(--at-type-meta-size);
+  font-weight: 800;
+}
+
+.map-water {
+  fill: var(--at-meta);
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+@keyframes at-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+.evening-hosts,
+.evening-stage {
+  font-size: var(--at-font-size-small);
+}
+
+.evening-hosts {
+  color: var(--at-meta);
+}
+
 /* On a phone, a row stacks its date over the rest. */
+
+/* The year's months: twelve across a full screen, six in a chat's frame,
+   four and then three as it narrows. */
+
+@media (--at-below-xl) {
+  .months {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    row-gap: var(--at-space-3);
+  }
+}
+
+@media (--at-below-m) {
+  .months {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 
 @media (--at-below-s) {
   .evening {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .months {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* The map scales down with a phone's width, and its words with it:
+     they're set larger, to read at the size the label role sets. */
+  .map-label,
+  .map-count,
+  .map-water {
+    font-size: calc(var(--at-type-meta-size) * 1.5);
   }
 
   .evening-when {
@@ -713,11 +950,14 @@ html[data-direction="back"]::view-transition-new(stage) {
 @media (prefers-reduced-motion: reduce) {
   .tab,
   .chip,
-  [aria-busy="true"] {
+  [aria-busy="true"],
+  .photo-image {
     transition: none;
   }
 
-  .evening {
+  .evening,
+  .figure,
+  .map-dot {
     animation: none;
   }
 

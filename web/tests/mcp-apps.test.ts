@@ -5,6 +5,7 @@ import {
   RESOURCE_URI_META_KEY,
 } from "@modelcontextprotocol/ext-apps/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
+import { mediaOrigin } from "../src/links.ts";
 import { appMimeType, toolView, uiExtension, views } from "../src/mcp/apps.ts";
 import { viewDocument } from "../src/mcp/views.ts";
 import { mcpHandler } from "../src/mcp/server.ts";
@@ -88,14 +89,19 @@ describe("the MCP Apps extension", () => {
 });
 
 describe("tools/list", () => {
-  test("names a view for list_events, get_event and list_speakers, and for no other tool", async () => {
+  test("names a view for list_events, get_event, list_speakers and get_year, and for no other tool", async () => {
     const { tools } = (await rpc("tools/list")) as {
       tools: Array<ListedTool>;
     };
     const named = tools
       .filter((tool) => tool._meta?.["ui"] !== undefined)
       .map((tool) => tool.name);
-    expect(named).toEqual(["list_events", "get_event", "list_speakers"]);
+    expect(named).toEqual([
+      "list_events",
+      "get_event",
+      "list_speakers",
+      "get_year",
+    ]);
     for (const tool of tools) {
       if (named.includes(tool.name)) {
         expect(tool._meta).toEqual(toolView(tool.name as keyof typeof views));
@@ -116,7 +122,7 @@ describe("resources/list", () => {
       expect(resource.uri).toStartWith("ui://");
       expect(resource.mimeType).toBe(RESOURCE_MIME_TYPE);
       expect(resource._meta?.ui).toEqual({
-        csp: { connectDomains: [], resourceDomains: [origin] },
+        csp: { connectDomains: [], resourceDomains: [origin, mediaOrigin] },
         prefersBorder: false,
       });
     }
@@ -141,7 +147,7 @@ describe("resources/read", () => {
         expect(content.uri).toBe(views[tool].uri);
         expect(content.mimeType).toBe(RESOURCE_MIME_TYPE);
         expect(content._meta?.ui).toEqual({
-          csp: { connectDomains: [], resourceDomains: [origin] },
+          csp: { connectDomains: [], resourceDomains: [origin, mediaOrigin] },
           prefersBorder: false,
         });
         expect(content.text).toBe(viewDocument(tool, origin));

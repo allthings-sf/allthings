@@ -101,6 +101,8 @@ function talkView(talk: Talk, index: number): HTMLElement {
 export interface EveningOptions {
   /** Takes the reader back to the list they came from, when they came from one. */
   readonly back?: () => void;
+  /** What the way back says: "All evenings" unless given. */
+  readonly backLabel?: string;
   /**
    * Saves the evening's calendar file (the site's own) through the host;
    * absent when the host doesn't save files, where it's a plain link.
@@ -161,7 +163,7 @@ function actButton(
 /** One evening. Its title takes focus when it replaces a list (main.ts). */
 export function eveningView(
   event: Event,
-  { back, saveToCalendar, ask }: EveningOptions,
+  { back, backLabel = "All evenings", saveToCalendar, ask }: EveningOptions,
 ): HTMLElement {
   const place = neighborhood(event);
   const where = [
@@ -208,7 +210,7 @@ export function eveningView(
   const backButton =
     back === undefined
       ? null
-      : h("button", { type: "button", class: "quiet back" }, "All evenings");
+      : h("button", { type: "button", class: "quiet back" }, backLabel);
   backButton?.addEventListener("click", () => back?.());
   return h(
     "article",

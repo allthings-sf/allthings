@@ -63,3 +63,28 @@ export const cursor = (): HTMLElement =>
 /** Text only a screen reader hears, as the site's `.visually-hidden`. */
 export const spoken = (text: string): HTMLElement =>
   h("span", { class: "visually-hidden" }, text);
+
+const svgNamespace = "http://www.w3.org/2000/svg";
+
+/** Attribute names an SVG element may be given: geometry and naming, no handlers or links. */
+const svgSettable =
+  /^(?:class|id|role|viewBox|preserveAspectRatio|focusable|x|y|x1|y1|x2|y2|cx|cy|r|width|height|d|points|text-anchor|dominant-baseline|aria-[a-z]+)$/;
+
+/** An SVG element, made as `h` makes HTML ones: attributes by name, text as text. */
+export function svg(
+  tag: "svg" | "g" | "circle" | "text" | "title" | "desc" | "line" | "path",
+  attributes: Readonly<Record<string, string | number | undefined>> | null,
+  ...children: Children
+): SVGElement {
+  const element = document.createElementNS(svgNamespace, tag);
+  for (const [name, value] of Object.entries(attributes ?? {})) {
+    if (value === undefined) continue;
+    if (!svgSettable.test(name)) throw new Error(`Refusing attribute ${name}`);
+    element.setAttribute(name, String(value));
+  }
+  for (const child of children.flat()) {
+    if (child === false || child === null || child === undefined) continue;
+    element.append(child);
+  }
+  return element;
+}

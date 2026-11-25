@@ -53,6 +53,61 @@ const speakers = speakerDirectory.speakers.map((speaker) =>
   Schema.decodeUnknownSync(Contract.Speaker)(speaker),
 );
 
+/** A year, as get_year answers it: two evenings, one with its photo. */
+const yearOf = (year: number) =>
+  Schema.decodeUnknownSync(Contract.Year)({
+    year,
+    url: `https://allthings.dev/year/${year}`,
+    timeZone: "America/Los_Angeles",
+    tally: { evenings: 2, speakers: 3, hostingCompanies: 2, guests: 450 },
+    evenings: [
+      {
+        slug: effectNight.slug,
+        name: "Effect San Francisco",
+        topic: "effect",
+        url: effectNight.url,
+        startsAt: `${year}-01-21T01:30:00.000Z`,
+        neighborhood: "East Cut",
+        hosts: ["CodeRabbit"],
+        onStage: [
+          {
+            name: "Michael Arnaldi",
+            url: "https://allthings.dev/people/michael-arnaldi",
+          },
+          {
+            name: "Simon Farshid",
+            url: "https://allthings.dev/people/simon-farshid",
+          },
+        ],
+        guests: 250,
+        photo: {
+          url: "https://media.allthings.dev/events/effect.jpg",
+          alt: "Michael Arnaldi on stage",
+          width: 2048,
+          height: 1536,
+        },
+      },
+      {
+        slug: "sync",
+        name: "allthings/sync",
+        topic: "sync",
+        url: "https://allthings.dev/sync",
+        startsAt: `${year}-04-29T01:30:00.000Z`,
+        neighborhood: "East Cut",
+        hosts: ["CodeRabbit"],
+        onStage: [
+          {
+            name: "Andre Landgraf",
+            url: "https://allthings.dev/people/andre-landgraf",
+          },
+        ],
+        guests: 200,
+        photo: null,
+      },
+    ],
+    years: [2026, 2025],
+  });
+
 const result = (value: Record<string, unknown>): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
   structuredContent: value,
@@ -985,6 +1040,130 @@ describe("browsing evenings", () => {
           `${ahead.url}/calendar.ics`,
         );
         expect(view.contexts).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+});
+
+describe("get_year's view", () => {
+  test(
+    "draws the year: its statement, figures, photos, months, map and evenings",
+    async () => {
+      const view = await mount("get_year");
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result(yearOf(2026)));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".year-page") !== null,
+          "the year",
+        );
+        expect(text(document.querySelector("h1"))).toBe(
+          "450 people said “I’m in.” 2 evenings in 2026, in the neighborhoods of San Francisco.",
+        );
+        expect(all(view.window, ".figure dd").map(text)).toEqual([
+          "2",
+          "450",
+          "3",
+          "2",
+        ]);
+        const photo = document.querySelector(".photo-image");
+        expect(photo?.getAttribute("src")).toBe(
+          "https://media.allthings.dev/events/effect.jpg",
+        );
+        expect(photo?.getAttribute("alt")).toBe("Michael Arnaldi on stage");
+        expect(photo?.getAttribute("loading")).toBe("lazy");
+        // Twelve months, two with an evening.
+        expect(all(view.window, ".month")).toHaveLength(12);
+        expect(all(view.window, ".month:not(.month-quiet)")).toHaveLength(2);
+        // The map says in words what its dots show.
+        expect(text(document.querySelector(".map title"))).toBe(
+          "Where we met in 2026: East Cut, 2 evenings.",
+        );
+        expect(all(view.window, ".year-page .evening")).toHaveLength(2);
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "shows another year through get_year, from its tabs",
+    async () => {
+      const view = await mount("get_year", (name, args) =>
+        name === "get_year" && args["year"] === 2025
+          ? result(yearOf(2025))
+          : result({}),
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result(yearOf(2026)));
+        const { document } = view.window;
+        await until(
+          () => document.getElementById("year-2025") !== null,
+          "tabs",
+        );
+        document.getElementById("year-2025")?.click();
+        await until(
+          () =>
+            text(document.querySelector(".year-head .at-type-meta")) ===
+            "2025 in evenings",
+          "2025",
+        );
+        expect(view.calls).toEqual([
+          { name: "get_year", arguments: { year: 2025 } },
+        ]);
+        expect(
+          document.getElementById("year-2025")?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "opens an evening's lineup, and comes back to the year",
+    async () => {
+      const view = await mount(
+        "get_year",
+        (name) => (name === "get_event" ? result(effectNight) : result({})),
+        { offers: { context: true } },
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result(yearOf(2026)));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".year-page") !== null,
+          "the year",
+        );
+        await until(() => view.contexts.length > 0, "the agent told");
+        expect(view.contexts.at(-1)).toStartWith(
+          "The reader is looking back on 2026 in the allthings view",
+        );
+        all(view.window, ".year-page .evening button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        expect(view.calls).toEqual([
+          { name: "get_event", arguments: { slug: effectNight.slug } },
+        ]);
+        const back = document.querySelector(".back");
+        expect(text(back)).toBe("2026 in evenings");
+        back?.click();
+        await until(
+          () => document.querySelector(".year-page") !== null,
+          "the year again",
+        );
       } finally {
         view.window.close();
       }

@@ -2,6 +2,7 @@ import type {
   Event,
   EventSummary,
   Speaker,
+  Year,
 } from "allthings-core/src/contract.ts";
 import {
   type Bridge,
@@ -23,6 +24,7 @@ import { fullDate } from "./format.ts";
 import { type CallTool, type Host, hostOf, type ToolResult } from "./host.ts";
 import { swap } from "./motion.ts";
 import { peopleView } from "./people.ts";
+import { yearView } from "./year.ts";
 
 /**
  * The allthings view, as an MCP App (web/src/mcp/views.ts serves it). The
@@ -230,11 +232,15 @@ function openLinksThroughHost(
  * Why the lineup isn't shown, with the way back to the list it replaced,
  * so a failed request never strands the reader.
  */
-function lineupFailed(text: string, back: () => void): HTMLElement {
+function lineupFailed(
+  text: string,
+  back: () => void,
+  backLabel = "All evenings",
+): HTMLElement {
   const backButton = h(
     "button",
     { type: "button", class: "quiet back" },
-    "All evenings",
+    backLabel,
   );
   backButton.addEventListener("click", back);
   return h(
@@ -263,8 +269,9 @@ function tellEvenings(when: Selection, shown: number, place: string | null) {
 }
 
 /** The lineup view's options, as the host allows them. */
-const lineupOptions = (back?: () => void) => ({
+const lineupOptions = (back?: () => void, backLabel?: string) => ({
   ...(back === undefined ? {} : { back }),
+  ...(backLabel === undefined ? {} : { backLabel }),
   ...(host.download === undefined
     ? {}
     : {
@@ -285,6 +292,7 @@ async function openEvening(
   callTool: CallTool,
   slug: string,
   back: () => void,
+  backLabel?: string,
 ): Promise<void> {
   const change = nextChange();
   await show(notice("Asking allthings for the lineup"));
@@ -294,7 +302,11 @@ async function openEvening(
   } catch {
     if (isLatest(change)) {
       await show(
-        lineupFailed("The host couldn't ask allthings for that evening.", back),
+        lineupFailed(
+          "The host couldn't ask allthings for that evening.",
+          back,
+          backLabel,
+        ),
       );
     }
     return;
@@ -302,11 +314,11 @@ async function openEvening(
   if (!isLatest(change)) return;
   const detail = dataOf(evening);
   if (evening.isError === true || detail === undefined) {
-    await show(lineupFailed(errorOf(evening), back));
+    await show(lineupFailed(errorOf(evening), back, backLabel));
     return;
   }
   const event = detail as unknown as Event;
-  await show(eveningView(event, lineupOptions(back)), "forward");
+  await show(eveningView(event, lineupOptions(back, backLabel)), "forward");
   tellEvening(event);
   document.getElementById("view-title")?.focus();
 }
@@ -368,6 +380,40 @@ async function browseEvenings(
   }
   await render(found, args, "forward");
   document.getElementById(`tab-${when}`)?.focus();
+}
+
+/** Shows another year in place, keeping this one until it's in. */
+async function switchYear(callTool: CallTool, year: number): Promise<void> {
+  const change = nextChange();
+  const panel = document.getElementById("year-panel");
+  markBusy(panel, change);
+  let found: ToolResult;
+  try {
+    found = await callTool("get_year", { year });
+  } catch {
+    clearBusy(panel, change);
+    if (isLatest(change)) {
+      browseFailed(panel, "The host couldn't ask allthings for that year.");
+    }
+    return;
+  }
+  clearBusy(panel, change);
+  if (!isLatest(change)) return;
+  // A year that couldn't be read leaves this one, and its tabs, in place.
+  if (found.isError === true || typeof dataOf(found)?.["year"] !== "number") {
+    browseFailed(panel, errorOf(found));
+    return;
+  }
+  await render(found, { year }, "forward");
+  document.getElementById(`year-${year}`)?.focus();
+}
+
+/** Tells the agent which year the reader is looking back on. */
+function tellYear(year: Year): void {
+  host.tellModel?.(
+    `The reader is looking back on ${year.year} in the allthings view: ${year.tally.evenings === 1 ? "1 evening" : `${year.tally.evenings} evenings`}, ${year.tally.speakers} people on stage, ${year.tally.hostingCompanies} hosting companies and ${year.tally.guests} who said they were in.`,
+    { view: "year", year: year.year, url: year.url },
+  );
 }
 
 /** The latest search asked for: only its answer is drawn. */
@@ -462,6 +508,41 @@ async function render(
     const event = data as unknown as Event;
     await show(eveningView(event, lineupOptions()), direction);
     tellEvening(event);
+    return;
+  }
+  if (
+    view === "year" &&
+    data !== undefined &&
+    typeof data["year"] === "number"
+  ) {
+    const year = data as unknown as Year;
+    const page = yearView(
+      year,
+      callTool === undefined
+        ? {}
+        : {
+            switchYear: (next) => {
+              void switchYear(callTool, next);
+            },
+            open: (slug, from) => {
+              void openEvening(
+                callTool,
+                slug,
+                () => {
+                  nextChange();
+                  void show(page, "back").then(() => {
+                    tellYear(year);
+                    from.focus();
+                    return undefined;
+                  });
+                },
+                `${year.year} in evenings`,
+              );
+            },
+          },
+    );
+    await show(page, direction);
+    tellYear(year);
     return;
   }
   if (view === "speakers" && Array.isArray(data?.["speakers"])) {
