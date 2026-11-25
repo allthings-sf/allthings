@@ -247,16 +247,18 @@ bunx cf@1.0.0-beta.12 --profile allthings alerting policies test <id>
 
 ## Deploying production
 
-Production deploys run on GitHub Actions in `esthor/allthings-ops`. Any agent can start one from any machine once staging has deployed the tip of `allthings-sf/allthings` main. Set `sha` to that commit's full 40-character SHA and run the plan first:
+Production deploys run on GitHub Actions in `esthor/allthings-ops`. Any agent can start one from any machine once staging has deployed the tip of `allthings-sf/allthings` main. Set `sha` to that commit's full 40-character SHA, note the time, and run the plan first:
 
 ```sh
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 gh workflow run prod-deploy.yaml --repo esthor/allthings-ops -f sha="$sha" -f plan_only=true
 ```
 
-Use the run ID from the dispatch URL when available. Otherwise, list the latest run and confirm it is the dispatch you just made before using its ID. If the new run has yet to appear, repeat the lookup.
+Find this dispatch's run: the only `workflow_dispatch` run of the workflow created at or after `since`. An earlier plan for the same SHA can't match, because it was created before `since`. If none has appeared yet, wait a few seconds and look again. If more than one appears, someone else dispatched at the same time; stop and check which is yours before going on.
 
 ```sh
-gh run list --workflow prod-deploy.yaml --repo esthor/allthings-ops --limit 1 --json databaseId
+gh run list --workflow prod-deploy.yaml --repo esthor/allthings-ops \
+  --event workflow_dispatch --created ">=$since" --json databaseId,createdAt
 ```
 
 Set `plan_run_id` to that run ID, wait for the run to succeed, and read its logs.
