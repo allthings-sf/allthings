@@ -466,7 +466,19 @@ describe("MCP", () => {
         clientInfo: { name: "test", version: "1" },
       },
     });
-    expect(actual).toEqual(expected);
+    // As the app does, but for the resources its views are (src/mcp/apps.ts),
+    // which the app never had.
+    type Initialized = {
+      result: { capabilities: Record<string, unknown> };
+    } & Record<string, unknown>;
+    const message = rpcMessage(actual.body) as Initialized;
+    const { resources, ...capabilities } = message.result.capabilities;
+    expect(resources).toEqual({ listChanged: true });
+    expect({
+      ...message,
+      result: { ...message.result, capabilities },
+    }).toEqual(rpcMessage(expected.body) as Initialized);
+    expect({ ...actual, body: "" }).toEqual({ ...expected, body: "" });
     // The server introduces itself by the new name.
     expect(
       (rpcMessage(actual.body) as { result: { serverInfo: { name: string } } })
@@ -515,8 +527,10 @@ describe("MCP", () => {
     );
     // Names, titles, descriptions, annotations and input schemas, exactly,
     // but for one deliberate difference: the Worker writes the name as one
-    // word, allthings, where the app still writes "all things".
-    const withoutOutput = ({ outputSchema: _, ...tool }: Tool) => tool;
+    // word, allthings, where the app still writes "all things". The app
+    // had no views: the `_meta` naming the Worker's is web/tests/mcp-apps.test.ts's.
+    const withoutOutput = ({ outputSchema: _, _meta: __, ...tool }: Tool) =>
+      tool;
     const todayText = JSON.stringify(today.map(withoutOutput));
     expect(todayText).toContain("all things");
     expect(served.map(withoutOutput)).toEqual(

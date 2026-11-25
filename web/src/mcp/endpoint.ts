@@ -152,9 +152,12 @@ export class Mcp extends Context.Service<
           // its own, from this request's sender, and none is kept.
           const propose = (input: Record<string, unknown>) =>
             run(proposeProgram(input, sourceOf(request), clientOf(request)));
+          // The views' faces come from the Worker answering, which has
+          // them under the names its build gave them (views.ts).
           return mcpHandler(
             through === undefined ? direct : via(through),
             propose,
+            new URL(request.url).origin,
           )(request);
         },
         answer: async (url) => {

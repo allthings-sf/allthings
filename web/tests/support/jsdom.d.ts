@@ -4,7 +4,14 @@
  */
 declare module "jsdom" {
   export class JSDOM {
-    constructor(html: string, options?: { runScripts?: "outside-only" });
+    constructor(
+      html: string,
+      options?: {
+        runScripts?: "outside-only" | "dangerously";
+        pretendToBeVisual?: boolean;
+        beforeParse?: (window: object) => void;
+      },
+    );
     readonly window: {
       readonly document: unknown;
       eval(code: string): unknown;
