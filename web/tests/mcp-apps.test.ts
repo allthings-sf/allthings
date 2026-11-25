@@ -88,14 +88,14 @@ describe("the MCP Apps extension", () => {
 });
 
 describe("tools/list", () => {
-  test("names a view for list_events and get_event, and for no other tool", async () => {
+  test("names a view for list_events, get_event and list_speakers, and for no other tool", async () => {
     const { tools } = (await rpc("tools/list")) as {
       tools: Array<ListedTool>;
     };
     const named = tools
       .filter((tool) => tool._meta?.["ui"] !== undefined)
       .map((tool) => tool.name);
-    expect(named).toEqual(["list_events", "get_event"]);
+    expect(named).toEqual(["list_events", "get_event", "list_speakers"]);
     for (const tool of tools) {
       if (named.includes(tool.name)) {
         expect(tool._meta).toEqual(toolView(tool.name as keyof typeof views));

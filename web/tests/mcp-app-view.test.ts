@@ -4,6 +4,7 @@ import { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import * as Contract from "allthings-core/src/contract.ts";
 import eventDetails from "allthings-core/tests/fixtures/event-details.json" with { type: "json" };
+import speakerDirectory from "allthings-core/tests/fixtures/speakers.json" with { type: "json" };
 import { Schema } from "effect";
 import { JSDOM } from "jsdom";
 import type { ViewedTool } from "../src/mcp/apps.ts";
@@ -48,6 +49,10 @@ const evenings = [effectNight, ...otherEvenings];
 const summaries = evenings.map(
   ({ talks: _, hosts: __, ...summary }) => summary,
 );
+const speakers = speakerDirectory.speakers.map((speaker) =>
+  Schema.decodeUnknownSync(Contract.Speaker)(speaker),
+);
+
 const result = (value: Record<string, unknown>): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
   structuredContent: value,
@@ -478,6 +483,98 @@ describe("get_event's view", () => {
           if (index > 0)
             expect(level - (levels[index - 1] ?? 0)).toBeLessThanOrEqual(1);
         }
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+});
+
+describe("list_speakers's view", () => {
+  test(
+    "draws the people and searches again through list_speakers",
+    async () => {
+      const view = await mount("list_speakers", (name, args) =>
+        name === "list_speakers"
+          ? result({
+              speakers: speakers.filter((speaker) =>
+                speaker.name
+                  .toLowerCase()
+                  .includes(
+                    typeof args["query"] === "string" ? args["query"] : "",
+                  ),
+              ),
+            })
+          : result({}),
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result({ speakers }));
+        const { document } = view.window;
+        await until(
+          () => all(view.window, ".person-row").length > 0,
+          "the people",
+        );
+        expect(all(view.window, ".person-row")).toHaveLength(speakers.length);
+        expect(await view.axe()).toEqual([]);
+
+        const [someone] = speakers;
+        const query = someone?.name.split(" ")[0]?.toLowerCase() ?? "";
+        const field = document.getElementById("people-query");
+        if (field === null) throw new Error("No search field");
+        field.value = query;
+        field.form?.requestSubmit();
+        await until(
+          () => text(document.querySelector(".view-count")).includes(query),
+          "the search's results",
+        );
+        expect(view.calls).toEqual([
+          { name: "list_speakers", arguments: { query } },
+        ]);
+        expect(all(view.window, ".person-row").length).toBeGreaterThan(0);
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+  test(
+    "keeps the people and the search when a search fails",
+    async () => {
+      const view = await mount("list_speakers", () => ({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "allthings speakers are temporarily unavailable. Please retry in a minute.",
+          },
+        ],
+      }));
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result({ speakers }));
+        const { document } = view.window;
+        await until(
+          () => all(view.window, ".person-row").length > 0,
+          "the people",
+        );
+        const field = document.getElementById("people-query");
+        if (field === null) throw new Error("No search field");
+        field.value = "nobody";
+        field.form?.requestSubmit();
+        await until(
+          () => document.querySelector("[role=alert]") !== null,
+          "the alert",
+        );
+        expect(text(document.querySelector(".search + [role=alert]"))).toBe(
+          "allthings speakers are temporarily unavailable. Please retry in a minute.",
+        );
+        // The people shown before, and the search to try again, stay.
+        expect(all(view.window, ".person-row")).toHaveLength(speakers.length);
+        expect(document.getElementById("people-query")).not.toBeNull();
         expect(await view.axe()).toEqual([]);
       } finally {
         view.window.close();
