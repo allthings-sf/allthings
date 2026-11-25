@@ -24,6 +24,7 @@ export class HostError extends Error {
 export interface HostContext {
   readonly theme?: "light" | "dark";
   readonly displayMode?: string;
+  readonly availableDisplayModes?: ReadonlyArray<string>;
   readonly containerDimensions?: {
     readonly height?: number;
     readonly maxHeight?: number;
@@ -35,6 +36,9 @@ export interface HostContext {
 export interface HostCapabilities {
   readonly openLinks?: object;
   readonly serverTools?: object;
+  readonly updateModelContext?: object;
+  readonly message?: object;
+  readonly downloadFile?: object;
 }
 
 /** The host's answer to `ui/initialize`. */

@@ -101,12 +101,67 @@ function talkView(talk: Talk, index: number): HTMLElement {
 export interface EveningOptions {
   /** Takes the reader back to the list they came from, when they came from one. */
   readonly back?: () => void;
+  /**
+   * Saves the evening's calendar file (the site's own) through the host;
+   * absent when the host doesn't save files, where it's a plain link.
+   */
+  readonly saveToCalendar?: (url: string, name: string) => Promise<void>;
+  /**
+   * Asks the agent about the evening, as a message in the chat from the
+   * reader; absent when the host takes no messages from the view.
+   */
+  readonly ask?: (question: string) => Promise<void>;
+}
+
+/** The evening as a reader names it in a question: allthings/effect, or its name. */
+export function spokenName(event: Event): string {
+  return eveningName(event, "allthings")
+    .map((part) =>
+      typeof part === "string"
+        ? part
+        : part instanceof HTMLElement &&
+            part.getAttribute("aria-hidden") !== "true"
+          ? (part.textContent ?? "")
+          : "",
+    )
+    .join("");
+}
+
+/**
+ * A button that does `act`, saying so while it does and, if the host
+ * couldn't, saying that in its place for a moment.
+ */
+function actButton(
+  label: string,
+  doing: string,
+  act: () => Promise<void>,
+): HTMLButtonElement {
+  const button = h("button", { type: "button", class: "quiet" }, label);
+  const run = async () => {
+    button.disabled = true;
+    button.textContent = doing;
+    try {
+      await act();
+      button.textContent = label;
+    } catch {
+      button.textContent = "The host couldn’t";
+      setTimeout(() => {
+        button.textContent = label;
+      }, 2400);
+    } finally {
+      button.disabled = false;
+    }
+  };
+  button.addEventListener("click", () => {
+    void run();
+  });
+  return button;
 }
 
 /** One evening. Its title takes focus when it replaces a list (main.ts). */
 export function eveningView(
   event: Event,
-  { back }: EveningOptions,
+  { back, saveToCalendar, ask }: EveningOptions,
 ): HTMLElement {
   const place = neighborhood(event);
   const where = [
@@ -122,10 +177,34 @@ export function eveningView(
   if (event.status !== "past" && event.rsvpUrl !== null) {
     actions.push(link(event.rsvpUrl, { class: "button" }, "I’m in"));
   }
+  if (event.status !== "past") {
+    // The site's own file, as the evening's page offers it.
+    const calendar = `${event.url}/calendar.ics`;
+    const file = `${event.slug}.ics`;
+    actions.push(
+      saveToCalendar === undefined
+        ? link(calendar, { class: "quiet" }, "Add to calendar")
+        : actButton("Add to calendar", "Saving", () =>
+            saveToCalendar(calendar, file),
+          ),
+    );
+  }
   if (event.recordingUrl !== null) {
     actions.push(link(event.recordingUrl, { class: "quiet" }, "Recording"));
   }
   actions.push(link(event.url, { class: "quiet" }, "On allthings.dev"));
+  if (ask !== undefined) {
+    const name = spokenName(event);
+    actions.push(
+      actButton("Ask about it", "Asking", () =>
+        ask(
+          event.status === "past"
+            ? `Tell me about ${name}: who was on stage, what they talked about, and what they left behind.`
+            : `Tell me about ${name}: who's on stage, when and where it is, and how to get in.`,
+        ),
+      ),
+    );
+  }
   const backButton =
     back === undefined
       ? null
