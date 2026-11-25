@@ -4,8 +4,10 @@ import source from "../all-things.tokens.json" with { type: "json" };
 import { expandCustomMedia, length, themeCss } from "../src/css.ts";
 import { below, contentVw, portrait, sizes } from "../src/layout.ts";
 import {
+  dimension,
   dimensionGroups,
   dimensions,
+  type Fluid,
   measures,
   TokenFile,
   tokens,
@@ -115,7 +117,7 @@ describe("the theme's layout", () => {
       );
     }
     expect(css).toContain("--at-type-lead-size: clamp(22px, 3vw, 30px);");
-    expect(css).toContain("--at-type-body-size: 18px;");
+    expect(css).toContain("--at-type-body-size: clamp(18px, 2vw, 20px);");
   });
 
   test("names each breakpoint as a custom media query", () => {
@@ -194,5 +196,114 @@ describe("optical insets", () => {
       expect(css).toContain(`--at-type-${kebab}-inset: -${role.inset}em;`);
       expect(css).toContain(`text-indent: var(--at-type-${kebab}-inset);`);
     }
+  });
+});
+
+/**
+ * The size a length set with `fluid` comes to in a window `width` px wide,
+ * as length() writes it; null for one that follows its container instead.
+ */
+function sizeAt(
+  largest: number,
+  fluid: Fluid | undefined,
+  width: number,
+): number | null {
+  if (fluid === undefined) return largest;
+  if ("container" in fluid) return null;
+  const share = (fluid.viewport * width) / 100;
+  return Math.max(fluid.min?.value ?? 0, Math.min(share, largest));
+}
+
+interface Display {
+  readonly mmPerPx: number;
+  readonly distanceMm: number;
+}
+
+/**
+ * The visual angle, in degrees, that `px` CSS pixels make on a display
+ * whose CSS pixel is `mmPerPx` wide, read from `distanceMm` away.
+ */
+const degrees = (px: number, { mmPerPx, distanceMm }: Display) =>
+  (Math.atan((px * mmPerPx) / distanceMm) * 180) / Math.PI;
+
+/**
+ * The display reading text is hardest to make big enough on: a 49-inch
+ * 5120x1440 ultrawide at 1x (about 108.5 pixels per inch) read from about
+ * 70 cm, whose CSS pixel subtends less of the eye than the CSS reference
+ * pixel does. A window on it is easily 2500px wide.
+ */
+const ultrawide: Display = { mmPerPx: 0.2341, distanceMm: 700 };
+const ultrawideWindow = 2515;
+
+describe("reading sizes, at the accessibility framework's excellent bar", () => {
+  // Legibility runs by x-height, as the eye's angle sees it. Readers with
+  // normal sight read fluently from about 0.2 degrees of x-height (the
+  // critical print size); the smallest text people read stays at 0.17.
+  const role = (name: string) => {
+    const found = typeRoles(tokens).find((each) => each.name === name);
+    if (found === undefined) throw new Error(`No type role ${name}`);
+    return found;
+  };
+  const roleSize = (name: string, width: number) =>
+    sizeAt(role(name).size, role(name).fluid, width) ?? 0;
+  const archivo = role("body").xHeight;
+
+  test("set nothing people read under 16px, on any screen", () => {
+    const narrowest = 320;
+    const sizes = [
+      ...typeRoles(tokens).map(
+        (each) =>
+          [each.name, sizeAt(each.size, each.fluid, narrowest)] as const,
+      ),
+      ...dimensions(tokens, "fontSize").map(
+        (token) =>
+          [token.name, sizeAt(token.px, token.fluid, narrowest)] as const,
+      ),
+    ];
+    expect(sizes.length).toBeGreaterThan(15);
+    expect(sizes.filter(([, size]) => size !== null && !(size >= 16))).toEqual(
+      [],
+    );
+  });
+
+  test("give body copy a 0.2 degree x-height on a 1x ultrawide", () => {
+    const size = roleSize("body", ultrawideWindow);
+    expect(size).toBeGreaterThanOrEqual(20);
+    expect(degrees(size * archivo, ultrawide)).toBeGreaterThanOrEqual(0.2);
+  });
+
+  test("give meta, list places and small copy 0.17 degrees there", () => {
+    const small = dimension(tokens, "fontSize", "small");
+    const angles = [
+      ["meta", roleSize("meta", ultrawideWindow) * role("meta").xHeight],
+      [
+        "listPlace",
+        roleSize("listPlace", ultrawideWindow) * role("listPlace").xHeight,
+      ],
+      [
+        "small",
+        (sizeAt(small.px, small.fluid, ultrawideWindow) ?? 0) * archivo,
+      ],
+    ].map(([name, xHeight]) => [name, degrees(Number(xHeight), ultrawide)]);
+    expect(angles.filter(([, angle]) => !(Number(angle) >= 0.17))).toEqual([]);
+  });
+
+  test("measure each role's x-height from its face", () => {
+    for (const each of typeRoles(tokens)) {
+      expect(each.xHeight).toBeGreaterThan(0.5);
+      expect(each.xHeight).toBeLessThan(0.56);
+    }
+    expect(role("meta").xHeight).not.toBe(archivo);
+  });
+
+  test("find text under its bar", () => {
+    // 18px body, as the site had it, is 0.181 degrees there, and 14px meta 0.143.
+    expect(degrees(18 * archivo, ultrawide)).toBeLessThan(0.2);
+    expect(degrees(14 * role("meta").xHeight, ultrawide)).toBeLessThan(0.17);
+    const body = { min: { value: 18, unit: "px" }, viewport: 2 } as const;
+    expect(sizeAt(20, body, 390)).toBe(18);
+    expect(sizeAt(20, body, 2515)).toBe(20);
+    expect(sizeAt(72, { viewport: 12 }, 320)).toBe(38.4);
+    expect(sizeAt(112, { container: 15.5 }, 320)).toBeNull();
   });
 });

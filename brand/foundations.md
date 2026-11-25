@@ -105,13 +105,15 @@ One family, Archivo, used at three widths, plus Geist Mono for meta.
 | Lead | 30 / 1.25 | 500 | 100% | −1% | 75 |
 | Statement | 22 / 1.3 | 500 | 100% | −1% | 75 |
 | List name | 21 | 700 | 100% | 0 | 75 |
-| List place (caps) | 14 | 600 | 75% | +6% | 75 |
-| Body | 18 / 1.55 | 400 | 100% | 0 | 90 |
-| Meta (Geist Mono, caps) | 14 / 1.5 | 500 | — | +6% | 75 |
+| List place (caps) | 17 | 600 | 75% | +6% | 75 |
+| Body | 20 / 1.55 | 400 | 100% | 0 | 90 |
+| Meta (Geist Mono, caps) | 17 / 1.5 | 500 | — | +6% | 75 |
 
 Each role's letters are pulled back by their face's left side bearing (brand/type-metrics.json, measured from the fonts by brand/marks), so the wordmark, a 156px lockup and a mono meta line share one visual left edge. The statement role sets the two sentences beside a page's lists, one line each at desktop widths.
 
-Sizes are the largest. The wordmark, event lockup, label, lead and statement shrink on narrow screens, each down to a floor its token sets.
+Sizes are the largest. The wordmark, event lockup, label, lead, statement and body shrink on narrow screens, each down to a floor its token sets: body from 20px on screens 1000px wide and up to 18px on phones.
+
+**Sizes are set by how big text looks, not by its pixels.** Legibility runs by x-height, as the angle it makes at the eye. Readers with normal sight read fluently from about 0.2° of x-height (the critical print size), and the smallest text people read stays at 0.17° or more. The hardest display to clear is a large desktop monitor at 1x, such as a 49-inch 5120x1440 ultrawide read from about 70 cm, whose CSS pixel looks smaller than the reference pixel. There, body at 20px has an x-height of 0.20° and meta at 17px 0.17°; at 18 and 14 they were 0.18° and 0.14°. So nothing people read is set under 16px on any screen; bios, which are reading copy, are body copy; and small copy (talk titles, links, tables, captions) is 17px. The tests hold the tokens to these angles with each role's x-height, measured from its face by brand/marks into `type-metrics.json`.
 
 ## Layout
 
@@ -149,6 +151,7 @@ Sizes are the largest. The wordmark, event lockup, label, lead and statement shr
 APCA targets above for all text; never color alone to carry meaning; real buttons and links; alt text that describes the moment in a photo; the cursor stops blinking for people who prefer reduced motion.
 
 - Text is set no smaller than its contrast allows: Lc 75 for small text, 60 at 24px and up, 45 at 36px and up. The palette shows a color too faint for text on a ground as a bar, not as text.
+- Nothing people read is under 16px, and body and meta clear the x-heights in Typography on a 1x desktop display.
 - Every page starts with a link past the header to the page itself, and every control shows its focus.
 - The mode control is a popover. Escape or a click outside closes it, without script.
 - Long names and titles break rather than overflow, down to a 320px screen and at 200% zoom.
