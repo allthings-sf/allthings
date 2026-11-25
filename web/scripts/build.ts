@@ -843,10 +843,14 @@ export interface McpApp {
   readonly script: string;
 }
 
-const headers = `# Content-hashed files never change under their name.
+const headers = `# Content-hashed files never change under their name. Any origin may
+# read them: a face is always fetched with CORS, and a page served from
+# elsewhere that sets the site's faces, such as an agent host's frame for
+# an MCP App, has an origin of its own.
 /assets/*
   Cache-Control: ${immutable}
   X-Content-Type-Options: nosniff
+  Access-Control-Allow-Origin: *
 
 # The web app manifest, by its registered type.
 /manifest.webmanifest
