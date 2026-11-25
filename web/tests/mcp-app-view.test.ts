@@ -118,7 +118,7 @@ async function mount(
   answer: (
     name: string,
     args: Record<string, unknown>,
-  ) => CallToolResult = () => result({}),
+  ) => CallToolResult | Promise<CallToolResult> = () => result({}),
   { refuseLinks = false }: { readonly refuseLinks?: boolean } = {},
 ): Promise<Mounted> {
   const windowOpened: Array<string> = [];
@@ -576,6 +576,61 @@ describe("list_speakers's view", () => {
         expect(all(view.window, ".person-row")).toHaveLength(speakers.length);
         expect(document.getElementById("people-query")).not.toBeNull();
         expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+  test(
+    "draws only the latest search when an earlier one answers last",
+    async () => {
+      const [first, second] = speakers;
+      if (first === undefined || second === undefined) {
+        throw new Error("The fixture needs two speakers");
+      }
+      const firstName = first.name.toLowerCase();
+      const secondName = second.name.toLowerCase();
+      const view = await mount("list_speakers", async (_, args) => {
+        const query = typeof args["query"] === "string" ? args["query"] : "";
+        // The first search answers well after the second.
+        if (query === firstName) await Bun.sleep(400);
+        return result({
+          speakers: speakers.filter((speaker) =>
+            speaker.name.toLowerCase().includes(query),
+          ),
+        });
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result({ speakers }));
+        const { document } = view.window;
+        await until(
+          () => all(view.window, ".person-row").length > 0,
+          "the people",
+        );
+        const search = (query: string) => {
+          const field = document.getElementById("people-query");
+          if (field === null) throw new Error("No search field");
+          field.value = query;
+          field.form?.requestSubmit();
+        };
+        search(firstName);
+        search(secondName);
+        await until(
+          () =>
+            text(document.querySelector(".view-count")).includes(secondName),
+          "the second search's answer",
+        );
+        // Long enough for the first search's late answer to arrive.
+        await Bun.sleep(600);
+        expect(view.calls).toHaveLength(2);
+        expect(text(document.querySelector(".view-count"))).toContain(
+          secondName,
+        );
+        expect(
+          all(view.window, ".person-name").map((name) => text(name)),
+        ).toContain(second.name);
       } finally {
         view.window.close();
       }

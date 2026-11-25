@@ -196,16 +196,25 @@ async function openEvening(
   document.getElementById("view-title")?.focus();
 }
 
+/** The latest search asked for: only its answer is drawn. */
+let latestSearch = 0;
+
 /** Searches the people again, everyone for an empty search. */
 async function searchPeople(callTool: CallTool, query: string): Promise<void> {
   const args = query === "" ? {} : { query };
+  // A search asked again before the last one answered supersedes it: an
+  // answer that comes back late, or a late failure, is dropped.
+  const search = ++latestSearch;
   let found: ToolResult;
   try {
     found = await callTool("list_speakers", args);
   } catch {
-    searchFailed("The host couldn't ask allthings for that search.");
+    if (search === latestSearch) {
+      searchFailed("The host couldn't ask allthings for that search.");
+    }
     return;
   }
+  if (search !== latestSearch) return;
   if (found.isError === true) {
     searchFailed(errorOf(found));
     return;
