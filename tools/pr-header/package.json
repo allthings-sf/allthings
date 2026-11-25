@@ -11,7 +11,7 @@
     "shields": "bun src/write-shields.ts"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.2",
+    "@types/bun": "1.4.5",
     "@types/fontkit": "2.0.9",
     "fontkit": "2.0.4",
     "prettier": "^3.6.2",
