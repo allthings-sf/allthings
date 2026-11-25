@@ -89,6 +89,22 @@ export const datedEvenings = (
     )
     .slice(0, limit);
 
+/**
+ * A cut's date, "2026.09.15", which may break after its year ("2026." over
+ * "09.15") where the cut is narrower than the date: in a narrow grid, or
+ * with a reader's wider letter spacing. It never runs past its cut.
+ */
+function CutDate({ date }: { readonly date: string }) {
+  const afterYear = date.indexOf(".") + 1;
+  return (
+    <>
+      <span safe>{date.slice(0, afterYear)}</span>
+      <wbr />
+      <span safe>{date.slice(afterYear)}</span>
+    </>
+  );
+}
+
 function DatedCut({
   evening,
   index,
@@ -114,9 +130,8 @@ function DatedCut({
         <time
           class="cut-date at-type-meta"
           datetime={DateTime.formatIso(evening.startsAt)}
-          safe
         >
-          {simpleDate(evening.startsAt)}
+          <CutDate date={simpleDate(evening.startsAt)} />
         </time>
       </a>
     </li>

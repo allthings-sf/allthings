@@ -533,12 +533,12 @@ main > section,
   background: var(--at-surface);
 }
 
-/* A date stays on one line, within its cut: each cut is at least as wide
-   as 2026.09.30 set a hair tighter than the meta role. */
+/* A date is set a hair tighter than the meta role, on one line where its
+   cut is wide enough, else breaking after its year (CutDate in
+   pages/slash-grid.tsx): never past its cut, where the grid clips it. */
 .cut-date {
   letter-spacing: -0.02em;
   line-height: 1.2;
-  white-space: nowrap;
 }
 
 .slash-grid-dated a:hover .cut-date,

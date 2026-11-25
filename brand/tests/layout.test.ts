@@ -250,7 +250,7 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
 
   test("set nothing people read under 16px, on any screen", () => {
     const narrowest = 320;
-    const sizes = [
+    const readingSizes = [
       ...typeRoles(tokens).map(
         (each) =>
           [each.name, sizeAt(each.size, each.fluid, narrowest)] as const,
@@ -260,10 +260,10 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
           [token.name, sizeAt(token.px, token.fluid, narrowest)] as const,
       ),
     ];
-    expect(sizes.length).toBeGreaterThan(15);
-    expect(sizes.filter(([, size]) => size !== null && !(size >= 16))).toEqual(
-      [],
-    );
+    expect(readingSizes.length).toBeGreaterThan(15);
+    expect(
+      readingSizes.filter(([, size]) => size !== null && !(size >= 16)),
+    ).toEqual([]);
   });
 
   test("give body copy a 0.2 degree x-height on a 1x ultrawide", () => {
