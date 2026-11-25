@@ -502,6 +502,7 @@ export function registerTools(
       inputSchema: toolInputs.get_guide,
       outputSchema: outputSchema(Schema.Struct(Contract.Guide.fields)),
       annotations: readOnly,
+      _meta: toolView("get_guide"),
     },
     () => call("get_guide", {}),
   );

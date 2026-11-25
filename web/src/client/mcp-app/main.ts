@@ -1,6 +1,7 @@
 import type {
   Event,
   EventSummary,
+  Guide,
   Speaker,
   Year,
 } from "allthings-core/src/contract.ts";
@@ -25,6 +26,7 @@ import { type CallTool, type Host, hostOf, type ToolResult } from "./host.ts";
 import { swap } from "./motion.ts";
 import { peopleView } from "./people.ts";
 import { yearView } from "./year.ts";
+import { guideView } from "./guide.ts";
 
 /**
  * The allthings view, as an MCP App (web/src/mcp/views.ts serves it). The
@@ -543,6 +545,31 @@ async function render(
     );
     await show(page, direction);
     tellYear(year);
+    return;
+  }
+  if (view === "guide" && Array.isArray(data?.["entries"])) {
+    const guide = data as unknown as Guide;
+    const tellGuide = (stars: number | null, shown: number) =>
+      host.tellModel?.(
+        `The reader is reading the allthings guide in the allthings view: ${shown === 1 ? "1 happening" : `${shown} happenings`}${stars === null ? "" : ` with ${stars === 1 ? "1 star" : `${stars} stars`}`}: ${guide.entries
+          .filter((entry) => stars === null || entry.stars === stars)
+          .map((entry) => entry.name)
+          .join(", ")}.`,
+        { view: "guide", stars, shown },
+      );
+    await show(
+      guideView(guide, {
+        narrowed: tellGuide,
+        ...(host.askInChat === undefined
+          ? {}
+          : {
+              ask: (question: string) =>
+                host.askInChat?.(question) ?? Promise.resolve(),
+            }),
+      }),
+      direction,
+    );
+    tellGuide(null, guide.entries.length);
     return;
   }
   if (view === "speakers" && Array.isArray(data?.["speakers"])) {

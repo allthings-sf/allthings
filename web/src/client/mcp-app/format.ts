@@ -120,3 +120,22 @@ export const monthOf = (instant: string): number => local(instant).month - 1;
 /** "2,852": a count, grouped as the site writes one. */
 export const grouped = (n: number): string =>
   n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+/** The calendar day in San Francisco now, "YYYY-MM-DD". */
+export function todayInSanFrancisco(now: Date = new Date()): string {
+  const { year, month, day: date } = local(now.toISOString());
+  return `${String(year).padStart(4, "0")}-${twoDigits(month)}-${twoDigits(date)}`;
+}
+
+/**
+ * "2027.04.29–30": days from `from` through `to`, both "YYYY-MM-DD", each
+ * part said once, as the site's simpleDays writes them.
+ */
+export function simpleDays(from: string, to: string): string {
+  const [fromYear, fromMonth, fromDay] = from.split("-");
+  const [toYear, toMonth, toDay] = to.split("-");
+  const first = `${fromYear}.${fromMonth}.${fromDay}`;
+  if (fromYear !== toYear) return `${first}–${toYear}.${toMonth}.${toDay}`;
+  if (fromMonth !== toMonth) return `${first}–${toMonth}.${toDay}`;
+  return fromDay === toDay ? first : `${first}–${toDay}`;
+}

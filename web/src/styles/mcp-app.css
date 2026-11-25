@@ -880,6 +880,150 @@ html[data-direction="back"]::view-transition-new(stage) {
   color: var(--at-meta);
 }
 
+/* The guide (guide.ts): what's next on a line from today, then every
+   happening by its stars. */
+
+.guide-page {
+  gap: var(--at-space-6);
+}
+
+.guide-about {
+  max-width: var(--at-measure-statement);
+  font-size: var(--at-font-size-small);
+  line-height: 1.5;
+  color: var(--at-meta);
+}
+
+.stars-drawn {
+  color: var(--at-slash);
+  font-size: var(--at-font-size-large);
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+/* Next up: today at the line's left, each edition at its share of the way
+   to the furthest, in tenths. */
+
+.timeline-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--at-space-4);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-3);
+}
+
+.timeline-entry {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  row-gap: var(--at-space-1);
+  align-items: center;
+  animation: at-rise 360ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.timeline-entry::before {
+  content: "";
+  grid-row: 1;
+  grid-column: 1 / -1;
+  border-top: var(--at-stroke-hairline) solid var(--at-rule);
+}
+
+.timeline-mark {
+  grid-row: 1;
+  justify-self: center;
+  width: var(--at-space-3);
+  height: var(--at-space-3);
+  border-radius: 50%;
+  background: var(--at-slash);
+}
+
+.timeline-text {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--at-space-3);
+}
+
+.timeline-name {
+  font-weight: 700;
+}
+
+.timeline-entry[data-step="0"] .timeline-mark {
+  grid-column: 1;
+}
+
+.timeline-entry[data-step="1"] .timeline-mark {
+  grid-column: 2;
+}
+
+.timeline-entry[data-step="2"] .timeline-mark {
+  grid-column: 3;
+}
+
+.timeline-entry[data-step="3"] .timeline-mark {
+  grid-column: 4;
+}
+
+.timeline-entry[data-step="4"] .timeline-mark {
+  grid-column: 5;
+}
+
+.timeline-entry[data-step="5"] .timeline-mark {
+  grid-column: 6;
+}
+
+.timeline-entry[data-step="6"] .timeline-mark {
+  grid-column: 7;
+}
+
+.timeline-entry[data-step="7"] .timeline-mark {
+  grid-column: 8;
+}
+
+.timeline-entry[data-step="8"] .timeline-mark {
+  grid-column: 9;
+}
+
+.timeline-entry[data-step="9"] .timeline-mark {
+  grid-column: 10;
+}
+
+.timeline-entry[data-step="10"] .timeline-mark {
+  grid-column: 11;
+}
+
+.guide-entries {
+  display: flex;
+  flex-direction: column;
+}
+
+.guide-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+  padding: var(--at-space-4) 0;
+  border-bottom: var(--at-stroke-hairline) solid var(--at-rule);
+}
+
+.guide-entry[hidden] {
+  display: none;
+}
+
+.guide-entry-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-1);
+}
+
+.guide-name {
+  line-height: 1.2;
+}
+
 /* On a phone, a row stacks its date over the rest. */
 
 /* The year's months: twelve across a full screen, six in a chat's frame,
@@ -957,7 +1101,8 @@ html[data-direction="back"]::view-transition-new(stage) {
 
   .evening,
   .figure,
-  .map-dot {
+  .map-dot,
+  .timeline-entry {
     animation: none;
   }
 

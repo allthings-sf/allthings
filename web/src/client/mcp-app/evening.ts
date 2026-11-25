@@ -133,7 +133,7 @@ export function spokenName(event: Event): string {
  * A button that does `act`, saying so while it does and, if the host
  * couldn't, saying that in its place for a moment.
  */
-function actButton(
+export function actButton(
   label: string,
   doing: string,
   act: () => Promise<void>,

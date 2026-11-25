@@ -108,6 +108,51 @@ const yearOf = (year: number) =>
     years: [2026, 2025],
   });
 
+/** The guide, as get_guide answers it: two three-star happenings, one two. */
+const guide = Schema.decodeUnknownSync(Contract.Guide)({
+  about:
+    "Happenings worth the trip, starred the way the Michelin guide stars a restaurant.",
+  url: "https://allthings.dev/guide",
+  entries: [
+    {
+      id: "react-miami",
+      name: "React Miami",
+      stars: 3,
+      meaning: "worth a special journey",
+      city: "Miami, Florida",
+      organizer: "G2i",
+      url: "https://www.reactmiami.com",
+      why: "Two days of React's best speakers.",
+      next: { from: "2099-04-29", to: "2099-04-30" },
+      guideUrl: "https://allthings.dev/guide#react-miami",
+    },
+    {
+      id: "ai-engineer-miami",
+      name: "AI Engineer Miami",
+      stars: 3,
+      meaning: "worth a special journey",
+      city: "Miami, Florida",
+      organizer: "G2i",
+      url: "https://www.ai.engineer",
+      why: "Talks from engineers who ship AI.",
+      next: { from: "2099-04-26", to: "2099-04-27" },
+      guideUrl: "https://allthings.dev/guide#ai-engineer-miami",
+    },
+    {
+      id: "chain-react",
+      name: "Chain React",
+      stars: 2,
+      meaning: "worth a detour",
+      city: "Portland, Oregon",
+      organizer: "Infinite Red",
+      url: "https://chainreactconf.com",
+      why: "The React Native conference.",
+      next: null,
+      guideUrl: "https://allthings.dev/guide#chain-react",
+    },
+  ],
+});
+
 const result = (value: Record<string, unknown>): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
   structuredContent: value,
@@ -1164,6 +1209,96 @@ describe("get_year's view", () => {
           () => document.querySelector(".year-page") !== null,
           "the year again",
         );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+});
+
+describe("get_guide's view", () => {
+  test(
+    "draws what's next, soonest first, and every happening by its stars",
+    async () => {
+      const view = await mount("get_guide", undefined, {
+        offers: { context: true },
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result(guide));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".guide-page") !== null,
+          "the guide",
+        );
+        expect(text(document.querySelector("h1"))).toBe("The allthings guide");
+        // Next up: the dated ones, soonest first, each with its days.
+        expect(all(view.window, ".timeline-name").map(text)).toEqual([
+          "AI Engineer Miami",
+          "React Miami",
+        ]);
+        expect(text(all(view.window, ".timeline-entry")[0])).toContain(
+          "2099.04.26–27 · in ",
+        );
+        // The stars are said in words, not only drawn.
+        expect(text(document.querySelector(".guide-entry .stars"))).toBe(
+          "★★★3 stars, worth a special journey",
+        );
+        expect(
+          text(
+            all(view.window, ".guide-entry")[2]?.querySelectorAll(
+              ".guide-when",
+            )[0],
+          ),
+        ).toBe("Next dates not announced yet");
+        expect(await view.axe()).toEqual([]);
+
+        // Narrowed to two stars, and the agent told.
+        all(view.window, ".chip")
+          .find((chip) => chip.getAttribute("data-stars") === "2")
+          ?.click();
+        expect(
+          all(view.window, ".guide-entry").filter((entry) => !entry.hidden),
+        ).toHaveLength(1);
+        expect(text(document.querySelector(".view-count"))).toBe(
+          "1 of 3 happenings",
+        );
+        await until(
+          () => view.contexts.at(-1)?.includes("with 2 stars") === true,
+          "the agent told",
+        );
+        expect(view.contexts.at(-1)).toBe(
+          "The reader is reading the allthings guide in the allthings view: 1 happening with 2 stars: Chain React.",
+        );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "asks the agent to help plan a trip, as the reader's message",
+    async () => {
+      const view = await mount("get_guide", undefined, {
+        offers: { message: true },
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: {} });
+        await view.bridge.sendToolResult(result(guide));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".guide-page") !== null,
+          "the guide",
+        );
+        all(view.window, ".guide-entry button")
+          .find((button) => text(button) === "Plan a trip")
+          ?.click();
+        await until(() => view.messages.length > 0, "the message");
+        expect(view.messages).toEqual([
+          "Help me plan a trip to React Miami in Miami, Florida, 2099.04.29–30, from San Francisco.",
+        ]);
       } finally {
         view.window.close();
       }
