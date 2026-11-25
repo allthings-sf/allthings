@@ -239,6 +239,33 @@ export function formatTracks(tracks: Track[], color: boolean): string {
 /** "find-contributors" as a person reads it: "find contributors". */
 const words = (id: string) => id.replaceAll("-", " ");
 
+/** The most columns a check's name takes in coaching: every check's fits. */
+export const checkNameWidth = 32;
+
+/** The columns `text` takes on a terminal: two for a wide character, none for a combining mark. */
+const columns = (text: string) => Bun.stringWidth(text);
+
+/** What a person sees as one character: a letter with its marks, an emoji with its modifiers. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * A check's name in at most `checkNameWidth` columns, cut with "…" when
+ * wider. It is cut between what a person sees as characters, each
+ * measured whole, never inside one.
+ */
+const checkName = (id: string) => {
+  if (columns(id) <= checkNameWidth) return id;
+  let kept = "";
+  let width = 0;
+  for (const { segment } of graphemes.segment(id)) {
+    const next = columns(segment);
+    if (width + next > checkNameWidth - 1) break;
+    kept += segment;
+    width += next;
+  }
+  return `${kept}…`;
+};
+
 /**
  * coach_talk's answer, for a person: what to do first, then each finding
  * by how much it matters with what was measured and what to do, what's
@@ -259,13 +286,15 @@ export function formatCoaching(
       ? []
       : [coaching.goals.map(words).join(", ")]),
   ].join(" · ");
-  const width = Math.max(
-    0,
-    ...[...coaching.findings, ...coaching.strengths, ...coaching.unchecked].map(
-      (item) => item.id.length,
-    ),
-  );
-  const label = (id: string) => style("dim", id.padEnd(width));
+  const width = [
+    ...coaching.findings,
+    ...coaching.strengths,
+    ...coaching.unchecked,
+  ].reduce((widest, item) => Math.max(widest, columns(checkName(item.id))), 0);
+  const label = (id: string) => {
+    const name = checkName(id);
+    return style("dim", `${name}${" ".repeat(width - columns(name))}`);
+  };
   const indent = " ".repeat(width + 4);
   const severities = [
     ["must", "Must", "red"],

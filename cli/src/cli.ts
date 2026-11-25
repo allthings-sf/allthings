@@ -908,8 +908,15 @@ export async function run(argv: string[], io: Io): Promise<ExitCode> {
     const color = io.isTTY && !io.env["NO_COLOR"] && !values.json;
     const client =
       io.client ?? createClient({ endpoint: endpointFrom(io.env) });
-    const print = (text: string, data: unknown) =>
-      io.stdout(values.json ? `${JSON.stringify(data, null, 2)}\n` : text);
+    /** Prints `data` as JSON with --json, else the text; a function's text is written only then. */
+    const print = (text: string | (() => string), data: unknown) =>
+      io.stdout(
+        values.json
+          ? `${JSON.stringify(data, null, 2)}\n`
+          : typeof text === "string"
+            ? text
+            : text(),
+      );
     /** Prints a link, and opens it too for a person at a terminal, unless --print. */
     const printAndOpen = async (url: string) => {
       io.stdout(`${url}\n`);
@@ -1030,7 +1037,10 @@ export async function run(argv: string[], io: Io): Promise<ExitCode> {
           abstract: values.abstract,
         });
         const coaching = await client.coachTalk(talk);
-        print(formatCoaching(coaching, color, `${siteOrigin}/coach`), coaching);
+        print(
+          () => formatCoaching(coaching, color, `${siteOrigin}/coach`),
+          coaching,
+        );
         return ExitCode.Ok;
       }
       case "about": {
