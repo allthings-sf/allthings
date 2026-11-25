@@ -10,7 +10,7 @@ export const BRIDGE = "#C0362C";
 export const GLOW = "#FF6A3D";
 export const LAVENDER = "#DACFFF";
 export const DUSK = "#D9D3E0";
-export const VIOLET = "#5B34D6";
+export const VIOLET = "#5529CD";
 
 /**
  * The slash's color for a Claude Code theme setting (`/config`'s `theme`

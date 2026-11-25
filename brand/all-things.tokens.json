@@ -26,21 +26,21 @@
     "bridgeDeep": {
       "$value": {
         "colorSpace": "srgb",
-        "components": [0.603922, 0.168627, 0.133333]
+        "components": [0.584314, 0.14902, 0.117647]
       },
       "$description": "Small orange text and Paper buttons."
     },
     "violet": {
       "$value": {
         "colorSpace": "srgb",
-        "components": [0.356863, 0.203922, 0.839216]
+        "components": [0.333333, 0.160784, 0.803922]
       },
       "$description": "Neighborhoods and links on Paper; violet fills."
     },
     "karlText": {
       "$value": {
         "colorSpace": "srgb",
-        "components": [0.368627, 0.352941, 0.333333]
+        "components": [0.32549, 0.309804, 0.290196]
       },
       "$description": "Dates and meta on Paper."
     },
@@ -985,7 +985,8 @@
           "text": "{color.bridge}",
           "background": "{color.paper}",
           "minLc": 60,
-          "use": "Orange text at 24px and up"
+          "use": "Orange text at 24px and up",
+          "large": true
         },
         {
           "text": "{color.paper}",
@@ -1015,19 +1016,22 @@
           "text": "{color.glow}",
           "background": "{color.night}",
           "minLc": 45,
-          "use": "The slash and display on Night"
+          "use": "The slash and display on Night",
+          "large": true
         },
         {
           "text": "{color.white}",
           "background": "{color.bridgeDeep}",
           "minLc": 75,
-          "use": "Paper button labels"
+          "use": "Paper button labels",
+          "large": true
         },
         {
           "text": "{color.white}",
           "background": "{color.bridge}",
           "minLc": 75,
-          "use": "Night button labels"
+          "use": "Night button labels",
+          "large": true
         },
         {
           "text": "{color.white}",
