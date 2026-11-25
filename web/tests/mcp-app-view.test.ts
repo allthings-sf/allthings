@@ -723,6 +723,15 @@ describe("browsing evenings", () => {
         );
         await Bun.sleep(700);
         expect(document.querySelector(".evening-page")).not.toBeNull();
+        // The list it left is no longer busy when the reader comes back.
+        document.querySelector(".back")?.click();
+        await until(
+          () => document.getElementById("evenings-list") !== null,
+          "the list again",
+        );
+        expect(
+          document.getElementById("evenings-list")?.getAttribute("aria-busy"),
+        ).toBeNull();
       } finally {
         view.window.close();
       }

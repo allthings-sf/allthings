@@ -313,9 +313,26 @@ async function openEvening(
 
 /** Says, over the list it leaves in place, why another selection didn't come. */
 function browseFailed(panel: HTMLElement | null, text: string): void {
-  panel?.removeAttribute("aria-busy");
   panel?.querySelector(":scope > [role=alert]")?.remove();
   panel?.prepend(notice(text, "alert"));
+}
+
+/**
+ * Marks `panel` busy for `change`, until that change's answer comes,
+ * whether it is drawn or dropped. A panel left behind (the reader opened a
+ * lineup meanwhile) is never left busy, and an older answer never clears
+ * the mark of a newer change on the same panel.
+ */
+function markBusy(panel: HTMLElement | null, change: number): void {
+  if (panel === null) return;
+  panel.setAttribute("aria-busy", "true");
+  panel.dataset["busyFor"] = String(change);
+}
+
+function clearBusy(panel: HTMLElement | null, change: number): void {
+  if (panel === null || panel.dataset["busyFor"] !== String(change)) return;
+  panel.removeAttribute("aria-busy");
+  delete panel.dataset["busyFor"];
 }
 
 /** Lists another selection of evenings in place, keeping the list until it's in. */
@@ -327,11 +344,12 @@ async function browseEvenings(
   const args = { when, ...(typeof limit === "number" ? { limit } : {}) };
   const change = nextChange();
   const panel = document.getElementById("evenings-list");
-  panel?.setAttribute("aria-busy", "true");
+  markBusy(panel, change);
   let found: ToolResult;
   try {
     found = await callTool("list_events", args);
   } catch {
+    clearBusy(panel, change);
     if (isLatest(change)) {
       browseFailed(
         panel,
@@ -340,6 +358,7 @@ async function browseEvenings(
     }
     return;
   }
+  clearBusy(panel, change);
   if (!isLatest(change)) return;
   // A selection that couldn't be read leaves the list and its tabs as
   // they were, to try again or choose another.
