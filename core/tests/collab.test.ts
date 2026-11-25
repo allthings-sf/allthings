@@ -4,6 +4,7 @@ import { Cause, DateTime, Effect, Exit, Layer } from "effect";
 import { approvalToken } from "../src/approval.ts";
 import { parseBrief } from "../src/collab/brief.ts";
 import { Collab } from "../src/collab/collab.ts";
+import { Role } from "../src/collab/model.ts";
 import { clockAt, seededDatabase, sqlLayer } from "./support/database.ts";
 
 /**
@@ -415,16 +416,73 @@ describe("parseBrief", () => {
   test("keeps subheadings and code fences in the body, in the roles' own order", () => {
     expect(
       parseBrief(
-        "## Writing your round\n<!-- for: round_host, viewer -->\n### The bar\n```\n## not a section\n```\n",
+        "## Writing your round\n<!-- for: round_host, viewer -->\n### The bar\n```\n### a subheading, in the code\n```\n",
       ),
     ).toEqual([
       {
         position: 1,
         heading: "Writing your round",
-        body: "### The bar\n```\n## not a section\n```",
+        body: "### The bar\n```\n### a subheading, in the code\n```",
         audiences: ["viewer", "round_host"],
       },
     ]);
+  });
+});
+
+describe("parseBrief's sections", () => {
+  const section = (heading: string, audience: string, body: string) =>
+    `## ${heading}\n<!-- for: ${audience} -->\n${body}`;
+
+  test('a "## " line starts a section wherever it is: no fence or HTML carries one section into another', () => {
+    for (const opening of [
+      "````md\n```\nan example\n",
+      "<!--\n",
+      "<div>\n```\n",
+    ]) {
+      expect(
+        parseBrief(
+          section("The pitch", "viewer", opening) +
+            section("Venues", "organizer", "Door code 1234."),
+        ),
+      ).toEqual([
+        {
+          position: 1,
+          heading: "The pitch",
+          body: opening.trimEnd(),
+          audiences: ["viewer"],
+        },
+        {
+          position: 2,
+          heading: "Venues",
+          body: "Door code 1234.",
+          audiences: ["organizer"],
+        },
+      ]);
+    }
+  });
+
+  test('a "## " line in a code example is a section, and the refusal says how to keep it in the code', () => {
+    expect(
+      parseBrief(section("A", "viewer", "```\n## not a section\nx\n```")),
+    ).toBe(
+      `Section "not a section" (line 4) doesn't say who it is for. Its first line must be <!-- for: … --> with roles from ${Role.literals.join(", ")}. A "## " line starts a section even inside a code fence: indent it to keep it in the code.`,
+    );
+    const indented = "```\n  ## in the code\n```";
+    expect(parseBrief(section("A", "viewer", indented))).toEqual([
+      { position: 1, heading: "A", body: indented, audiences: ["viewer"] },
+    ]);
+  });
+
+  test('fences and raw HTML without a "## " line stay in the body', () => {
+    for (const body of [
+      "Text.\n<!--\n```\n-->",
+      "````\n```\nx\n````",
+      "```\nx",
+    ]) {
+      expect(parseBrief(section("A", "viewer", body))).toEqual([
+        { position: 1, heading: "A", body, audiences: ["viewer"] },
+      ]);
+    }
   });
 });
 

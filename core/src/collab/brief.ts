@@ -19,8 +19,13 @@ import { type BriefSection, Role } from "./model.ts";
  * Who a section is for is never assumed: a section without its line is
  * refused, so nothing reaches a collaborator by default. Organizers see
  * every section whatever it says. `###` and deeper stay in the body, as
- * does anything inside a code fence. A `---` rule at a section's end is
- * dropped: in the file it separates sections, and the page draws its own.
+ * does a code fence. A `---` rule at a section's end is dropped: in the
+ * file it separates sections, and the page draws its own.
+ *
+ * A `## ` line always starts a section, inside a code fence or raw HTML
+ * too. Each section is shown on its own, so nothing a section holds can
+ * reach another section's audience, whatever Markdown reads as code: to
+ * keep a `## ` line in a code example, indent it.
  */
 
 export const maxSections = 50;
@@ -39,14 +44,8 @@ export function parseBrief(
     lines: Array<string>;
     line: number;
   }> = [];
-  let fence: string | undefined;
   for (const [index, line] of lines.entries()) {
-    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marker !== undefined) {
-      if (fence === undefined) fence = marker[0];
-      else if (marker[0] === fence) fence = undefined;
-    }
-    const heading = fence === undefined ? /^## (.*)$/.exec(line) : null;
+    const heading = /^## (.*)$/.exec(line);
     if (heading !== null) {
       sections.push({
         heading: (heading[1] ?? "").trim(),
@@ -86,7 +85,14 @@ export function parseBrief(
             section.lines[first] ?? "",
           );
     if (audience === null) {
-      return `${where} doesn't say who it is for. Its first line must be <!-- for: … --> with roles from ${Role.literals.join(", ")}.`;
+      // Said for a "## " line after a fence the section before left open:
+      // most likely a line of a code example.
+      const before = sections[index - 1]?.lines ?? [];
+      const open =
+        before.filter((line) => /^ {0,3}(`{3,}|~{3,})/.test(line)).length %
+          2 ===
+        1;
+      return `${where} doesn't say who it is for. Its first line must be <!-- for: … --> with roles from ${Role.literals.join(", ")}.${open ? ' A "## " line starts a section even inside a code fence: indent it to keep it in the code.' : ""}`;
     }
     const named = (audience[1] ?? "")
       .split(",")
