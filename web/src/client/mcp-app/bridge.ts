@@ -33,11 +33,16 @@ export interface HostContext {
 }
 
 /** What a host can do for the view (McpUiHostCapabilities), as far as it's read. */
+/** The kinds of content a host takes in a request, as it says them. */
+export interface Modalities {
+  readonly text?: object;
+}
+
 export interface HostCapabilities {
   readonly openLinks?: object;
   readonly serverTools?: object;
-  readonly updateModelContext?: object;
-  readonly message?: object;
+  readonly updateModelContext?: Modalities;
+  readonly message?: Modalities;
   readonly downloadFile?: object;
 }
 

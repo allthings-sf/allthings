@@ -49,17 +49,31 @@ let masthead: HTMLElement | null = null;
 /** The view's content under the masthead. */
 const stage = h("div", { class: "stage" });
 
-/** Replaces what the view shows, moving `direction` where motion is welcome. */
-function show(
+/**
+ * Replaces what the view shows, moving `direction` where motion is
+ * welcome, and resolves once the content is in place, for focus to move
+ * into it.
+ */
+async function show(
   content: HTMLElement,
   direction: "forward" | "back" | "none" = "none",
-): void {
+): Promise<void> {
   if (app !== null && !app.contains(stage)) {
     app.replaceChildren(...(masthead === null ? [] : [masthead]), stage);
   }
   if (direction === "none") stage.replaceChildren(content);
-  else swap(stage, content, direction);
+  else await swap(stage, content, direction);
 }
+
+/**
+ * Which change of view is the reader's latest: opening a lineup, going
+ * back, another selection of evenings. Each takes the next number, and an
+ * answer that comes back for any but the latest is dropped, so a slow
+ * answer never replaces what the reader opened after asking for it.
+ */
+let latestChange = 0;
+const nextChange = (): number => ++latestChange;
+const isLatest = (change: number): boolean => change === latestChange;
 
 /** A line saying what's happening: while waiting, or why there's nothing. */
 function notice(
@@ -272,29 +286,37 @@ async function openEvening(
   slug: string,
   back: () => void,
 ): Promise<void> {
-  show(notice("Asking allthings for the lineup"));
+  const change = nextChange();
+  await show(notice("Asking allthings for the lineup"));
   let evening: ToolResult;
   try {
     evening = await callTool("get_event", { slug });
   } catch {
-    show(
-      lineupFailed("The host couldn't ask allthings for that evening.", back),
-    );
+    if (isLatest(change)) {
+      await show(
+        lineupFailed("The host couldn't ask allthings for that evening.", back),
+      );
+    }
     return;
   }
+  if (!isLatest(change)) return;
   const detail = dataOf(evening);
   if (evening.isError === true || detail === undefined) {
-    show(lineupFailed(errorOf(evening), back));
+    await show(lineupFailed(errorOf(evening), back));
     return;
   }
   const event = detail as unknown as Event;
-  show(eveningView(event, lineupOptions(back)), "forward");
+  await show(eveningView(event, lineupOptions(back)), "forward");
   tellEvening(event);
   document.getElementById("view-title")?.focus();
 }
 
-/** The latest selection of evenings asked for: only its answer is drawn. */
-let latestBrowse = 0;
+/** Says, over the list it leaves in place, why another selection didn't come. */
+function browseFailed(panel: HTMLElement | null, text: string): void {
+  panel?.removeAttribute("aria-busy");
+  panel?.querySelector(":scope > [role=alert]")?.remove();
+  panel?.prepend(notice(text, "alert"));
+}
 
 /** Lists another selection of evenings in place, keeping the list until it's in. */
 async function browseEvenings(
@@ -303,23 +325,29 @@ async function browseEvenings(
   limit: unknown,
 ): Promise<void> {
   const args = { when, ...(typeof limit === "number" ? { limit } : {}) };
-  const browse = ++latestBrowse;
+  const change = nextChange();
   const panel = document.getElementById("evenings-list");
   panel?.setAttribute("aria-busy", "true");
   let found: ToolResult;
   try {
     found = await callTool("list_events", args);
   } catch {
-    if (browse === latestBrowse) {
-      panel?.removeAttribute("aria-busy");
-      panel?.prepend(
-        notice("The host couldn't ask allthings for those evenings.", "alert"),
+    if (isLatest(change)) {
+      browseFailed(
+        panel,
+        "The host couldn't ask allthings for those evenings.",
       );
     }
     return;
   }
-  if (browse !== latestBrowse) return;
-  render(found, args, "forward");
+  if (!isLatest(change)) return;
+  // A selection that couldn't be read leaves the list and its tabs as
+  // they were, to try again or choose another.
+  if (found.isError === true || !Array.isArray(dataOf(found)?.["events"])) {
+    browseFailed(panel, errorOf(found));
+    return;
+  }
+  await render(found, args, "forward");
   document.getElementById(`tab-${when}`)?.focus();
 }
 
@@ -346,7 +374,7 @@ async function searchPeople(callTool: CallTool, query: string): Promise<void> {
     searchFailed(errorOf(found));
     return;
   }
-  render(found, args);
+  await render(found, args);
   document.getElementById("people-query")?.focus();
 }
 
@@ -360,13 +388,13 @@ function searchFailed(text: string): void {
 }
 
 /** Draws `result` as `view` does, with what the host lets the view do next. */
-function render(
+async function render(
   result: ToolResult,
   input: Record<string, unknown>,
   direction: "forward" | "back" | "none" = "none",
-): void {
+): Promise<void> {
   if (result.isError === true) {
-    show(notice(errorOf(result), "alert"));
+    await show(notice(errorOf(result), "alert"));
     return;
   }
   const { callTool } = host;
@@ -374,17 +402,28 @@ function render(
   if (view === "events" && Array.isArray(data?.["events"])) {
     const events = data["events"] as ReadonlyArray<EventSummary>;
     const when = isSelection(input["when"]) ? input["when"] : "upcoming";
+    // What the list shows now, narrowed or not, to say again on coming back.
+    let narrowedTo: { place: string | null; shown: number } = {
+      place: null,
+      shown: events.length,
+    };
     const list = eveningsView(events, {
       when,
-      narrowed: (place, shown) => tellEvenings(when, shown, place),
+      narrowed: (place, shown) => {
+        narrowedTo = { place, shown };
+        tellEvenings(when, shown, place);
+      },
       ...(callTool === undefined
         ? {}
         : {
             open: (slug, from) => {
               void openEvening(callTool, slug, () => {
-                show(list, "back");
-                tellEvenings(when, events.length, null);
-                from.focus();
+                nextChange();
+                void show(list, "back").then(() => {
+                  tellEvenings(when, narrowedTo.shown, narrowedTo.place);
+                  from.focus();
+                  return undefined;
+                });
               });
             },
             browse: (next) => {
@@ -392,7 +431,7 @@ function render(
             },
           }),
     });
-    show(list, direction);
+    await show(list, direction);
     tellEvenings(when, events.length, null);
     return;
   }
@@ -402,7 +441,7 @@ function render(
     typeof data["slug"] === "string"
   ) {
     const event = data as unknown as Event;
-    show(eveningView(event, lineupOptions()), direction);
+    await show(eveningView(event, lineupOptions()), direction);
     tellEvening(event);
     return;
   }
@@ -410,7 +449,7 @@ function render(
     const query =
       typeof input["query"] === "string" ? input["query"] : undefined;
     const speakers = data["speakers"] as ReadonlyArray<Speaker>;
-    show(
+    await show(
       peopleView(speakers, {
         query,
         ...(callTool === undefined
@@ -424,7 +463,7 @@ function render(
     );
     return;
   }
-  show(notice(errorOf(result), "alert"));
+  await show(notice(errorOf(result), "alert"));
 }
 
 const unhosted = "This view is drawn by an agent host that speaks MCP Apps.";
@@ -432,12 +471,12 @@ const unhosted = "This view is drawn by an agent host that speaks MCP Apps.";
 async function start(): Promise<void> {
   // Opened on its own, there's no host to ask.
   if (window.parent === window) {
-    show(notice(unhosted, "alert"));
+    await show(notice(unhosted, "alert"));
     return;
   }
   const bridge = connect();
   let input: Record<string, unknown> = {};
-  show(notice("Asking allthings"));
+  await show(notice("Asking allthings"));
   // Handlers first: the host sends the tool's input as soon as it has answered.
   bridge.on("ui/notifications/tool-input", (params) => {
     const args = params["arguments"];
@@ -445,10 +484,14 @@ async function start(): Promise<void> {
       input = args as Record<string, unknown>;
     }
   });
-  bridge.on("ui/notifications/tool-result", (params) => render(params, input));
-  bridge.on("ui/notifications/tool-cancelled", () =>
-    show(notice("The call was cancelled before allthings answered.", "alert")),
-  );
+  bridge.on("ui/notifications/tool-result", (params) => {
+    void render(params, input);
+  });
+  bridge.on("ui/notifications/tool-cancelled", () => {
+    void show(
+      notice("The call was cancelled before allthings answered.", "alert"),
+    );
+  });
   bridge.on("ui/notifications/host-context-changed", (params) =>
     applyContext(params),
   );
@@ -467,4 +510,6 @@ async function start(): Promise<void> {
   reportSize(bridge);
 }
 
-start().catch(() => show(notice(unhosted, "alert")));
+start().catch(() => {
+  void show(notice(unhosted, "alert"));
+});

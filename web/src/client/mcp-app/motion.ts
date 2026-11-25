@@ -11,19 +11,23 @@ export const prefersLessMotion = (): boolean =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 type WithTransitions = Document & {
-  readonly startViewTransition?: (update: () => void) => unknown;
+  readonly startViewTransition?: (update: () => void) => {
+    readonly updateCallbackDone?: Promise<void>;
+  };
 };
 
 /**
- * Puts `next` in `target`'s place. `direction` says which way it reads:
- * forward into a lineup, back to the list (mcp-app.css slides each its
- * own way).
+ * Puts `next` in `target`'s place, and resolves once it is there: a view
+ * transition puts it there only after it has captured the old state, so
+ * a caller moving focus into `next` waits for this first. `direction` says
+ * which way it reads: forward into a lineup, back to the list
+ * (mcp-app.css slides each its own way).
  */
-export function swap(
+export async function swap(
   target: HTMLElement | null,
   next: HTMLElement,
   direction: "forward" | "back" = "forward",
-): void {
+): Promise<void> {
   if (target === null) return;
   const update = () => target.replaceChildren(next);
   const start = (document as WithTransitions).startViewTransition;
@@ -32,5 +36,12 @@ export function swap(
     return;
   }
   document.documentElement.dataset["direction"] = direction;
-  start.call(document, update);
+  const transition = start.call(document, update);
+  try {
+    await transition.updateCallbackDone;
+  } catch {
+    // The update ran or failed on its own; the content is what it is.
+  }
+  // A transition the browser skipped never ran the update.
+  if (!target.contains(next)) update();
 }

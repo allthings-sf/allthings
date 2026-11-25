@@ -142,7 +142,8 @@ async function mount(
      */
     readonly offers?: {
       readonly context?: boolean;
-      readonly message?: boolean;
+      /** Chat messages, of text, of images alone, or answered as failed. */
+      readonly message?: boolean | "images" | "failing";
       readonly download?: boolean;
       readonly fullscreen?: boolean;
     };
@@ -214,7 +215,11 @@ async function mount(
       openLinks: {},
       serverTools: {},
       ...(offers.context === true ? { updateModelContext: { text: {} } } : {}),
-      ...(offers.message === true ? { message: { text: {} } } : {}),
+      ...(offers.message === true || offers.message === "failing"
+        ? { message: { text: {} } }
+        : offers.message === "images"
+          ? { message: { image: {} } }
+          : {}),
       ...(offers.download === true ? { downloadFile: {} } : {}),
     },
     {
@@ -247,7 +252,7 @@ async function mount(
   // oxlint-disable-next-line unicorn/prefer-add-event-listener -- AppBridge's onmessage answers the view's ui/message requests; it isn't a DOM event
   bridge.onmessage = async ({ content }) => {
     messages.push(textOf(content));
-    return {};
+    return offers.message === "failing" ? { isError: true } : {};
   };
   bridge.ondownloadfile = async ({ contents }) => {
     for (const item of contents) {
@@ -646,6 +651,169 @@ describe("browsing evenings", () => {
           "Tell me about allthings/effect: who was on stage, what they talked about, and what they left behind.",
         ]);
         expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "keeps the list and its tabs when another selection answers with an error",
+    async () => {
+      const view = await mount("list_events", () => ({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "allthings events are temporarily unavailable. Please retry in a minute.",
+          },
+        ],
+      }));
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".evening").length > 0, "the list");
+        document.getElementById("tab-all")?.click();
+        await until(
+          () => document.querySelector("#evenings-list [role=alert]") !== null,
+          "the alert",
+        );
+        expect(
+          text(document.querySelector("#evenings-list [role=alert]")),
+        ).toBe(
+          "allthings events are temporarily unavailable. Please retry in a minute.",
+        );
+        // The list and the tabs stay, to try again or choose another.
+        expect(all(view.window, ".evening")).toHaveLength(summaries.length);
+        expect(
+          document.getElementById("tab-past")?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(
+          document.getElementById("evenings-list")?.getAttribute("aria-busy"),
+        ).toBeNull();
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "keeps a lineup opened while another selection was on its way",
+    async () => {
+      const view = await mount("list_events", async (name) => {
+        if (name === "get_event") return result(effectNight);
+        // The selection answers well after the lineup.
+        await Bun.sleep(400);
+        return result({ events: summaries });
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".evening").length > 0, "the list");
+        document.getElementById("tab-all")?.click();
+        all(view.window, ".evening")[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        await Bun.sleep(700);
+        expect(document.querySelector(".evening-page")).not.toBeNull();
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "says the neighborhood again on coming back from a lineup",
+    async () => {
+      const view = await mount(
+        "list_events",
+        (name) => (name === "get_event" ? result(effectNight) : result({})),
+        { offers: { context: true } },
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".chip").length > 0, "the chips");
+        all(view.window, ".chip")
+          .find((chip) => text(chip).startsWith("East Cut"))
+          ?.click();
+        const shown = all(view.window, ".evening").filter((row) => !row.hidden);
+        shown[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        document.querySelector(".back")?.click();
+        await until(
+          () => view.contexts.at(-1)?.endsWith("in East Cut.") === true,
+          "the agent told of the neighborhood again",
+        );
+        expect(view.contexts.at(-1)).toBe(
+          `The reader is looking at recently in the allthings view: ${shown.length} evenings in East Cut.`,
+        );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "says so when the host answers the question as failed",
+    async () => {
+      const view = await mount("get_event", undefined, {
+        offers: { message: "failing" },
+      });
+      try {
+        await view.bridge.sendToolInput({
+          arguments: { slug: effectNight.slug },
+        });
+        await view.bridge.sendToolResult(result(effectNight));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the evening",
+        );
+        const ask = all(view.window, ".evening-page button").find(
+          (button) => text(button) === "Ask about it",
+        );
+        ask?.click();
+        await until(() => text(ask) === "The host couldn’t", "the failure");
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "offers no question to a host whose messages take no text",
+    async () => {
+      const view = await mount("get_event", undefined, {
+        offers: { message: "images" },
+      });
+      try {
+        await view.bridge.sendToolInput({
+          arguments: { slug: effectNight.slug },
+        });
+        await view.bridge.sendToolResult(result(effectNight));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the evening",
+        );
+        expect(
+          all(view.window, ".evening-page button").map(text),
+        ).not.toContain("Ask about it");
       } finally {
         view.window.close();
       }

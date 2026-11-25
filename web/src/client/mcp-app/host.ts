@@ -54,6 +54,22 @@ export interface Host {
   ) => Promise<string>;
 }
 
+/**
+ * Throws when a host answered a request but said it failed (`isError`),
+ * as `ui/message` and `ui/download-file` may: the view then says it
+ * couldn't, as for a refused request.
+ */
+function refused(result: unknown): void {
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    "isError" in result &&
+    result.isError === true
+  ) {
+    throw new Error("The host couldn't do that");
+  }
+}
+
 /** Whether the host offers full screen, by the modes its context names. */
 export const offersFullscreen = (context: HostContext | undefined): boolean =>
   context?.availableDisplayModes?.includes("fullscreen") === true;
@@ -73,7 +89,9 @@ export function hostOf(
         arguments: args,
       })) as ToolResult;
   }
-  if (capabilities.updateModelContext !== undefined) {
+  // The view sends these two text, so it offers them only to a host that
+  // takes text in them.
+  if (capabilities.updateModelContext?.text !== undefined) {
     host.tellModel = (text, data) => {
       bridge
         .request("ui/update-model-context", {
@@ -85,19 +103,23 @@ export function hostOf(
         });
     };
   }
-  if (capabilities.message !== undefined) {
+  if (capabilities.message?.text !== undefined) {
     host.askInChat = async (text) => {
-      await bridge.request("ui/message", {
-        role: "user",
-        content: [{ type: "text", text }],
-      });
+      refused(
+        await bridge.request("ui/message", {
+          role: "user",
+          content: [{ type: "text", text }],
+        }),
+      );
     };
   }
   if (capabilities.downloadFile !== undefined) {
     host.download = async ({ name, mimeType, url }) => {
-      await bridge.request("ui/download-file", {
-        contents: [{ type: "resource_link", uri: url, name, mimeType }],
-      });
+      refused(
+        await bridge.request("ui/download-file", {
+          contents: [{ type: "resource_link", uri: url, name, mimeType }],
+        }),
+      );
     };
   }
   if (offersFullscreen(context)) {
