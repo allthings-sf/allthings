@@ -134,8 +134,14 @@ async function mount(
   {
     refuseLinks = false,
     offers = {},
+    transitions = false,
   }: {
     readonly refuseLinks?: boolean;
+    /**
+     * Whether the window has view transitions, which, as a browser runs
+     * them, update the page only a moment after they're started.
+     */
+    readonly transitions?: boolean;
     /**
      * What the host offers beyond opening links and calling tools: the
      * model's context, chat messages, saving files and full screen.
@@ -176,6 +182,18 @@ async function mount(
       pretendToBeVisual: true,
       beforeParse(window) {
         Object.defineProperty(window, "parent", { value: host });
+        if (transitions) {
+          Object.defineProperty(window.document, "startViewTransition", {
+            value: (update: () => void) => ({
+              updateCallbackDone: new Promise<void>((resolve) => {
+                setTimeout(() => {
+                  update();
+                  resolve();
+                }, 30);
+              }),
+            }),
+          });
+        }
         Object.defineProperty(window, "open", {
           value: (url: unknown) => {
             windowOpened.push(String(url));
@@ -570,6 +588,64 @@ describe("browsing evenings", () => {
           document.getElementById("tab-past")?.getAttribute("aria-selected"),
         ).toBe("true");
         expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "moves focus only once a view transition has put the next view in",
+    async () => {
+      const view = await mount(
+        "list_events",
+        (name) =>
+          name === "get_event"
+            ? result(effectNight)
+            : result({ events: summaries }),
+        { transitions: true },
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "upcoming" } });
+        await view.bridge.sendToolResult(result({ events: [] }));
+        const { document } = view.window;
+        await until(
+          () => document.getElementById("tab-past") !== null,
+          "the tabs",
+        );
+
+        // The chosen tab, as drawn again with the list it chose.
+        document.getElementById("tab-past")?.click();
+        await until(
+          () => all(view.window, ".evening").length === summaries.length,
+          "the past evenings",
+        );
+        expect(document.activeElement).toBe(
+          document.getElementById("tab-past"),
+        );
+
+        // The lineup's title, once the lineup is in.
+        all(view.window, ".evening")[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        expect(document.activeElement).toBe(
+          document.getElementById("view-title"),
+        );
+        expect(document.activeElement?.getAttribute("class")).toBe("lockup");
+
+        // And back: the evening's own button, on the list as drawn again.
+        document.querySelector(".back")?.click();
+        await until(
+          () => all(view.window, ".evening").length === summaries.length,
+          "the list again",
+        );
+        expect(document.activeElement).toBe(
+          all(view.window, ".evening")[0]?.querySelectorAll("button")[0] ??
+            null,
+        );
       } finally {
         view.window.close();
       }
