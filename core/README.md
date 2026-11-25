@@ -877,6 +877,10 @@ The key is the file's contents, so adding a file again changes nothing, and
 an object an interrupted run stored is reused only when it serves exactly the
 bytes made.
 Objects are stored first, then one transaction writes every row.
+`scripts/encode.ts` reads an image of at most 200 megapixels
+(`maxInputPixels`), for photos, profile photos and logos alike: it refuses a
+larger one from its header, before decoding it, so downsize an original
+over that before adding it.
 
 Every photo needs its alt text, one `--alt` per file in the files' order,
 saying what the scene shows ("Effect 4.0 merged live on stage at
