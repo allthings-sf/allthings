@@ -123,6 +123,26 @@ describe("Luma's API", () => {
     }
   });
 
+  test.each([
+    ["missing", undefined],
+    ["unrecognized", "invitees"],
+  ])("treats %s location visibility as guests-only", async (_, visibility) => {
+    const event = JSON.parse(managed) as Record<string, unknown>;
+    expect(
+      await ask({
+        body: JSON.stringify({ ...event, location_visibility: visibility }),
+      }),
+    ).toEqual(
+      Exit.succeed(
+        Option.some({
+          lumaEventId: "evt-react",
+          location: "1 Market St, San Francisco, CA 94105",
+          guestsOnly: true,
+        }),
+      ),
+    );
+  });
+
   test("has nothing to ask without LUMA_API_KEY, nor about an event Luma hides", async () => {
     expect(await ask({ body: managed }, {})).toEqual(Exit.succeed("no key"));
     expect(await ask({ status: 403 })).toEqual(Exit.succeed(Option.none()));
@@ -229,6 +249,35 @@ describe("the fill", () => {
     expect((await fill(db)).asked).toEqual([]);
   });
 
+  /** Whether `slug`'s venue is stored as shown to guests only. */
+  const guestsOnly = async (db: PGlite, slug = "2026-11-05-upcoming") =>
+    (
+      await db.query<{ venue_guests_only: boolean }>(
+        "SELECT venue_guests_only FROM events WHERE slug = $1",
+        [slug],
+      )
+    ).rows[0]?.venue_guests_only;
+
+  test("marks the venue guests-only with the address, from the same answer, and never clears the mark", async () => {
+    const hidden = await database();
+    expect(await guestsOnly(hidden)).toBe(false);
+    await fill(hidden);
+    expect(await guestsOnly(hidden)).toBe(true);
+
+    // Its answer may be older than a guests-only one another run has just
+    // read and found nothing to write for: only the visibility step, which
+    // asks again first, shows a venue again.
+    const kept = await database();
+    await kept.exec(
+      `UPDATE events SET venue_guests_only = true WHERE slug = '2026-11-05-upcoming'`,
+    );
+    await fill(kept, {
+      "evt-upcoming": [answer("evt-upcoming", coderabbit, "public")],
+    });
+    expect(await venue(kept)).toMatchObject({ full_address: coderabbit });
+    expect(await guestsOnly(kept)).toBe(true);
+  });
+
   test("never fills a venue the organizers keep", async () => {
     const db = await database();
     await db.exec(
@@ -261,6 +310,7 @@ describe("the fill", () => {
     expect(result).toMatchObject({ written: null, asked: 1 });
     expect(formatVenues(result)).toContain("Would fill 1 venue (dry run");
     expect(await venue(db)).toEqual(before);
+    expect(await guestsOnly(db)).toBe(false);
   });
 
   test("lists the events Luma has no address for, or doesn't show us, and writes nothing for them", async () => {
