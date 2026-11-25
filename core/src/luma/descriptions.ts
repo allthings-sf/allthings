@@ -14,6 +14,7 @@ import type { SafeHtml } from "../rich-text.ts";
 import { orDataSourceError } from "../sql.ts";
 import { LumaApi, type LumaApiError } from "./api.ts";
 import { descriptionHtml, descriptionSummary } from "./description.ts";
+import { Luma } from "./luma.ts";
 
 /**
  * Imports each published event's description from Luma's API
@@ -32,6 +33,12 @@ import { descriptionHtml, descriptionSummary } from "./description.ts";
  *   shows only to its guests or members has none, so what was stored is
  *   emptied, and an answer that doesn't say who may see the event is taken
  *   as one Luma does not show us.
+ * - An event Luma's public calendar feed no longer lists may have stopped
+ *   being public: a run that asks about the recent events, as the hourly
+ *   sync's does, reads the feed too, when it has it (`Luma`), and asks
+ *   about every such event as well, on every run. If Luma doesn't show us
+ *   one (403, 404) or doesn't say who may see it, nothing says it is still
+ *   public, so it is emptied rather than kept.
  * - The site: `events.description` and `events.tagline`, which the import
  *   never reads or writes. Pages show the site's description before Luma's,
  *   and the summary only while the tagline is a placeholder
@@ -80,6 +87,8 @@ export interface Fetched {
   readonly event: StoredEvent;
   /** Its description, or None where Luma does not show us the event. */
   readonly description: Option.Option<Description>;
+  /** Whether Luma's public calendar feed doesn't list it; false when unread. */
+  readonly unlisted?: boolean;
 }
 
 /** What is stored for a description: empty where Luma has none. */
@@ -90,14 +99,22 @@ export const storedHtml = (description: Description): string =>
 export function planDescriptions(
   fetched: ReadonlyArray<Fetched>,
 ): ReadonlyArray<DescriptionChange> {
-  return fetched.flatMap(({ event, description }) => {
-    // An event Luma doesn't show us keeps what it has; one never asked
-    // about is marked asked, with nothing.
+  return fetched.flatMap(({ event, description, unlisted = false }) => {
+    // An event Luma doesn't show us keeps what it has, unless the public
+    // feed doesn't list it either: then nothing says it is public, and it
+    // is emptied. One never asked about is marked asked, with nothing.
     const after = Option.getOrElse(
       description,
-      (): Description => ({ html: null, summary: event.lumaSummary }),
+      (): Description => ({
+        html: null,
+        summary: unlisted ? null : event.lumaSummary,
+      }),
     );
-    if (Option.isNone(description) && event.lumaDescription !== null) {
+    if (
+      Option.isNone(description) &&
+      event.lumaDescription !== null &&
+      !unlisted
+    ) {
       return [];
     }
     return storedHtml(after) === event.lumaDescription &&
@@ -187,6 +204,7 @@ const describe = (markdown: string | null): Effect.Effect<Description> =>
 const make = Effect.gen(function* () {
   const api = yield* LumaApi;
   const sql = yield* SqlClient;
+  const feed = yield* Effect.serviceOption(Luma);
 
   /**
    * The events to ask about: every published one with a Luma id, or, with
@@ -200,15 +218,21 @@ const make = Effect.gen(function* () {
   const read = (
     { maxEvents, recent }: DescriptionsOptions,
     now: DateTime.Utc,
+    listed: ReadonlySet<string> | null,
   ) => {
     const hour = Math.floor(DateTime.toEpochMillis(now) / 3_600_000);
     const turn = maxEvents === undefined ? 0 : hour * maxEvents;
     const olderPerRun = recent?.olderPerRun ?? 0;
     const olderTurn = hour * olderPerRun;
+    // Published events the public feed no longer lists are due on every run.
+    const unlisted =
+      listed === null
+        ? sql.literal("false")
+        : sql`e.luma_event_id NOT IN (SELECT jsonb_array_elements_text(${JSON.stringify([...listed])}::jsonb))`;
     const due =
       recent === undefined
         ? sql.literal("true")
-        : sql`(e.luma_description IS NULL OR ${ahead(
+        : sql`(e.luma_description IS NULL OR ${unlisted} OR ${ahead(
             sql,
             "e",
             DateTime.subtractDuration(
@@ -283,7 +307,30 @@ const make = Effect.gen(function* () {
         }),
       onSome: (eventDescription) =>
         Effect.gen(function* () {
-          const stored = yield* read(options, yield* DateTime.now);
+          // What the public feed lists, for a run of the recent events: one
+          // request, which a run held to `maxEvents` has none to spare for.
+          // Unread (no feed, or it failed), the run asks as it would without.
+          const listed =
+            options.recent === undefined || Option.isNone(feed)
+              ? null
+              : yield* feed.value.calendarEvents.pipe(
+                  Effect.map(
+                    (events): ReadonlySet<string> =>
+                      new Set(
+                        events
+                          .filter((event) => !event.isDraft)
+                          .map((event) => event.lumaEventId),
+                      ),
+                  ),
+                  Effect.tapError((error) =>
+                    Effect.logWarning(
+                      "Luma's calendar feed couldn't be read for the description import",
+                      error,
+                    ),
+                  ),
+                  Effect.orElseSucceed(() => null),
+                );
+          const stored = yield* read(options, yield* DateTime.now, listed);
           const fetched = yield* Effect.forEach(
             stored,
             (event) =>
@@ -295,7 +342,13 @@ const make = Effect.gen(function* () {
                       Effect.map(describe(markdown), Option.some),
                   }),
                 ),
-                Effect.map((description): Fetched => ({ event, description })),
+                Effect.map(
+                  (description): Fetched => ({
+                    event,
+                    description,
+                    unlisted: listed !== null && !listed.has(event.lumaEventId),
+                  }),
+                ),
               ),
             { concurrency },
           );

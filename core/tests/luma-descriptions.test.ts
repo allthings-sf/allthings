@@ -12,6 +12,7 @@ import {
   summaryLimit,
 } from "../src/luma/description.ts";
 import { formatDescriptions } from "../src/luma/descriptions-report.ts";
+import { Luma } from "../src/luma/luma.ts";
 import {
   type DescriptionsImport,
   type DescriptionsOptions,
@@ -278,10 +279,30 @@ describe("the import", () => {
       dryRun?: boolean;
       env?: Record<string, string>;
       at?: DateTime.Utc;
+      /** The Luma ids the public calendar feed lists; no feed when absent. */
+      listed?: ReadonlyArray<string>;
     } = {},
   ) => {
-    const { env = withKey, at, dryRun = false, ...rest } = options;
+    const { env = withKey, at, dryRun = false, listed, ...rest } = options;
     const luma = fakeApi(replies);
+    const feed =
+      listed === undefined
+        ? Layer.empty
+        : Layer.succeed(
+            Luma,
+            Luma.of({
+              calendarEvents: Effect.succeed(
+                listed.map((lumaEventId) => ({
+                  lumaEventId,
+                  name: "Listed",
+                  startDate: DateTime.makeUnsafe("2026-11-05T01:00:00Z"),
+                  endDate: DateTime.makeUnsafe("2026-11-05T04:00:00Z"),
+                  location: null,
+                  isDraft: false,
+                })),
+              ),
+            }),
+          );
     const exit = await Effect.runPromiseExit(
       settle(
         LumaDescriptions.use((descriptions) =>
@@ -290,6 +311,7 @@ describe("the import", () => {
       ).pipe(
         Effect.provide(
           LumaDescriptions.layer.pipe(
+            Layer.provide(feed),
             Layer.provide(LumaApi.layer),
             Layer.provide(Layer.mergeAll(luma.layer, configFrom(env))),
             Layer.provideMerge(sqlLayer(db)),
@@ -490,6 +512,67 @@ describe("the import", () => {
       ["2026-08-12-react-at-acme", "2026-10-04T19:00:00.000Z"],
       ["2026-11-05-upcoming", "2026-10-04T19:00:00.000Z"],
     ]);
+  });
+
+  describe("on a run of the recent events, with the public feed", () => {
+    // React at Acme ended in August: on 2026-10-03 it isn't recent, and
+    // with no older events asked about in turn, only the feed brings it up.
+    const recent = { within: "7 days", olderPerRun: 0 } as const;
+
+    test("empties an older event the feed no longer lists and Luma shows only to guests, on the next run", async () => {
+      const db = await database();
+      await importInto(db);
+      const before = await stored(db);
+      expect(before[0]?.luma_description).not.toBe("");
+      // Without the feed, the run doesn't ask about it.
+      const without = await importInto(
+        db,
+        { "evt-upcoming": [answer("evt-upcoming", upcoming)] },
+        { recent },
+      );
+      expect(planned(without.result).asked).toBe(1);
+      const { result, requests } = await importInto(
+        db,
+        {
+          "evt-react": [answer("evt-react", "Now for guests.", "private")],
+          "evt-upcoming": [answer("evt-upcoming", upcoming)],
+        },
+        { recent, listed: ["evt-upcoming"] },
+      );
+      expect(
+        requests.map(({ url }) => new URL(url).searchParams.get("event_id")),
+      ).toContain("evt-react");
+      expect(planned(result)).toMatchObject({ written: 1 });
+      const [acme, , soon] = await stored(db);
+      expect([acme?.luma_description, acme?.luma_summary]).toEqual(["", null]);
+      // The public event is untouched.
+      expect(soon).toEqual(before[2]);
+    });
+
+    test("empties one Luma no longer shows us or doesn't say who may see, and keeps a listed one's", async () => {
+      for (const reply of [
+        { status: 403 },
+        { status: 404 },
+        { body: managed.replace('"visibility": "public",', "") },
+      ]) {
+        const db = await database();
+        await importInto(db);
+        const before = await stored(db);
+        const { result } = await importInto(
+          db,
+          { "evt-react": [reply], "evt-upcoming": [{ status: 403 }] },
+          { recent, listed: ["evt-upcoming"] },
+        );
+        expect(planned(result).written).toBe(1);
+        const [acme, , soon] = await stored(db);
+        expect([acme?.luma_description, acme?.luma_summary]).toEqual([
+          "",
+          null,
+        ]);
+        // Listed, so public: a failed read keeps what it has.
+        expect(soon).toEqual(before[2]);
+      }
+    });
   });
 
   test("an event Luma no longer shows keeps its description, and one with none is marked asked", async () => {
