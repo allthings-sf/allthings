@@ -15,13 +15,18 @@ const stylesheet = (name: string) =>
 const site = await stylesheet("site.css");
 const lab = await stylesheet("lab.css");
 const depth = await stylesheet("depth.css");
+const mcpApp = await stylesheet("mcp-app.css");
 const theme = themeCss(tokens);
 
-/** Every stylesheet of the site's own rules, by name. */
+/**
+ * Every stylesheet of the site's own rules, by name: the MCP App view's
+ * (src/mcp/apps.ts), which agent hosts draw in their chats, among them.
+ */
 const stylesheets = [
   ["site.css", site],
   ["lab.css", lab],
   ["depth.css", depth],
+  ["mcp-app.css", mcpApp],
 ] as const;
 
 /** CSS Color 4's named colors, plus the keywords that also pick a color. */
@@ -294,7 +299,9 @@ describe.each(stylesheets)("display type in %s", (name, css) => {
       )
       .map(({ selector }) => selector);
     expect(sheetRules.length).toBeGreaterThan(
-      { "site.css": 100, "lab.css": 50, "depth.css": 25 }[name],
+      { "site.css": 100, "lab.css": 50, "depth.css": 25, "mcp-app.css": 50 }[
+        name
+      ],
     );
     expect(unpulled).toEqual([]);
   });

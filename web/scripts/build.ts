@@ -354,6 +354,50 @@ async function buildLabScript(): Promise<string> {
   return `/assets/${basename(entry.path)}`;
 }
 
+/**
+ * The MCP App view's style and script (src/client/mcp-app, src/styles/
+ * mcp-app.css), which src/mcp/views.ts sets inline in the one document each
+ * of its `ui://` resources is: a host frames that document with no origin
+ * of its own, so all it loads besides are the faces and Night's grain,
+ * from the Worker that served it. Its stylesheet is the site's faces and
+ * theme, then the view's own rules; its script is one classic script.
+ * Neither may close the element it is set in.
+ */
+async function buildMcpApp(fontFaces: string): Promise<McpApp> {
+  const rules = await Bun.file(join(web, "src/styles/mcp-app.css")).text();
+  const theme = themeCss(siteTokens(tokens), await buildTextures());
+  const source = join(dist, "mcp-app.css");
+  await Bun.write(
+    source,
+    expandCustomMedia([fontFaces, theme, rules].join("\n")),
+  );
+  const styles = await Bun.build({
+    entrypoints: [source],
+    minify: true,
+    external: ["/assets/*"],
+  });
+  const [style] = styles.outputs;
+  if (!styles.success || style === undefined) {
+    throw new AggregateError(styles.logs, "The MCP App's style didn't build");
+  }
+  await rm(source);
+  const scripts = await Bun.build({
+    entrypoints: [join(web, "src/client/mcp-app/main.ts")],
+    target: "browser",
+    format: "iife",
+    minify: true,
+  });
+  const [script] = scripts.outputs;
+  if (!scripts.success || script === undefined) {
+    throw new AggregateError(scripts.logs, "The MCP App's script didn't build");
+  }
+  const closing = (tag: string) => new RegExp(`</(${tag})`, "gi");
+  return {
+    style: (await style.text()).replace(closing("style"), "<\\/$1"),
+    script: (await script.text()).trim().replace(closing("script"), "<\\/$1"),
+  };
+}
+
 /** Night's grain (brand/texture/grain.svg), under its hashed name. */
 async function buildTextures(): Promise<Textures> {
   const grain = await Bun.file(join(root, "brand/texture/grain.svg")).bytes();
@@ -789,6 +833,16 @@ export interface Foundations {
   readonly html: string;
 }
 
+/**
+ * What the Worker reads from dist/mcp-app.json, only when a host reads one
+ * of `/mcp`'s views: the view's style, whose faces and grain are under
+ * /assets/, and its script.
+ */
+export interface McpApp {
+  readonly style: string;
+  readonly script: string;
+}
+
 const headers = `# Content-hashed files never change under their name. Any origin may
 # read them: a face is always fetched with CORS, and a page served from
 # elsewhere that sets the site's faces, such as an agent host's frame for
@@ -841,6 +895,10 @@ export async function build(): Promise<BuildManifest> {
     ...assets,
   };
   await buildInstallers();
+  await Bun.write(
+    join(dist, "mcp-app.json"),
+    `${JSON.stringify(await buildMcpApp(fontFaces))}\n`,
+  );
   await Bun.write(join(publicDir, "_headers"), headers);
   await Bun.write(
     join(dist, "build.json"),

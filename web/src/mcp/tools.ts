@@ -18,6 +18,7 @@ import { z } from "zod";
 import { type Repositories, repositories } from "../database.ts";
 import { mediaOrigin } from "../links.ts";
 import { Site } from "../site.ts";
+import { toolView } from "./apps.ts";
 import { community } from "./community.ts";
 import {
   proposeDescription,
@@ -444,6 +445,7 @@ export function registerTools(
         Schema.Struct({ events: Schema.Array(Contract.EventSummary) }),
       ),
       annotations: readOnly,
+      _meta: toolView("list_events"),
     },
     (input) => call("list_events", input),
   );
@@ -457,6 +459,7 @@ export function registerTools(
       inputSchema: toolInputs.get_event,
       outputSchema: outputSchema(Schema.Struct(Contract.Event.fields)),
       annotations: readOnly,
+      _meta: toolView("get_event"),
     },
     (input) => call("get_event", input),
   );

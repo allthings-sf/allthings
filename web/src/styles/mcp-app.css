@@ -1,0 +1,444 @@
+/* The allthings view in an agent's chat (src/client/mcp-app, served by
+   src/mcp/views.ts): the site's tokens, faces and rules in a frame the host
+   sizes, from a phone's width up. It follows the host's mode: Paper for
+   light, Night, grained, for dark. Rules instead of boxes, sharp corners,
+   and every length a token's, as on the site (tests/styles.test.ts). */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--at-ground);
+  background-image: var(--at-texture);
+  color: var(--at-text);
+  font-family: var(--at-font-display);
+  font-size: var(--at-font-size-small);
+  line-height: 1.5;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+body {
+  margin: 0;
+}
+
+/* A frame of fixed height: the view scrolls inside it. */
+html.fixed-height,
+html.fixed-height body {
+  height: 100%;
+}
+
+html.fixed-height body {
+  overflow-y: auto;
+}
+
+/* The view measures its content's own height for the host (main.ts,
+   reportSize), in a fixed frame too: a host that gave one may still grow
+   it to fit. */
+html.measuring,
+html.measuring body {
+  height: max-content;
+}
+
+h1,
+h2,
+h3,
+p,
+ol,
+ul,
+dl,
+dd {
+  margin: 0;
+}
+
+ol,
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--at-link);
+  text-decoration-thickness: var(--at-stroke-hairline);
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: var(--at-stroke-rule);
+}
+
+:focus-visible {
+  outline: var(--at-stroke-heavy) solid var(--at-link);
+  outline-offset: var(--at-stroke-heavy);
+}
+
+/* A heading that takes focus when it replaces a list is not a control. */
+[tabindex="-1"]:focus {
+  outline: none;
+}
+
+.at-type-meta {
+  color: var(--at-meta);
+}
+
+.slash,
+.at-cursor {
+  color: var(--at-slash);
+}
+
+.at-cursor {
+  font-weight: 400;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The frame: the site's margin, narrowing with the frame to 16px. */
+
+#app {
+  container-type: inline-size;
+  padding: var(--at-space-5) var(--at-layout-margin) var(--at-space-6);
+}
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-5);
+}
+
+.view-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--at-space-1) var(--at-space-4);
+  border-top: var(--at-stroke-heavy) solid var(--at-text);
+  padding-top: var(--at-space-3);
+}
+
+.view-title {
+  font-size: var(--at-font-size-title);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.view-count {
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.notice {
+  border-left: var(--at-stroke-heavy) solid var(--at-slash);
+  padding-left: var(--at-space-3);
+  max-width: var(--at-measure-prose);
+}
+
+.waiting {
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Evenings: a light date, the name heavy with its slash, the place bolder
+   than the date but clearly secondary (brand/foundations.md, "Layout"). */
+
+.evenings {
+  border-top: var(--at-stroke-hairline) solid var(--at-rule);
+}
+
+.evening {
+  display: grid;
+  grid-template-columns: var(--at-size-date-column) minmax(0, 1fr);
+  column-gap: var(--at-space-4);
+  row-gap: var(--at-space-1);
+  align-items: baseline;
+  padding: var(--at-space-4) 0;
+  border-bottom: var(--at-stroke-hairline) solid var(--at-rule);
+}
+
+.evening-when {
+  display: flex;
+  flex-direction: column;
+  letter-spacing: 0;
+}
+
+.evening-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-1);
+  min-width: 0;
+}
+
+.evening-name a,
+.plain {
+  color: inherit;
+  text-decoration: none;
+}
+
+.evening-name a:hover {
+  text-decoration: underline var(--at-stroke-rule);
+  text-underline-offset: 0.18em;
+}
+
+.evening-name {
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.evening-place {
+  color: var(--at-link);
+}
+
+.live {
+  color: var(--at-slash);
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--at-space-2) var(--at-space-5);
+  padding-top: var(--at-space-2);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--at-size-target);
+  padding: 0 var(--at-space-4);
+  border: 0;
+  border-radius: 0;
+  background: var(--at-button);
+  color: var(--at-button-text);
+  font-family: inherit;
+  font-size: var(--at-font-size-small);
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:hover {
+  text-decoration: underline var(--at-stroke-rule);
+  text-underline-offset: 0.18em;
+}
+
+.quiet {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--at-size-target);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--at-link);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: var(--at-stroke-hairline);
+  text-underline-offset: 0.18em;
+  cursor: pointer;
+}
+
+.quiet:hover {
+  text-decoration-thickness: var(--at-stroke-rule);
+}
+
+/* An evening, in brief: the lockup and what to do, then its parts. */
+
+.evening-page {
+  gap: var(--at-space-6);
+}
+
+.evening-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+  border-top: var(--at-stroke-heavy) solid var(--at-text);
+  padding-top: var(--at-space-3);
+}
+
+.evening-head .evening-when {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0 var(--at-space-3);
+}
+
+.lockup {
+  font-size: var(--at-font-size-display);
+  font-weight: 800;
+  font-stretch: 112%;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  text-indent: var(--at-type-event-lockup-inset);
+  overflow-wrap: anywhere;
+}
+
+.lead {
+  font-size: var(--at-font-size-large);
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  max-width: var(--at-measure-lead);
+}
+
+.evening-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--at-space-3);
+  color: var(--at-meta);
+}
+
+.part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-3);
+}
+
+.part-title {
+  border-top: var(--at-stroke-rule) solid var(--at-text);
+  padding-top: var(--at-space-2);
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.talk,
+.host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+  padding: var(--at-space-4) 0;
+  border-bottom: var(--at-stroke-hairline) solid var(--at-rule);
+}
+
+.talk:first-child,
+.host:first-child {
+  padding-top: var(--at-space-1);
+}
+
+.talk-title,
+.host-name {
+  font-size: var(--at-type-list-name-size);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.people {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+}
+
+.person {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--at-space-3);
+}
+
+.person-name {
+  font-weight: 700;
+}
+
+.person-title {
+  color: var(--at-meta);
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--at-space-4);
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--at-size-target);
+}
+
+/* What a talk left behind is named in words, often long ones: in the text's face. */
+.artifacts {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.about summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--at-size-target);
+  color: var(--at-link);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.about summary::before {
+  content: "+";
+  padding-right: var(--at-space-2);
+  font-family: var(--at-font-mono);
+}
+
+.about[open] summary::before {
+  content: "−";
+}
+
+.prose {
+  max-width: var(--at-measure-prose);
+}
+
+/* On a phone, a row stacks its date over the rest. */
+
+@media (--at-below-s) {
+  .evening {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .evening-when {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0 var(--at-space-3);
+  }
+}
+
+/* Where a finger points, every control is a button's height. */
+
+@media (pointer: coarse) {
+  .button,
+  .quiet,
+  .links a,
+  .about summary {
+    min-height: var(--at-size-portrait-s);
+  }
+}
+
+@media (forced-colors: active) {
+  .button {
+    border: var(--at-stroke-hairline) solid;
+  }
+}
