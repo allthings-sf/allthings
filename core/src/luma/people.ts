@@ -10,8 +10,12 @@ import type { LumaEventPeople, LumaHost } from "./api.ts";
  *   or to a new profile with the name the host goes by on Luma and their
  *   Luma photo, if they uploaded one;
  * - otherwise by name, exactly as {@link normalizeName} writes it, never by
- *   similarity, when one profile has that name and no Luma user id, and no
- *   other unmatched host goes by it. It is reported, for review.
+ *   similarity, when one profile has that name and no Luma user id, no
+ *   other unmatched host goes by it, and the host hosts an event our
+ *   calendar manages. It is reported, for review. A Luma user picks their
+ *   own name, and only our calendar's events list hosts our organizers
+ *   added: a host only other calendars' events list is linked by a
+ *   decision, and the report says which.
  *
  * A host whose Luma user id is a hosting company's (`sponsors.luma_user_id`)
  * is that company, not a person: the company is attached to the event as one
@@ -197,6 +201,7 @@ const hostName = (host: LumaHost): string | null => {
 /** How each distinct host is matched, decided once for every event. */
 function matchHosts(
   hosts: ReadonlyMap<string, LumaHost>,
+  ours: ReadonlySet<string>,
   profiles: ReadonlyArray<StoredProfile>,
   decisions: Decisions,
 ): { matches: ReadonlyMap<string, Match>; problems: ReadonlyArray<string> } {
@@ -289,7 +294,12 @@ function matchHosts(
       matches.set(
         lumaUserId,
         reason === null && only !== undefined
-          ? { _tag: "Link", how: "name", profile: only }
+          ? ours.has(lumaUserId)
+            ? { _tag: "Link", how: "name", profile: only }
+            : {
+                _tag: "Unmatched",
+                reason: `only events another calendar manages list this host, so a name alone doesn't link them: --link ${lumaUserId}=${only.id} if they are ${only.name}`,
+              }
           : { _tag: "Unmatched", reason: reason ?? "no profile has this name" },
       );
     }
@@ -330,7 +340,13 @@ export function planPeople(
       }
     }
   }
-  const matched = matchHosts(hosts, profiles, decisions);
+  // Hosts of an event our calendar manages: our organizers added them.
+  const ours = new Set(
+    events
+      .filter((event) => event.people.managed)
+      .flatMap((event) => event.people.hosts.map((host) => host.lumaUserId)),
+  );
+  const matched = matchHosts(hosts, ours, profiles, decisions);
   const { matches } = matched;
   const problems = [
     ...matched.problems.filter(

@@ -2,6 +2,7 @@ import { Effect, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { approvalToken, isApprovalToken } from "./approval.ts";
 import { currentActor, logDraft } from "./planning/draft-log.ts";
+import { hasControl, terminalText } from "./terminal.ts";
 
 /**
  * Talks people propose to give at one of our evenings
@@ -124,6 +125,13 @@ const text = (min: number, max: number, what: string) =>
     ),
   );
 
+/**
+ * The start of a value a problem quotes, as JSON writes it, with the C1
+ * controls JSON leaves as they are escaped too (src/terminal.ts).
+ */
+const shownValue = (value: string): string =>
+  terminalText(JSON.stringify(value.slice(0, 60)));
+
 /** An email address, as proposals_email_check reads one. */
 const Email = Schema.String.check(
   Schema.makeFilter((value: string) =>
@@ -133,14 +141,18 @@ const Email = Schema.String.check(
           !unreadable(value) &&
           /^[^@\s]+@[^@\s]+[.][^@\s]+$/.test(value)
         ? undefined
-        : `${JSON.stringify(value.slice(0, 60))} doesn't read as an email address.`,
+        : `${shownValue(value)} doesn't read as an email address.`,
   ),
 );
 
 /** What is wrong with `value` as a link, if anything: https, at most proposalLimits.link characters. */
 const linkProblem = (value: string): string | undefined => {
-  const shown = JSON.stringify(value.slice(0, 60));
-  if (!/^https:\/\/\S+$/.test(value) || URL.parse(value) === null) {
+  const shown = shownValue(value);
+  if (
+    !/^https:\/\/\S+$/.test(value) ||
+    hasControl(value) ||
+    URL.parse(value) === null
+  ) {
     return `${shown} isn't an https:// link.`;
   }
   return value.length <= proposalLimits.link
@@ -711,8 +723,8 @@ export const decide = (id: string, decision: Decision, token: string) =>
     );
   });
 
-/** A proposal in lines, as an organizer reads it. */
-export const proposalLines = (proposal: Proposal): ReadonlyArray<string> => [
+/** A proposal's lines as they read, before they are shown. */
+const proposalText = (proposal: Proposal): ReadonlyArray<string> => [
   `${proposal.id} (${proposal.status}${proposal.decidedBy === null ? "" : ` by ${proposal.decidedBy} on ${proposal.decidedAt!.slice(0, 10)}`})`,
   `title: ${JSON.stringify(proposal.title)}`,
   `format: ${formatLabels[proposal.format]}`,
@@ -736,6 +748,16 @@ export const proposalLines = (proposal: Proposal): ReadonlyArray<string> => [
       ]),
 ];
 
-/** A proposal in one line, for a list. */
+/**
+ * A proposal in lines, as an organizer reads it in a terminal: what was
+ * sent is shown as it is, any control character in it as its escape
+ * (src/terminal.ts).
+ */
+export const proposalLines = (proposal: Proposal): ReadonlyArray<string> =>
+  proposalText(proposal).map(terminalText);
+
+/** A proposal in one line, for a list, as `proposalLines` shows text. */
 export const proposalLine = (proposal: Proposal): string =>
-  `${proposal.id} ${proposal.createdAt.slice(0, 10)} ${proposal.status} ${proposal.format} ${JSON.stringify(proposal.title)}, ${proposal.name} <${proposal.email}> via ${proposal.source}`;
+  terminalText(
+    `${proposal.id} ${proposal.createdAt.slice(0, 10)} ${proposal.status} ${proposal.format} ${JSON.stringify(proposal.title)}, ${proposal.name} <${proposal.email}> via ${proposal.source}`,
+  );

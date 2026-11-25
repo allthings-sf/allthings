@@ -308,6 +308,45 @@ describe("planning the import", () => {
     ]);
   });
 
+  test("a name alone links only a host of an event our calendar manages", () => {
+    const plan = planPeople(
+      [
+        hosted("ours", [["usr-Ours", "Ada Lovelace"]], [10, 8]),
+        hosted("theirs", [
+          ["usr-Theirs", "Grace Hopper"],
+          ["usr-Both", "Margaret Hamilton"],
+        ]),
+        hosted("also-ours", [["usr-Both", "Margaret Hamilton"]], [5, 4]),
+      ],
+      [
+        profile("p-ada", "Ada Lovelace"),
+        profile("p-grace", "Grace Hopper"),
+        profile("p-margaret", "Margaret Hamilton"),
+      ],
+    );
+    expect(plan.problems).toEqual([]);
+    expect(plan.links).toEqual([
+      { profileId: "p-ada", lumaUserId: "usr-Ours" },
+      { profileId: "p-margaret", lumaUserId: "usr-Both" },
+    ]);
+    expect(plan.review).toContainEqual({
+      _tag: "Unmatched",
+      lumaEventId: "evt-theirs",
+      lumaUserId: "usr-Theirs",
+      name: "Grace Hopper",
+      reason:
+        "only events another calendar manages list this host, so a name alone doesn't link them: --link usr-Theirs=p-grace if they are Grace Hopper",
+    });
+    // An organizer's decision links them.
+    expect(
+      planPeople(
+        [hosted("theirs", [["usr-Theirs", "Grace Hopper"]])],
+        [profile("p-grace", "Grace Hopper")],
+        { create: [], link: { "usr-Theirs": "p-grace" } },
+      ).links,
+    ).toEqual([{ profileId: "p-grace", lumaUserId: "usr-Theirs" }]);
+  });
+
   test("never guesses: unsettled hosts are reported, not matched or created", () => {
     const plan = planPeople(
       [
@@ -375,15 +414,19 @@ describe("planning the import", () => {
   test("lists every decision it cannot carry out", () => {
     const plan = planPeople(
       [
-        hosted("a", [
-          ["usr-Held", "Held Person"],
-          ["usr-Both", "Both Ways"],
-          ["usr-Nameless", null],
-          ["usr-ToTaken", "To Taken"],
-          ["usr-ToMissing", "To Missing"],
-          ["usr-ByName", "Free Profile"],
-          ["usr-AlsoFree", "Someone Else"],
-        ]),
+        hosted(
+          "a",
+          [
+            ["usr-Held", "Held Person"],
+            ["usr-Both", "Both Ways"],
+            ["usr-Nameless", null],
+            ["usr-ToTaken", "To Taken"],
+            ["usr-ToMissing", "To Missing"],
+            ["usr-ByName", "Free Profile"],
+            ["usr-AlsoFree", "Someone Else"],
+          ],
+          [1, 1],
+        ),
       ],
       [
         profile("p-held", "Held Person", "usr-Held"),
@@ -475,9 +518,11 @@ describe("stage roles", () => {
 
 describe("the import", () => {
   /** Margaret and Katherine get profiles; the nameless host can't. */
+  // Future Speaker hosts only the partner's event, which another calendar
+  // manages: a name alone doesn't link them, an organizer does.
   const decided: Decisions = {
     create: ["usr-Hamilton1", "usr-Johnson1"],
-    link: {},
+    link: { "usr-Future1": "b0000000-0000-4000-8000-000000000005" },
   };
 
   const opened: Array<PGlite> = [];
@@ -602,21 +647,14 @@ describe("the import", () => {
     const db = await database();
     const result = await imported(db, undefined, { decisions: noDecisions });
     expect(result.written).toEqual({
-      linked: 3,
+      linked: 2,
       created: 0,
-      written: 3,
+      written: 2,
       removed: 0,
       hosted: 0,
       counted: 1,
     });
     expect(await people(db)).toEqual([
-      {
-        event: "evt-partner",
-        name: "Future Speaker",
-        role: "co-host",
-        position: 0,
-        source: "luma",
-      },
       {
         event: "evt-react",
         name: "Ada Lovelace",
@@ -635,7 +673,7 @@ describe("the import", () => {
     expect(formatImport(result).split("\n").slice(-4)).toEqual([
       "evt-partner",
       "  not imported: Margaret Hamilton (usr-Hamilton1): no profile has this name",
-      "  matched by name: Future Speaker (usr-Future1) is profile b0000000-0000-4000-8000-000000000005",
+      "  not imported: Future Speaker (usr-Future1): only events another calendar manages list this host, so a name alone doesn't link them: --link usr-Future1=b0000000-0000-4000-8000-000000000005 if they are Future Speaker",
       "Hosts not imported wait for a decision: run again with --create <Luma user id> to make them a profile, or --link <Luma user id>=<profile id> if they have one.",
     ]);
   });
@@ -781,7 +819,7 @@ describe("the import", () => {
         "  not imported: (no name) (usr-Nameless1): Luma shows no name for this host",
         "evt-partner",
         "  new profile: Margaret Hamilton (usr-Hamilton1)",
-        "  matched by name: Future Speaker (usr-Future1) is profile b0000000-0000-4000-8000-000000000005",
+        "  matched as decided: Future Speaker (usr-Future1) is profile b0000000-0000-4000-8000-000000000005",
         "Hosts not imported wait for a decision: run again with --create <Luma user id> to make them a profile, or --link <Luma user id>=<profile id> if they have one.",
       ].join("\n"),
     );
