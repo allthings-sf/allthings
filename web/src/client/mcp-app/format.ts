@@ -110,3 +110,13 @@ export function timeRange(start: string, end: string): string {
 /** "1 evening", "3 evenings". */
 export const count = (n: number, one: string, many: string): string =>
   `${n} ${n === 1 ? one : many}`;
+
+/** The months of the year, short, as the site writes them. */
+export const monthNames = months;
+
+/** The month an instant falls in, in San Francisco: 0 for January. */
+export const monthOf = (instant: string): number => local(instant).month - 1;
+
+/** "2,852": a count, grouped as the site writes one. */
+export const grouped = (n: number): string =>
+  n.toLocaleString("en-US", { maximumFractionDigits: 0 });

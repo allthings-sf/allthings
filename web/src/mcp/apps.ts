@@ -1,3 +1,4 @@
+import { mediaOrigin } from "../links.ts";
 import type { ToolName } from "./tools.ts";
 
 /**
@@ -40,7 +41,7 @@ interface ViewInfo {
   readonly title: string;
   readonly description: string;
   /** What the document draws (src/client/mcp-app/main.ts reads it). */
-  readonly view: "events" | "event" | "speakers";
+  readonly view: "events" | "event" | "speakers" | "year";
 }
 
 /** The views, by the tool each draws. */
@@ -69,6 +70,14 @@ export const views = {
       "People who have spoken at allthings evenings, with their talks, and a search over them.",
     view: "speakers",
   },
+  get_year: {
+    uri: "ui://allthings/year.html",
+    name: "year",
+    title: "A year of allthings evenings",
+    description:
+      "A year of allthings evenings, looked back on: how many said they were in, the year's figures and photos, the year month by month, where we met, and every evening with who hosted and who was on stage.",
+    view: "year",
+  },
 } as const satisfies Partial<Record<ToolName, ViewInfo>>;
 
 export type ViewedTool = keyof typeof views;
@@ -81,12 +90,16 @@ export function toolView(tool: ViewedTool): Record<string, unknown> {
 
 /**
  * What a view's resource says to the host: it loads the faces and the
- * grain from `assetOrigin` and connects nowhere (it asks the host to call
- * tools for it), and it draws its own ground, so it wants no border.
+ * grain from `assetOrigin`, and the evenings' photos from the media
+ * origin, and connects nowhere (it asks the host to call tools for it),
+ * and it draws its own ground, so it wants no border.
  */
 export const viewMeta = (assetOrigin: string) => ({
   ui: {
-    csp: { connectDomains: [], resourceDomains: [assetOrigin] },
+    csp: {
+      connectDomains: [],
+      resourceDomains: [assetOrigin, mediaOrigin],
+    },
     prefersBorder: false,
   },
 });
