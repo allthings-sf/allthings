@@ -6,7 +6,7 @@ The plugin gives an agent the allthings MCP server (`list_events`, `get_event`, 
 
 It installs in Claude Code, Codex and Grok Build. Codex and Grok Build get the server and the skills; the mod, the themes and the output style are Claude Code's alone.
 
-The server's answers to `list_events` and `get_event` come with views ([MCP Apps](https://github.com/modelcontextprotocol/ext-apps)): a host that draws them, such as Claude, ChatGPT or VS Code, shows the evenings and an evening's lineup as allthings.dev does, in the chat, in its light or dark mode. Terminal agents read the same answer as text, as before. `bun run build && bun scripts/mcp-app-dev.ts` in `web/` serves the server with its views on this machine, for trying them in a host.
+The server's answers to `list_events`, `get_event` and `list_speakers` come with views ([MCP Apps](https://github.com/modelcontextprotocol/ext-apps)): a host that draws them, such as Claude, ChatGPT or VS Code, shows the evenings, an evening's lineup and the people on our stages as allthings.dev does, in the chat, in its light or dark mode. Terminal agents read the same answer as text, as before. `bun run build && bun scripts/mcp-app-dev.ts` in `web/` serves the server with its views on this machine, for trying them in a host.
 
 | File                         | For                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------- |

@@ -10,7 +10,7 @@ type Children = ReadonlyArray<Child | ReadonlyArray<Child>>;
 
 /** Attribute names an element may be given: not handlers, styles or URLs. */
 const settable =
-  /^(?:class|id|lang|role|datetime|type|tabindex|hidden|aria-[a-z]+|data-[a-z-]+)$/;
+  /^(?:class|id|lang|role|datetime|type|for|name|value|tabindex|hidden|aria-[a-z]+|data-[a-z-]+|autocomplete|enterkeyhint|inputmode|placeholder|spellcheck)$/;
 
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,

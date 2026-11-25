@@ -475,6 +475,7 @@ export function registerTools(
         Schema.Struct({ speakers: Schema.Array(Contract.Speaker) }),
       ),
       annotations: readOnly,
+      _meta: toolView("list_speakers"),
     },
     (input) => call("list_speakers", input),
   );

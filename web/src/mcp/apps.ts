@@ -3,7 +3,7 @@ import type { ToolName } from "./tools.ts";
 /**
  * The tools' views, as MCP Apps (SEP-1865, the `io.modelcontextprotocol/ui`
  * extension, revision 2026-01-26): a host that renders them shows
- * list_events and get_event as allthings draws them, in
+ * list_events, get_event and list_speakers as allthings draws them, in
  * the chat, and one that doesn't gets the same text it always did. Claude,
  * ChatGPT, VS Code, Cursor and Goose render them; terminal agents (Claude
  * Code, Codex, Gemini CLI) read the text.
@@ -40,7 +40,7 @@ interface ViewInfo {
   readonly title: string;
   readonly description: string;
   /** What the document draws (src/client/mcp-app/main.ts reads it). */
-  readonly view: "events" | "event";
+  readonly view: "events" | "event" | "speakers";
 }
 
 /** The views, by the tool each draws. */
@@ -60,6 +60,14 @@ export const views = {
     description:
       "One allthings evening: when and where, who's on stage with their talks and links, and who hosts it.",
     view: "event",
+  },
+  list_speakers: {
+    uri: "ui://allthings/people.html",
+    name: "people",
+    title: "People on allthings stages",
+    description:
+      "People who have spoken at allthings evenings, with their talks, and a search over them.",
+    view: "speakers",
   },
 } as const satisfies Partial<Record<ToolName, ViewInfo>>;
 

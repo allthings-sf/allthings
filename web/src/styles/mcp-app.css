@@ -322,7 +322,8 @@ a:hover {
 }
 
 .talk,
-.host {
+.host,
+.person-row {
   display: flex;
   flex-direction: column;
   gap: var(--at-space-2);
@@ -331,7 +332,8 @@ a:hover {
 }
 
 .talk:first-child,
-.host:first-child {
+.host:first-child,
+.person-row:first-child {
   padding-top: var(--at-space-1);
 }
 
@@ -412,6 +414,56 @@ a:hover {
   max-width: var(--at-measure-prose);
 }
 
+/* People: who has been on our stages, and what they gave. */
+
+.search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--at-space-2);
+}
+
+.search label {
+  flex-basis: 100%;
+  color: var(--at-meta);
+  font-family: var(--at-font-mono);
+  font-size: var(--at-type-meta-size);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.search input {
+  flex: 1 1 var(--at-size-tile-m);
+  min-height: var(--at-size-target);
+  padding: 0 var(--at-space-3);
+  border: var(--at-stroke-hairline) solid var(--at-text);
+  border-radius: 0;
+  background: var(--at-ground);
+  color: var(--at-text);
+  font-family: inherit;
+  font-size: var(--at-font-size-small);
+}
+
+.person-row .person-name {
+  line-height: 1.2;
+}
+
+.person-talks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--at-space-2);
+}
+
+.person-talks li {
+  display: flex;
+  flex-direction: column;
+}
+
+.talk-link {
+  font-weight: 600;
+}
+
 /* On a phone, a row stacks its date over the rest. */
 
 @media (--at-below-s) {
@@ -432,7 +484,8 @@ a:hover {
   .button,
   .quiet,
   .links a,
-  .about summary {
+  .about summary,
+  .search input {
     min-height: var(--at-size-portrait-s);
   }
 }

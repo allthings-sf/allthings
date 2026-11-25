@@ -1,4 +1,8 @@
-import type { Event, EventSummary } from "allthings-core/src/contract.ts";
+import type {
+  Event,
+  EventSummary,
+  Speaker,
+} from "allthings-core/src/contract.ts";
 import {
   type Bridge,
   connect,
@@ -10,6 +14,7 @@ import {
 import { cursor, h, isWebUrl } from "./dom.ts";
 import { eveningView } from "./evening.ts";
 import { eveningsView, isSelection } from "./evenings.ts";
+import { peopleView } from "./people.ts";
 
 /**
  * The allthings view, as an MCP App (web/src/mcp/views.ts serves it). The
@@ -17,7 +22,7 @@ import { eveningsView, isSelection } from "./evenings.ts";
  * It waits for the host's handshake, then for the tool's input and
  * result, and draws what the result's structured content holds. Where the
  * host lets it, it calls the server's own tools for what the reader asks
- * next (an evening's lineup), and asks the host to open
+ * next (an evening's lineup, another search), and asks the host to open
  * every link.
  */
 
@@ -191,6 +196,42 @@ async function openEvening(
   document.getElementById("view-title")?.focus();
 }
 
+/** The latest search asked for: only its answer is drawn. */
+let latestSearch = 0;
+
+/** Searches the people again, everyone for an empty search. */
+async function searchPeople(callTool: CallTool, query: string): Promise<void> {
+  const args = query === "" ? {} : { query };
+  // A search asked again before the last one answered supersedes it: an
+  // answer that comes back late, or a late failure, is dropped.
+  const search = ++latestSearch;
+  let found: ToolResult;
+  try {
+    found = await callTool("list_speakers", args);
+  } catch {
+    if (search === latestSearch) {
+      searchFailed("The host couldn't ask allthings for that search.");
+    }
+    return;
+  }
+  if (search !== latestSearch) return;
+  if (found.isError === true) {
+    searchFailed(errorOf(found));
+    return;
+  }
+  render(found, args, callTool);
+  document.getElementById("people-query")?.focus();
+}
+
+/**
+ * Says why a search found nothing under its form, and keeps the people
+ * already shown and the search itself, so the reader can try again.
+ */
+function searchFailed(text: string): void {
+  document.querySelector(".search + [role=alert]")?.remove();
+  document.querySelector(".search")?.after(notice(text, "alert"));
+}
+
 /** Draws `result` as `view` does, with what the host lets the view do next. */
 function render(
   result: ToolResult,
@@ -227,6 +268,24 @@ function render(
     typeof data["slug"] === "string"
   ) {
     show(eveningView(data as unknown as Event, {}));
+    return;
+  }
+  if (view === "speakers" && Array.isArray(data?.["speakers"])) {
+    const query =
+      typeof input["query"] === "string" ? input["query"] : undefined;
+    const speakers = data["speakers"] as ReadonlyArray<Speaker>;
+    show(
+      peopleView(speakers, {
+        query,
+        ...(callTool === undefined
+          ? {}
+          : {
+              search: (next) => {
+                void searchPeople(callTool, next);
+              },
+            }),
+      }),
+    );
     return;
   }
   show(notice(errorOf(result), "alert"));
