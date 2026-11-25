@@ -94,7 +94,10 @@ interface Mounted {
   readonly window: ViewWindow;
   readonly bridge: AppBridge;
   readonly calls: Array<{ name: string; arguments?: Record<string, unknown> }>;
+  /** The links the host was asked to open, and refused when `refuseLinks`. */
   readonly opened: Array<string>;
+  /** What the view opened on its own, with window.open: nothing, ever. */
+  readonly windowOpened: Array<string>;
   readonly sizes: Array<{ width?: number; height?: number }>;
   /** What axe finds in the view as drawn. */
   readonly axe: () => Promise<Array<string>>;
@@ -102,7 +105,8 @@ interface Mounted {
 
 /**
  * Runs `tool`'s view in a window framed by an AppBridge host, which answers
- * the view's tool calls with `answer`, until the view has initialized.
+ * the view's tool calls with `answer` and refuses every link it's asked to
+ * open when `refuseLinks`, until the view has initialized.
  */
 async function mount(
   tool: ViewedTool,
@@ -110,7 +114,9 @@ async function mount(
     name: string,
     args: Record<string, unknown>,
   ) => CallToolResult = () => result({}),
+  { refuseLinks = false }: { readonly refuseLinks?: boolean } = {},
 ): Promise<Mounted> {
+  const windowOpened: Array<string> = [];
   // What the view posts to its parent, until the bridge is listening.
   const queued: Array<JSONRPCMessage> = [];
   let deliver: ((message: JSONRPCMessage) => void) | undefined;
@@ -137,6 +143,12 @@ async function mount(
       pretendToBeVisual: true,
       beforeParse(window) {
         Object.defineProperty(window, "parent", { value: host });
+        Object.defineProperty(window, "open", {
+          value: (url: unknown) => {
+            windowOpened.push(String(url));
+            return null;
+          },
+        });
       },
     },
   );
@@ -182,6 +194,7 @@ async function mount(
   };
   bridge.onopenlink = async ({ url }) => {
     opened.push(url);
+    if (refuseLinks) throw new Error("The reader didn't want to leave");
     return {};
   };
   bridge.onsizechange = (size) => sizes.push(size);
@@ -195,6 +208,7 @@ async function mount(
     bridge,
     calls,
     opened,
+    windowOpened,
     sizes,
     axe: () =>
       axeProblems(
@@ -349,6 +363,74 @@ describe("list_events's view", () => {
         expect(text(view.window.document.querySelector("[role=alert]"))).toBe(
           "allthings events are temporarily unavailable. Please retry in a minute.",
         );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "keeps the way back when an evening's lineup can't be had",
+    async () => {
+      const view = await mount("list_events", () => ({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "allthings event details are temporarily unavailable. Please retry in a minute.",
+          },
+        ],
+      }));
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(
+          () => all(view.window, ".evening").length > 0,
+          "the evenings",
+        );
+        all(view.window, ".evening")[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector("[role=alert]") !== null,
+          "the alert",
+        );
+        expect(text(document.querySelector("[role=alert]"))).toBe(
+          "allthings event details are temporarily unavailable. Please retry in a minute.",
+        );
+        expect(await view.axe()).toEqual([]);
+        // The list it replaced is one press away.
+        document.querySelector(".back")?.click();
+        await until(
+          () => all(view.window, ".evening").length === summaries.length,
+          "the list again",
+        );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "opens nothing the host refused to open",
+    async () => {
+      const view = await mount("list_events", undefined, {
+        refuseLinks: true,
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        await until(
+          () => all(view.window, ".evening").length > 0,
+          "the evenings",
+        );
+        all(view.window, ".evening-name a")[0]?.click();
+        await until(() => view.opened.length > 0, "the host to be asked");
+        // Long enough for the refusal to come back to the view.
+        await Bun.sleep(200);
+        expect(view.opened).toEqual([effectNight.url]);
+        expect(view.windowOpened).toEqual([]);
       } finally {
         view.window.close();
       }

@@ -120,7 +120,12 @@ function reportSize(bridge: Bridge): void {
   if (app !== null) observer.observe(app);
 }
 
-/** Every link the view draws opens through the host, which may ask the reader first. */
+/**
+ * Every link the view draws opens through the host, which may ask the
+ * reader first. A host that refuses one has decided, so the view never
+ * opens it another way. A host that doesn't open links leaves them to the
+ * frame, as plain links that open in a new tab.
+ */
 function openLinksThroughHost(
   bridge: Bridge,
   capabilities: HostCapabilities,
@@ -132,9 +137,28 @@ function openLinksThroughHost(
     if (anchor === null || !isWebUrl(anchor.href)) return;
     event.preventDefault();
     bridge.request("ui/open-link", { url: anchor.href }).catch(() => {
-      window.open(anchor.href, "_blank", "noopener,noreferrer");
+      // Refused: the host said no, or couldn't, and the link stays shut.
     });
   });
+}
+
+/**
+ * Why the lineup isn't shown, with the way back to the list it replaced,
+ * so a failed request never strands the reader.
+ */
+function lineupFailed(text: string, back: () => void): HTMLElement {
+  const backButton = h(
+    "button",
+    { type: "button", class: "quiet back" },
+    "All evenings",
+  );
+  backButton.addEventListener("click", back);
+  return h(
+    "section",
+    { class: "view" },
+    h("nav", { "aria-label": "Evenings" }, backButton),
+    notice(text, "alert"),
+  );
 }
 
 type CallTool = (
@@ -153,12 +177,14 @@ async function openEvening(
   try {
     evening = await callTool("get_event", { slug });
   } catch {
-    show(notice("The host couldn't ask allthings for that evening.", "alert"));
+    show(
+      lineupFailed("The host couldn't ask allthings for that evening.", back),
+    );
     return;
   }
   const detail = dataOf(evening);
   if (evening.isError === true || detail === undefined) {
-    show(notice(errorOf(evening), "alert"));
+    show(lineupFailed(errorOf(evening), back));
     return;
   }
   show(eveningView(detail as unknown as Event, { back }));
