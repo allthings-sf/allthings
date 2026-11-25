@@ -18,7 +18,7 @@ jobs:
     deploy:
         environment:
             name: github-pages
-            url: ${{ steps.deployment.outputs.page_url }}
+            url: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
         runs-on: ubuntu-latest
         steps:
             - name: ⬇️ Checkout repo
@@ -36,6 +36,21 @@ jobs:
               with:
                   path: 'pages/'
 
+            # Right after the upload, deploy-pages sometimes finds no
+            # github-pages artifact in this run and fails before it creates a
+            # deployment ("Fetching artifact metadata failed"): GitHub's
+            # artifact listing lags the upload. One more try after a pause
+            # absorbs that; a failure that lasts still fails the job.
             - name: 🚢 Deploy to GitHub Pages
               id: deployment
+              continue-on-error: true
+              uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
+            - name: ⏳ Wait for the artifact to be listed
+              if: steps.deployment.outcome == 'failure'
+              run: sleep 30
+
+            - name: 🚢 Deploy to GitHub Pages, once more
+              id: deployment-retry
+              if: steps.deployment.outcome == 'failure'
               uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
