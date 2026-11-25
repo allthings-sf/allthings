@@ -65,7 +65,10 @@ interface ViewElement {
   readonly id: string;
   value: string;
   readonly form: { requestSubmit(): void } | null;
+  readonly hidden: boolean;
   click(): void;
+  focus(): void;
+  dispatchEvent(event: object): boolean;
   getAttribute(name: string): string | null;
   querySelectorAll(selector: string): ArrayLike<ViewElement>;
 }
@@ -82,6 +85,7 @@ interface ViewWindow {
   };
   readonly Event: new (type: string, init?: object) => object;
   readonly MouseEvent: new (type: string, init?: object) => object;
+  readonly KeyboardEvent: new (type: string, init?: object) => object;
   dispatchEvent(event: object): boolean;
   close(): void;
 }
@@ -104,6 +108,14 @@ interface Mounted {
   /** What the view opened on its own, with window.open: nothing, ever. */
   readonly windowOpened: Array<string>;
   readonly sizes: Array<{ width?: number; height?: number }>;
+  /** What the view told the agent the reader has open, in order. */
+  readonly contexts: Array<string>;
+  /** What the view put in the chat as the reader's. */
+  readonly messages: Array<string>;
+  /** The files the view asked the host to save, by URL. */
+  readonly downloads: Array<string>;
+  /** The display modes the view asked for. */
+  readonly modes: Array<string>;
   /** What axe finds in the view as drawn. */
   readonly axe: () => Promise<Array<string>>;
 }
@@ -119,7 +131,29 @@ async function mount(
     name: string,
     args: Record<string, unknown>,
   ) => CallToolResult | Promise<CallToolResult> = () => result({}),
-  { refuseLinks = false }: { readonly refuseLinks?: boolean } = {},
+  {
+    refuseLinks = false,
+    offers = {},
+    transitions = false,
+  }: {
+    readonly refuseLinks?: boolean;
+    /**
+     * Whether the window has view transitions, which, as a browser runs
+     * them, update the page only a moment after they're started.
+     */
+    readonly transitions?: boolean;
+    /**
+     * What the host offers beyond opening links and calling tools: the
+     * model's context, chat messages, saving files and full screen.
+     */
+    readonly offers?: {
+      readonly context?: boolean;
+      /** Chat messages, of text, of images alone, or answered as failed. */
+      readonly message?: boolean | "images" | "failing";
+      readonly download?: boolean;
+      readonly fullscreen?: boolean;
+    };
+  } = {},
 ): Promise<Mounted> {
   const windowOpened: Array<string> = [];
   // What the view posts to its parent, until the bridge is listening.
@@ -148,6 +182,18 @@ async function mount(
       pretendToBeVisual: true,
       beforeParse(window) {
         Object.defineProperty(window, "parent", { value: host });
+        if (transitions) {
+          Object.defineProperty(window.document, "startViewTransition", {
+            value: (update: () => void) => ({
+              updateCallbackDone: new Promise<void>((resolve) => {
+                setTimeout(() => {
+                  update();
+                  resolve();
+                }, 30);
+              }),
+            }),
+          });
+        }
         Object.defineProperty(window, "open", {
           value: (url: unknown) => {
             windowOpened.push(String(url));
@@ -183,15 +229,60 @@ async function mount(
   const bridge = new AppBridge(
     null,
     { name: "allthings tests", version: "1.0.0" },
-    { openLinks: {}, serverTools: {} },
+    {
+      openLinks: {},
+      serverTools: {},
+      ...(offers.context === true ? { updateModelContext: { text: {} } } : {}),
+      ...(offers.message === true || offers.message === "failing"
+        ? { message: { text: {} } }
+        : offers.message === "images"
+          ? { message: { image: {} } }
+          : {}),
+      ...(offers.download === true ? { downloadFile: {} } : {}),
+    },
     {
       hostContext: {
         theme: "dark",
         platform: "web",
         containerDimensions: { maxHeight: 6000 },
+        displayMode: "inline",
+        availableDisplayModes:
+          offers.fullscreen === true ? ["inline", "fullscreen"] : ["inline"],
       },
     },
   );
+  const contexts: Array<string> = [];
+  const messages: Array<string> = [];
+  const downloads: Array<string> = [];
+  const modes: Array<string> = [];
+  const textOf = (blocks: ReadonlyArray<unknown> | undefined) =>
+    (blocks ?? [])
+      .map((block) =>
+        block !== null && typeof block === "object" && "text" in block
+          ? String(block.text)
+          : "",
+      )
+      .join("");
+  bridge.onupdatemodelcontext = async ({ content }) => {
+    contexts.push(textOf(content));
+    return {};
+  };
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- AppBridge's onmessage answers the view's ui/message requests; it isn't a DOM event
+  bridge.onmessage = async ({ content }) => {
+    messages.push(textOf(content));
+    return offers.message === "failing" ? { isError: true } : {};
+  };
+  bridge.ondownloadfile = async ({ contents }) => {
+    for (const item of contents) {
+      if ("uri" in item && typeof item.uri === "string")
+        downloads.push(item.uri);
+    }
+    return {};
+  };
+  bridge.onrequestdisplaymode = async ({ mode }) => {
+    modes.push(mode);
+    return { mode };
+  };
   bridge.oncalltool = async (params) => {
     const args = (params.arguments ?? {}) as Record<string, unknown>;
     calls.push({ name: params.name, arguments: args });
@@ -215,6 +306,10 @@ async function mount(
     opened,
     windowOpened,
     sizes,
+    contexts,
+    messages,
+    downloads,
+    modes,
     axe: () =>
       axeProblems(
         `<!doctype html>\n${window.document.documentElement.outerHTML}`,
@@ -242,7 +337,7 @@ describe("the handshake", () => {
           version: "1.0.0",
         });
         expect(view.bridge.getAppCapabilities()).toEqual({
-          availableDisplayModes: ["inline"],
+          availableDisplayModes: ["inline", "fullscreen"],
         });
         const root = view.window.document.documentElement;
         expect(root.dataset["theme"]).toBe("dark");
@@ -436,6 +531,460 @@ describe("list_events's view", () => {
         await Bun.sleep(200);
         expect(view.opened).toEqual([effectNight.url]);
         expect(view.windowOpened).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+});
+
+describe("browsing evenings", () => {
+  test(
+    "lists another selection through list_events, from its tabs",
+    async () => {
+      const view = await mount("list_events", (name, args) =>
+        name === "list_events" && args["when"] === "past"
+          ? result({ events: summaries })
+          : result({ events: [] }),
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "upcoming" } });
+        await view.bridge.sendToolResult(result({ events: [] }));
+        const { document } = view.window;
+        await until(
+          () => document.getElementById("tab-past") !== null,
+          "the tabs",
+        );
+        expect(text(document.querySelector("h1"))).toBe("Coming up");
+        expect(
+          document
+            .getElementById("tab-upcoming")
+            ?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(await view.axe()).toEqual([]);
+
+        // Arrows move between the tabs without listing anything.
+        document.getElementById("tab-upcoming")?.focus();
+        document.querySelector("[role=tablist]")?.dispatchEvent(
+          new view.window.KeyboardEvent("keydown", {
+            key: "ArrowRight",
+            bubbles: true,
+          }),
+        );
+        expect(view.window.document.activeElement?.id).toBe("tab-past");
+        expect(view.calls).toEqual([]);
+
+        document.getElementById("tab-past")?.click();
+        await until(
+          () => all(view.window, ".evening").length === summaries.length,
+          "the past evenings",
+        );
+        expect(view.calls).toEqual([
+          { name: "list_events", arguments: { when: "past" } },
+        ]);
+        expect(text(document.querySelector("h1"))).toBe("Recently");
+        expect(
+          document.getElementById("tab-past")?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "moves focus only once a view transition has put the next view in",
+    async () => {
+      const view = await mount(
+        "list_events",
+        (name) =>
+          name === "get_event"
+            ? result(effectNight)
+            : result({ events: summaries }),
+        { transitions: true },
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "upcoming" } });
+        await view.bridge.sendToolResult(result({ events: [] }));
+        const { document } = view.window;
+        await until(
+          () => document.getElementById("tab-past") !== null,
+          "the tabs",
+        );
+
+        // The chosen tab, as drawn again with the list it chose.
+        document.getElementById("tab-past")?.click();
+        await until(
+          () => all(view.window, ".evening").length === summaries.length,
+          "the past evenings",
+        );
+        expect(document.activeElement).toBe(
+          document.getElementById("tab-past"),
+        );
+
+        // The lineup's title, once the lineup is in.
+        all(view.window, ".evening")[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        expect(document.activeElement).toBe(
+          document.getElementById("view-title"),
+        );
+        expect(document.activeElement?.getAttribute("class")).toBe("lockup");
+
+        // And back: the evening's own button, on the list as drawn again.
+        document.querySelector(".back")?.click();
+        await until(
+          () => all(view.window, ".evening").length === summaries.length,
+          "the list again",
+        );
+        expect(document.activeElement).toBe(
+          all(view.window, ".evening")[0]?.querySelectorAll("button")[0] ??
+            null,
+        );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "narrows to a neighborhood with its chips, and tells the agent",
+    async () => {
+      const view = await mount("list_events", undefined, {
+        offers: { context: true },
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".chip").length > 0, "the chips");
+        await until(() => view.contexts.length > 0, "the agent told");
+        expect(view.contexts.at(-1)).toBe(
+          `The reader is looking at recently in the allthings view: ${summaries.length} evenings.`,
+        );
+        const eastCut = all(view.window, ".chip").find((chip) =>
+          text(chip).startsWith("East Cut"),
+        );
+        if (eastCut === undefined) throw new Error("No East Cut chip");
+        eastCut.click();
+        const shown = all(view.window, ".evening").filter((row) => !row.hidden);
+        expect(shown.length).toBeGreaterThan(0);
+        expect(shown.length).toBeLessThan(summaries.length);
+        expect(eastCut.getAttribute("aria-pressed")).toBe("true");
+        expect(text(document.querySelector(".view-count"))).toBe(
+          `${shown.length} of ${summaries.length} evenings in East Cut`,
+        );
+        await until(
+          () => view.contexts.at(-1)?.endsWith("in East Cut.") === true,
+          "the agent told of the neighborhood",
+        );
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "tells the agent which lineup the reader opened, and asks about it in the chat",
+    async () => {
+      const view = await mount(
+        "list_events",
+        (name) => (name === "get_event" ? result(effectNight) : result({})),
+        { offers: { context: true, message: true } },
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".evening").length > 0, "the list");
+        all(view.window, ".evening")[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        await until(
+          () => view.contexts.at(-1)?.includes("allthings/effect") === true,
+          "the agent told of the lineup",
+        );
+        expect(view.contexts.at(-1)).toStartWith(
+          "The reader has allthings/effect (Wed Sep 30, 2026) open in the allthings view",
+        );
+        const ask = all(view.window, ".evening-page button").find(
+          (button) => text(button) === "Ask about it",
+        );
+        if (ask === undefined) throw new Error("No ask button");
+        ask.click();
+        await until(() => view.messages.length > 0, "the message");
+        expect(view.messages).toEqual([
+          "Tell me about allthings/effect: who was on stage, what they talked about, and what they left behind.",
+        ]);
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "keeps the list and its tabs when another selection answers with an error",
+    async () => {
+      const view = await mount("list_events", () => ({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "allthings events are temporarily unavailable. Please retry in a minute.",
+          },
+        ],
+      }));
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".evening").length > 0, "the list");
+        document.getElementById("tab-all")?.click();
+        await until(
+          () => document.querySelector("#evenings-list [role=alert]") !== null,
+          "the alert",
+        );
+        expect(
+          text(document.querySelector("#evenings-list [role=alert]")),
+        ).toBe(
+          "allthings events are temporarily unavailable. Please retry in a minute.",
+        );
+        // The list and the tabs stay, to try again or choose another.
+        expect(all(view.window, ".evening")).toHaveLength(summaries.length);
+        expect(
+          document.getElementById("tab-past")?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(
+          document.getElementById("evenings-list")?.getAttribute("aria-busy"),
+        ).toBeNull();
+        expect(await view.axe()).toEqual([]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "keeps a lineup opened while another selection was on its way",
+    async () => {
+      const view = await mount("list_events", async (name) => {
+        if (name === "get_event") return result(effectNight);
+        // The selection answers well after the lineup.
+        await Bun.sleep(400);
+        return result({ events: summaries });
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".evening").length > 0, "the list");
+        document.getElementById("tab-all")?.click();
+        all(view.window, ".evening")[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        await Bun.sleep(700);
+        expect(document.querySelector(".evening-page")).not.toBeNull();
+        // The list it left is no longer busy when the reader comes back.
+        document.querySelector(".back")?.click();
+        await until(
+          () => document.getElementById("evenings-list") !== null,
+          "the list again",
+        );
+        expect(
+          document.getElementById("evenings-list")?.getAttribute("aria-busy"),
+        ).toBeNull();
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "says the neighborhood again on coming back from a lineup",
+    async () => {
+      const view = await mount(
+        "list_events",
+        (name) => (name === "get_event" ? result(effectNight) : result({})),
+        { offers: { context: true } },
+      );
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => all(view.window, ".chip").length > 0, "the chips");
+        all(view.window, ".chip")
+          .find((chip) => text(chip).startsWith("East Cut"))
+          ?.click();
+        const shown = all(view.window, ".evening").filter((row) => !row.hidden);
+        shown[0]?.querySelectorAll("button")[0]?.click();
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the lineup",
+        );
+        document.querySelector(".back")?.click();
+        await until(
+          () => view.contexts.at(-1)?.endsWith("in East Cut.") === true,
+          "the agent told of the neighborhood again",
+        );
+        expect(view.contexts.at(-1)).toBe(
+          `The reader is looking at recently in the allthings view: ${shown.length} evenings in East Cut.`,
+        );
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "says so when the host answers the question as failed",
+    async () => {
+      const view = await mount("get_event", undefined, {
+        offers: { message: "failing" },
+      });
+      try {
+        await view.bridge.sendToolInput({
+          arguments: { slug: effectNight.slug },
+        });
+        await view.bridge.sendToolResult(result(effectNight));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the evening",
+        );
+        const ask = all(view.window, ".evening-page button").find(
+          (button) => text(button) === "Ask about it",
+        );
+        ask?.click();
+        await until(() => text(ask) === "The host couldn’t", "the failure");
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "offers no question to a host whose messages take no text",
+    async () => {
+      const view = await mount("get_event", undefined, {
+        offers: { message: "images" },
+      });
+      try {
+        await view.bridge.sendToolInput({
+          arguments: { slug: effectNight.slug },
+        });
+        await view.bridge.sendToolResult(result(effectNight));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the evening",
+        );
+        expect(
+          all(view.window, ".evening-page button").map(text),
+        ).not.toContain("Ask about it");
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "saves an evening ahead to the calendar through the host",
+    async () => {
+      const ahead = { ...effectNight, status: "upcoming" as const };
+      const view = await mount("get_event", undefined, {
+        offers: { download: true },
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: { slug: ahead.slug } });
+        await view.bridge.sendToolResult(result(ahead));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the evening",
+        );
+        const save = all(view.window, ".evening-page button").find(
+          (button) => text(button) === "Add to calendar",
+        );
+        if (save === undefined) throw new Error("No calendar button");
+        save.click();
+        await until(() => view.downloads.length > 0, "the file saved");
+        expect(view.downloads).toEqual([`${ahead.url}/calendar.ics`]);
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "opens full screen where the host offers it",
+    async () => {
+      const view = await mount("list_events", undefined, {
+        offers: { fullscreen: true },
+      });
+      try {
+        await view.bridge.sendToolInput({ arguments: { when: "past" } });
+        await view.bridge.sendToolResult(result({ events: summaries }));
+        const { document } = view.window;
+        await until(() => document.querySelector(".expand") !== null, "toggle");
+        const toggle = document.querySelector(".expand");
+        expect(text(toggle)).toBe("Full screen");
+        toggle?.click();
+        await until(() => text(toggle) === "Back inline", "full screen");
+        expect(view.modes).toEqual(["fullscreen"]);
+        expect(document.documentElement.dataset["mode"]).toBe("fullscreen");
+        expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+      } finally {
+        view.window.close();
+      }
+    },
+    slow,
+  );
+
+  test(
+    "draws no control for what the host doesn't offer",
+    async () => {
+      const ahead = { ...effectNight, status: "upcoming" as const };
+      const view = await mount("get_event");
+      try {
+        await view.bridge.sendToolInput({ arguments: { slug: ahead.slug } });
+        await view.bridge.sendToolResult(result(ahead));
+        const { document } = view.window;
+        await until(
+          () => document.querySelector(".evening-page") !== null,
+          "the evening",
+        );
+        expect(document.querySelector(".expand")).toBeNull();
+        const labels = all(view.window, ".evening-page button").map(text);
+        expect(labels).not.toContain("Ask about it");
+        expect(labels).not.toContain("Add to calendar");
+        // Without the host saving files, the calendar file is a plain link.
+        const calendar = all(view.window, ".evening-page a").find(
+          (anchor) => text(anchor) === "Add to calendar",
+        );
+        expect(calendar?.getAttribute("href")).toBe(
+          `${ahead.url}/calendar.ics`,
+        );
+        expect(view.contexts).toEqual([]);
       } finally {
         view.window.close();
       }

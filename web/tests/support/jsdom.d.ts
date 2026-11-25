@@ -9,7 +9,7 @@ declare module "jsdom" {
       options?: {
         runScripts?: "outside-only" | "dangerously";
         pretendToBeVisual?: boolean;
-        beforeParse?: (window: object) => void;
+        beforeParse?: (window: { readonly document: object }) => void;
       },
     );
     readonly window: {

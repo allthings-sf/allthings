@@ -11,39 +11,69 @@ import {
   type Initialized,
   protocolVersion,
 } from "./bridge.ts";
-import { cursor, h, isWebUrl } from "./dom.ts";
-import { eveningView } from "./evening.ts";
-import { eveningsView, isSelection } from "./evenings.ts";
+import { cursor, h, isWebUrl, link } from "./dom.ts";
+import { eveningView, spokenName } from "./evening.ts";
+import {
+  eveningsView,
+  isSelection,
+  listTitles,
+  type Selection,
+} from "./evenings.ts";
+import { fullDate } from "./format.ts";
+import { type CallTool, type Host, hostOf, type ToolResult } from "./host.ts";
+import { swap } from "./motion.ts";
 import { peopleView } from "./people.ts";
 
 /**
  * The allthings view, as an MCP App (web/src/mcp/views.ts serves it). The
  * document names its view on <html data-view>: one per tool it renders.
  * It waits for the host's handshake, then for the tool's input and
- * result, and draws what the result's structured content holds. Where the
- * host lets it, it calls the server's own tools for what the reader asks
- * next (an evening's lineup, another search), and asks the host to open
- * every link.
+ * result, and draws what the result's structured content holds. What it
+ * offers beyond that follows what the host offers (host.ts): it calls the
+ * server's own tools for what the reader asks next (another selection of
+ * evenings, an evening's lineup, another search), tells the agent what the
+ * reader has open, asks the agent in the chat, saves calendar files, opens
+ * full screen, and asks the host to open every link.
  */
-
-/** A tool's result, as MCP's CallToolResult has it. */
-interface ToolResult {
-  readonly isError?: boolean;
-  readonly content?: ReadonlyArray<{
-    readonly type: string;
-    readonly text?: string;
-  }>;
-  readonly structuredContent?: Record<string, unknown>;
-}
 
 const root = document.documentElement;
 const view = root.dataset["view"];
 const app = document.getElementById("app");
 
-/** Replaces what the view shows. */
-function show(content: HTMLElement): void {
-  app?.replaceChildren(content);
+/** What the host offers, once it has said (start). */
+let host: Host = {};
+
+/** The masthead every view keeps: the wordmark, and full screen where offered. */
+let masthead: HTMLElement | null = null;
+
+/** The view's content under the masthead. */
+const stage = h("div", { class: "stage" });
+
+/**
+ * Replaces what the view shows, moving `direction` where motion is
+ * welcome, and resolves once the content is in place, for focus to move
+ * into it.
+ */
+async function show(
+  content: HTMLElement,
+  direction: "forward" | "back" | "none" = "none",
+): Promise<void> {
+  if (app !== null && !app.contains(stage)) {
+    app.replaceChildren(...(masthead === null ? [] : [masthead]), stage);
+  }
+  if (direction === "none") stage.replaceChildren(content);
+  else await swap(stage, content, direction);
 }
+
+/**
+ * Which change of view is the reader's latest: opening a lineup, going
+ * back, another selection of evenings. Each takes the next number, and an
+ * answer that comes back for any but the latest is dropped, so a slow
+ * answer never replaces what the reader opened after asking for it.
+ */
+let latestChange = 0;
+const nextChange = (): number => ++latestChange;
+const isLatest = (change: number): boolean => change === latestChange;
 
 /** A line saying what's happening: while waiting, or why there's nothing. */
 function notice(
@@ -77,7 +107,7 @@ const errorOf = (result: ToolResult): string =>
   result.content?.find((part) => part.type === "text")?.text ??
   "allthings couldn't answer that just now.";
 
-/** Follows the host's theme: Paper for light, Night for dark. */
+/** Follows the host's theme (Paper for light, Night for dark) and frame. */
 function applyContext(context: HostContext | undefined): void {
   if (context?.theme === "light" || context?.theme === "dark") {
     root.dataset["theme"] = context.theme;
@@ -89,6 +119,55 @@ function applyContext(context: HostContext | undefined): void {
       typeof context.containerDimensions.height === "number",
     );
   }
+  if (typeof context?.displayMode === "string") {
+    root.dataset["mode"] = context.displayMode;
+    const toggle = masthead?.querySelector<HTMLButtonElement>(".expand");
+    if (toggle !== undefined && toggle !== null) labelExpand(toggle);
+  }
+}
+
+/** The full-screen toggle says what it will do next. */
+function labelExpand(toggle: HTMLButtonElement): void {
+  const full = root.dataset["mode"] === "fullscreen";
+  toggle.setAttribute("aria-pressed", String(full));
+  toggle.textContent = full ? "Back inline" : "Full screen";
+}
+
+/** The wordmark, linking home, and the full-screen toggle where the host offers it. */
+function mastheadOf(): HTMLElement {
+  const toggle =
+    host.requestDisplayMode === undefined
+      ? null
+      : h("button", { type: "button", class: "quiet expand" });
+  if (toggle !== null) {
+    labelExpand(toggle);
+    const flip = async () => {
+      const next =
+        root.dataset["mode"] === "fullscreen" ? "inline" : "fullscreen";
+      try {
+        const mode = await host.requestDisplayMode?.(next);
+        if (mode !== undefined) root.dataset["mode"] = mode;
+        labelExpand(toggle);
+      } catch {
+        // The host kept the frame as it was.
+      }
+    };
+    toggle.addEventListener("click", () => {
+      void flip();
+    });
+  }
+  return h(
+    "div",
+    { class: "masthead" },
+    link(
+      "https://allthings.dev",
+      { class: "mark" },
+      "allthings",
+      h("span", { class: "slash" }, "/"),
+      cursor(),
+    ),
+    toggle,
+  );
 }
 
 /**
@@ -166,10 +245,40 @@ function lineupFailed(text: string, back: () => void): HTMLElement {
   );
 }
 
-type CallTool = (
-  name: string,
-  args: Record<string, unknown>,
-) => Promise<ToolResult>;
+/** Tells the agent which evening the reader has open, and what's in it. */
+function tellEvening(event: Event): void {
+  const name = spokenName(event);
+  host.tellModel?.(
+    `The reader has ${name} (${fullDate(event.startsAt)}) open in the allthings view, with ${event.talks.length === 1 ? "1 talk" : `${event.talks.length} talks`}${event.talks.length === 0 ? "" : `: ${event.talks.map((talk) => `“${talk.title}”`).join(", ")}`}.`,
+    { view: "evening", slug: event.slug, url: event.url },
+  );
+}
+
+/** Tells the agent which evenings the reader has in front of them. */
+function tellEvenings(when: Selection, shown: number, place: string | null) {
+  host.tellModel?.(
+    `The reader is looking at ${listTitles[when].toLowerCase()} in the allthings view: ${shown === 1 ? "1 evening" : `${shown} evenings`}${place === null ? "" : ` in ${place}`}.`,
+    { view: "evenings", when, place, shown },
+  );
+}
+
+/** The lineup view's options, as the host allows them. */
+const lineupOptions = (back?: () => void) => ({
+  ...(back === undefined ? {} : { back }),
+  ...(host.download === undefined
+    ? {}
+    : {
+        saveToCalendar: (url: string, name: string) =>
+          host.download?.({ url, name, mimeType: "text/calendar" }) ??
+          Promise.resolve(),
+      }),
+  ...(host.askInChat === undefined
+    ? {}
+    : {
+        ask: (question: string) =>
+          host.askInChat?.(question) ?? Promise.resolve(),
+      }),
+});
 
 /** Shows an evening's lineup in place of the list, which `back` brings back. */
 async function openEvening(
@@ -177,23 +286,88 @@ async function openEvening(
   slug: string,
   back: () => void,
 ): Promise<void> {
-  show(notice("Asking allthings for the lineup"));
+  const change = nextChange();
+  await show(notice("Asking allthings for the lineup"));
   let evening: ToolResult;
   try {
     evening = await callTool("get_event", { slug });
   } catch {
-    show(
-      lineupFailed("The host couldn't ask allthings for that evening.", back),
-    );
+    if (isLatest(change)) {
+      await show(
+        lineupFailed("The host couldn't ask allthings for that evening.", back),
+      );
+    }
     return;
   }
+  if (!isLatest(change)) return;
   const detail = dataOf(evening);
   if (evening.isError === true || detail === undefined) {
-    show(lineupFailed(errorOf(evening), back));
+    await show(lineupFailed(errorOf(evening), back));
     return;
   }
-  show(eveningView(detail as unknown as Event, { back }));
+  const event = detail as unknown as Event;
+  await show(eveningView(event, lineupOptions(back)), "forward");
+  tellEvening(event);
   document.getElementById("view-title")?.focus();
+}
+
+/** Says, over the list it leaves in place, why another selection didn't come. */
+function browseFailed(panel: HTMLElement | null, text: string): void {
+  panel?.querySelector(":scope > [role=alert]")?.remove();
+  panel?.prepend(notice(text, "alert"));
+}
+
+/**
+ * Marks `panel` busy for `change`, until that change's answer comes,
+ * whether it is drawn or dropped. A panel left behind (the reader opened a
+ * lineup meanwhile) is never left busy, and an older answer never clears
+ * the mark of a newer change on the same panel.
+ */
+function markBusy(panel: HTMLElement | null, change: number): void {
+  if (panel === null) return;
+  panel.setAttribute("aria-busy", "true");
+  panel.dataset["busyFor"] = String(change);
+}
+
+function clearBusy(panel: HTMLElement | null, change: number): void {
+  if (panel === null || panel.dataset["busyFor"] !== String(change)) return;
+  panel.removeAttribute("aria-busy");
+  delete panel.dataset["busyFor"];
+}
+
+/** Lists another selection of evenings in place, keeping the list until it's in. */
+async function browseEvenings(
+  callTool: CallTool,
+  when: Selection,
+  limit: unknown,
+): Promise<void> {
+  const args = { when, ...(typeof limit === "number" ? { limit } : {}) };
+  const change = nextChange();
+  const panel = document.getElementById("evenings-list");
+  markBusy(panel, change);
+  let found: ToolResult;
+  try {
+    found = await callTool("list_events", args);
+  } catch {
+    clearBusy(panel, change);
+    if (isLatest(change)) {
+      browseFailed(
+        panel,
+        "The host couldn't ask allthings for those evenings.",
+      );
+    }
+    return;
+  }
+  clearBusy(panel, change);
+  if (!isLatest(change)) return;
+  // A selection that couldn't be read leaves the list and its tabs as
+  // they were, to try again or choose another.
+  if (found.isError === true || !Array.isArray(dataOf(found)?.["events"])) {
+    browseFailed(panel, errorOf(found));
+    return;
+  }
+  await render(found, args, "forward");
+  document.getElementById(`tab-${when}`)?.focus();
 }
 
 /** The latest search asked for: only its answer is drawn. */
@@ -219,7 +393,7 @@ async function searchPeople(callTool: CallTool, query: string): Promise<void> {
     searchFailed(errorOf(found));
     return;
   }
-  render(found, args, callTool);
+  await render(found, args);
   document.getElementById("people-query")?.focus();
 }
 
@@ -233,33 +407,51 @@ function searchFailed(text: string): void {
 }
 
 /** Draws `result` as `view` does, with what the host lets the view do next. */
-function render(
+async function render(
   result: ToolResult,
   input: Record<string, unknown>,
-  callTool: CallTool | undefined,
-): void {
+  direction: "forward" | "back" | "none" = "none",
+): Promise<void> {
   if (result.isError === true) {
-    show(notice(errorOf(result), "alert"));
+    await show(notice(errorOf(result), "alert"));
     return;
   }
+  const { callTool } = host;
   const data = dataOf(result);
   if (view === "events" && Array.isArray(data?.["events"])) {
     const events = data["events"] as ReadonlyArray<EventSummary>;
     const when = isSelection(input["when"]) ? input["when"] : "upcoming";
+    // What the list shows now, narrowed or not, to say again on coming back.
+    let narrowedTo: { place: string | null; shown: number } = {
+      place: null,
+      shown: events.length,
+    };
     const list = eveningsView(events, {
       when,
+      narrowed: (place, shown) => {
+        narrowedTo = { place, shown };
+        tellEvenings(when, shown, place);
+      },
       ...(callTool === undefined
         ? {}
         : {
             open: (slug, from) => {
               void openEvening(callTool, slug, () => {
-                show(list);
-                from.focus();
+                nextChange();
+                void show(list, "back").then(() => {
+                  tellEvenings(when, narrowedTo.shown, narrowedTo.place);
+                  from.focus();
+                  return undefined;
+                });
               });
+            },
+            browse: (next) => {
+              void browseEvenings(callTool, next, input["limit"]);
             },
           }),
     });
-    show(list);
+    await show(list, direction);
+    tellEvenings(when, events.length, null);
     return;
   }
   if (
@@ -267,14 +459,16 @@ function render(
     data !== undefined &&
     typeof data["slug"] === "string"
   ) {
-    show(eveningView(data as unknown as Event, {}));
+    const event = data as unknown as Event;
+    await show(eveningView(event, lineupOptions()), direction);
+    tellEvening(event);
     return;
   }
   if (view === "speakers" && Array.isArray(data?.["speakers"])) {
     const query =
       typeof input["query"] === "string" ? input["query"] : undefined;
     const speakers = data["speakers"] as ReadonlyArray<Speaker>;
-    show(
+    await show(
       peopleView(speakers, {
         query,
         ...(callTool === undefined
@@ -288,7 +482,7 @@ function render(
     );
     return;
   }
-  show(notice(errorOf(result), "alert"));
+  await show(notice(errorOf(result), "alert"));
 }
 
 const unhosted = "This view is drawn by an agent host that speaks MCP Apps.";
@@ -296,13 +490,12 @@ const unhosted = "This view is drawn by an agent host that speaks MCP Apps.";
 async function start(): Promise<void> {
   // Opened on its own, there's no host to ask.
   if (window.parent === window) {
-    show(notice(unhosted, "alert"));
+    await show(notice(unhosted, "alert"));
     return;
   }
   const bridge = connect();
   let input: Record<string, unknown> = {};
-  let callTool: CallTool | undefined;
-  show(notice("Asking allthings"));
+  await show(notice("Asking allthings"));
   // Handlers first: the host sends the tool's input as soon as it has answered.
   bridge.on("ui/notifications/tool-input", (params) => {
     const args = params["arguments"];
@@ -310,32 +503,32 @@ async function start(): Promise<void> {
       input = args as Record<string, unknown>;
     }
   });
-  bridge.on("ui/notifications/tool-result", (params) =>
-    render(params, input, callTool),
-  );
-  bridge.on("ui/notifications/tool-cancelled", () =>
-    show(notice("The call was cancelled before allthings answered.", "alert")),
-  );
+  bridge.on("ui/notifications/tool-result", (params) => {
+    void render(params, input);
+  });
+  bridge.on("ui/notifications/tool-cancelled", () => {
+    void show(
+      notice("The call was cancelled before allthings answered.", "alert"),
+    );
+  });
   bridge.on("ui/notifications/host-context-changed", (params) =>
     applyContext(params),
   );
   const initialized = (await bridge.request("ui/initialize", {
     appInfo: { name: "allthings", version: "1.0.0" },
-    appCapabilities: { availableDisplayModes: ["inline"] },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
     protocolVersion,
   })) as Initialized;
   const capabilities = initialized.hostCapabilities ?? {};
+  host = hostOf(bridge, capabilities, initialized.hostContext);
+  masthead = mastheadOf();
+  app?.replaceChildren(masthead, stage);
   applyContext(initialized.hostContext);
-  if (capabilities.serverTools !== undefined) {
-    callTool = async (name, args) =>
-      (await bridge.request("tools/call", {
-        name,
-        arguments: args,
-      })) as ToolResult;
-  }
   openLinksThroughHost(bridge, capabilities);
   bridge.notify("ui/notifications/initialized", {});
   reportSize(bridge);
 }
 
-start().catch(() => show(notice(unhosted, "alert")));
+start().catch(() => {
+  void show(notice(unhosted, "alert"));
+});
