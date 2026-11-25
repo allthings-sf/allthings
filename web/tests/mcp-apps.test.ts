@@ -89,7 +89,7 @@ describe("the MCP Apps extension", () => {
 });
 
 describe("tools/list", () => {
-  test("names a view for list_events, get_event, list_speakers and get_year, and for no other tool", async () => {
+  test("names a view for list_events, get_event, list_speakers, get_guide and get_year, and for no other tool", async () => {
     const { tools } = (await rpc("tools/list")) as {
       tools: Array<ListedTool>;
     };
@@ -100,6 +100,7 @@ describe("tools/list", () => {
       "list_events",
       "get_event",
       "list_speakers",
+      "get_guide",
       "get_year",
     ]);
     for (const tool of tools) {

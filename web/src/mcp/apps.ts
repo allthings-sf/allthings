@@ -41,7 +41,7 @@ interface ViewInfo {
   readonly title: string;
   readonly description: string;
   /** What the document draws (src/client/mcp-app/main.ts reads it). */
-  readonly view: "events" | "event" | "speakers" | "year";
+  readonly view: "events" | "event" | "speakers" | "year" | "guide";
 }
 
 /** The views, by the tool each draws. */
@@ -77,6 +77,14 @@ export const views = {
     description:
       "A year of allthings evenings, looked back on: how many said they were in, the year's figures and photos, the year month by month, where we met, and every evening with who hosted and who was on stage.",
     view: "year",
+  },
+  get_guide: {
+    uri: "ui://allthings/guide.html",
+    name: "guide",
+    title: "The allthings guide",
+    description:
+      "Happenings worth the trip, starred as the Michelin guide stars a restaurant: what's next on a line from today, and every entry with why it's worth going, who runs it and when it is.",
+    view: "guide",
   },
 } as const satisfies Partial<Record<ToolName, ViewInfo>>;
 
