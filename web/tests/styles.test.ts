@@ -113,7 +113,14 @@ test("site.css gives wrapped headings, buttons and talk rows room between lines"
   const button = lineHeightOf(".button");
   expect(button.length).toBeGreaterThan(0);
   expect(button.every((value) => value >= 1.2)).toBe(true);
-  for (const row of [".talk-title", ".talk-evening", ".talk-parts"]) {
+  // Nor may the row or its list, whose line height they'd inherit instead.
+  for (const row of [
+    ".talks",
+    ".talk",
+    ".talk-title",
+    ".talk-evening",
+    ".talk-parts",
+  ]) {
     expect([row, lineHeightOf(row)]).toEqual([row, []]);
   }
 });
