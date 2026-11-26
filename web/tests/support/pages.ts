@@ -10,8 +10,9 @@ export const gzipped = (text: string) =>
 // size arrives whole in it.
 export const htmlBudget = 14_000;
 // One stylesheet serves every page and blocks rendering; with the HTML it
-// stays under two initial windows.
-export const cssBudget = 8_000;
+// stays under two initial windows (14,000 + 8,200 of about 29,200 bytes).
+// It grew from 8,000 to hold the type sizes a 1x desktop display needs.
+export const cssBudget = 8_200;
 
 /**
  * Links that only point somewhere, for search engines and feed readers:

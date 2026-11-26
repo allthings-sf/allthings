@@ -69,12 +69,21 @@ const Fluid = Schema.Union([
 
 export type Fluid = typeof Fluid.Type;
 
-/** A length; one that narrows with the screen says how in its extension. */
+/**
+ * A length; one that narrows with the screen says how in its extension, and
+ * one that holds text (`withType`) grows with the type on a 1x desktop
+ * display (css.ts, `desktop1x`).
+ */
 const DimensionToken = Schema.Struct({
   $value: Px,
   $description: Description,
   $extensions: Schema.optionalKey(
-    Schema.Struct({ "dev.allthings": Schema.Struct({ fluid: Fluid }) }),
+    Schema.Struct({
+      "dev.allthings": Schema.Struct({
+        fluid: Schema.optionalKey(Fluid),
+        withType: Schema.optionalKey(Schema.Literal(true)),
+      }),
+    }),
   ),
 });
 
@@ -160,6 +169,14 @@ const TokenFileShape = Schema.Struct({
       gridColumns: Schema.Int.check(Schema.isGreaterThan(0)),
       /** Of the grid's columns, those a ledger's labels take. */
       ledgerColumns: Schema.Int.check(Schema.isGreaterThan(0)),
+      /**
+       * How much larger the whole type scale is on a desktop display at 1x
+       * (a device pixel ratio under 1.5) 1000px wide and up, where a CSS
+       * pixel is physically small (css.ts, `desktop1x`).
+       */
+      desktop1x: Schema.Finite.check(
+        Schema.isBetween({ minimum: 1, maximum: 2 }),
+      ),
       contrast: Schema.NonEmptyArray(ContrastPair),
     }),
   }),
@@ -414,6 +431,8 @@ export interface Dimension {
   readonly px: number;
   /** How it narrows on smaller screens, when it does. */
   readonly fluid: Fluid | undefined;
+  /** Whether it holds text, and so grows with the type on a 1x desktop display. */
+  readonly withType: boolean;
   readonly description: string;
 }
 
@@ -426,6 +445,7 @@ export function dimensions(
     name,
     px: token.$value.value,
     fluid: token.$extensions?.["dev.allthings"].fluid,
+    withType: token.$extensions?.["dev.allthings"].withType ?? false,
     description: token.$description,
   }));
 }

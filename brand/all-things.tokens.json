@@ -292,13 +292,13 @@
       "$value": {
         "fontFamily": "{font.display}",
         "fontSize": {
-          "value": 17,
+          "value": 18,
           "unit": "px"
         },
         "fontWeight": 600,
         "lineHeight": 1.3,
         "letterSpacing": {
-          "value": 1.02,
+          "value": 1.08,
           "unit": "px"
         }
       },
@@ -307,7 +307,14 @@
         "dev.allthings": {
           "width": "75%",
           "letterSpacingEm": 0.06,
-          "textTransform": "uppercase"
+          "textTransform": "uppercase",
+          "fluid": {
+            "min": {
+              "value": 16,
+              "unit": "px"
+            },
+            "viewport": 1.8
+          }
         }
       }
     },
@@ -315,13 +322,13 @@
       "$value": {
         "fontFamily": "{font.display}",
         "fontSize": {
-          "value": 20,
+          "value": 22,
           "unit": "px"
         },
         "fontWeight": 400,
         "lineHeight": 1.55,
         "letterSpacing": {
-          "value": 0,
+          "value": 0.0,
           "unit": "px"
         }
       },
@@ -335,7 +342,7 @@
               "value": 18,
               "unit": "px"
             },
-            "viewport": 2
+            "viewport": 2.2
           }
         }
       }
@@ -344,13 +351,13 @@
       "$value": {
         "fontFamily": "{font.mono}",
         "fontSize": {
-          "value": 17,
+          "value": 18,
           "unit": "px"
         },
         "fontWeight": 500,
         "lineHeight": 1.5,
         "letterSpacing": {
-          "value": 1.02,
+          "value": 1.08,
           "unit": "px"
         }
       },
@@ -358,7 +365,14 @@
       "$extensions": {
         "dev.allthings": {
           "letterSpacingEm": 0.06,
-          "textTransform": "uppercase"
+          "textTransform": "uppercase",
+          "fluid": {
+            "min": {
+              "value": 16,
+              "unit": "px"
+            },
+            "viewport": 1.8
+          }
         }
       }
     }
@@ -627,10 +641,15 @@
     },
     "dateColumn": {
       "$value": {
-        "value": 124,
+        "value": 132,
         "unit": "px"
       },
-      "$description": "The date column of a list of evenings or talks: a simple date, 2026.09.30, in the meta role, with room to spare."
+      "$description": "The date column of a list of evenings or talks: a simple date, 2026.09.30, in the meta role, with room to spare.",
+      "$extensions": {
+        "dev.allthings": {
+          "withType": true
+        }
+      }
     },
     "tileS": {
       "$value": {
@@ -679,10 +698,21 @@
     "$type": "dimension",
     "small": {
       "$value": {
-        "value": 17,
+        "value": 18,
         "unit": "px"
       },
-      "$description": "Small copy: talk titles, links, tables, captions. Bios are body copy."
+      "$description": "Small copy: talk titles, links, tables, captions. Bios are body copy.",
+      "$extensions": {
+        "dev.allthings": {
+          "fluid": {
+            "min": {
+              "value": 16,
+              "unit": "px"
+            },
+            "viewport": 1.8
+          }
+        }
+      }
     },
     "large": {
       "$value": {
@@ -963,6 +993,7 @@
     "dev.allthings": {
       "gridColumns": 12,
       "ledgerColumns": 3,
+      "desktop1x": 1.1364,
       "contrast": [
         {
           "text": "{color.ink}",
