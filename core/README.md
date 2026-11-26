@@ -22,7 +22,10 @@ statement from it.
   is one instant for every surface, `asOf` (`src/clock.ts`): the
   `Clock`'s, at the start of its minute. The pages, the feeds, the MCP
   tools and the v1 API all read it, never the time itself; the guard below
-  lists the code that reads the time for its own work.
+  lists the code that reads the time for its own work. The browser modules
+  (`web/src/client/`) answer no read and run on the reader's clock, so the
+  guard leaves them out: a countdown in the MCP App view counts from the
+  reader's today.
 - **Ours or shared:** `ours(e)`. Whether a surface counts the evenings we
   share is a named choice, never a filter written inline.
 - **Which year:** `inYear(e, year)`, the year an evening starts in on San

@@ -103,6 +103,14 @@ const readsTheClock =
 const clock = "core/src/clock.ts";
 
 /**
+ * The browser modules, which the build bundles for pages and the MCP App
+ * view (web/src/client/tsconfig.json): they run on the reader's clock, in
+ * the reader's browser, and answer no read, so the one instant isn't theirs
+ * to keep. A countdown there counts from the reader's today.
+ */
+const browser = "web/src/client/";
+
+/**
  * Code that isn't a public read and reads the current time for its own
  * work: syncs, imports, reports, the organizers' tools, timings.
  */
@@ -270,11 +278,27 @@ describe("every public read is as of one instant", () => {
   test("no other file reads the current time unless it is listed", async () => {
     const unlisted: Array<string> = [];
     for (const path of sources) {
-      if (path === clock || path in ownTime) continue;
+      if (path === clock || path in ownTime || path.startsWith(browser)) {
+        continue;
+      }
       const text = await Bun.file(new URL(path, root)).text();
       if (readsTheClock.test(text)) unlisted.push(path);
     }
     expect(unlisted).toEqual([]);
+  });
+
+  test("what it leaves out is the browser's: the DOM's types, none of the Worker's", async () => {
+    const config = await Bun.file(
+      new URL(`${browser}tsconfig.json`, root),
+    ).text();
+    const { compilerOptions } = Bun.JSONC.parse(config) as {
+      compilerOptions: {
+        lib: ReadonlyArray<string>;
+        types: ReadonlyArray<string>;
+      };
+    };
+    expect(compilerOptions.lib).toContain("DOM");
+    expect(compilerOptions.types).toEqual([]);
   });
 
   test("every listed file still reads it", async () => {
