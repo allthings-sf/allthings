@@ -94,14 +94,13 @@ describe("a length as CSS", () => {
 describe("the theme's layout", () => {
   const css = themeCss(tokens);
 
-  test("declares every length on :root, and a touch size once more", () => {
+  test("declares every length once, on :root", () => {
     for (const group of dimensionGroups.filter(
       (name) => name !== "breakpoint",
     )) {
       for (const token of dimensions(tokens, group)) {
         const name = `--at-${group.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}-${token.name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}: `;
-        // A font size that is smaller on a touch screen is declared there too.
-        expect(css.split(name)).toHaveLength(token.touch === undefined ? 2 : 3);
+        expect(css.split(name)).toHaveLength(2);
       }
     }
     expect(css).toContain("--at-layout-margin: clamp(16px, 4.5vw, 64px);");
@@ -238,9 +237,8 @@ interface Display {
   /** The physical size of one CSS pixel, and the distance it's read from. */
   readonly mmPerPx: number;
   readonly distanceMm: number;
-  /** A window on it, in CSS pixels wide, and whether every input is a finger. */
+  /** A window on it, in CSS pixels wide. */
   readonly width: number;
-  readonly touch: boolean;
 }
 
 /** The visual angle, in degrees, that `px` CSS pixels make on `display`. */
@@ -250,40 +248,16 @@ const degrees = (px: number, { mmPerPx, distanceMm }: Display) =>
 /**
  * The displays a web page is read on, as the accessibility framework's
  * catalog declares them: the CSS reference pixel (1/96 inch at 28 inches),
- * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; each
- * desktop with a narrow window, which is read from as far away; and a laptop
- * with a touch screen, whose trackpad still hovers, so it isn't touch-only.
+ * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; and each
+ * desktop with a narrow window, which is read from as far away.
  */
 const displays = {
-  reference: { mmPerPx: 0.2646, distanceMm: 711, width: 1280, touch: false },
-  referenceNarrow: {
-    mmPerPx: 0.2646,
-    distanceMm: 711,
-    width: 600,
-    touch: false,
-  },
-  laptop2x: { mmPerPx: 0.2, distanceMm: 500, width: 1512, touch: false },
-  laptop2xNarrow: { mmPerPx: 0.2, distanceMm: 500, width: 800, touch: false },
-  laptop2xTouchScreen: {
-    mmPerPx: 0.2,
-    distanceMm: 500,
-    width: 1512,
-    touch: false,
-  },
-  phone3x: { mmPerPx: 0.1657, distanceMm: 300, width: 390, touch: true },
+  reference: { mmPerPx: 0.2646, distanceMm: 711, width: 1280 },
+  referenceNarrow: { mmPerPx: 0.2646, distanceMm: 711, width: 600 },
+  laptop2x: { mmPerPx: 0.2, distanceMm: 500, width: 1512 },
+  laptop2xNarrow: { mmPerPx: 0.2, distanceMm: 500, width: 800 },
+  phone3x: { mmPerPx: 0.1657, distanceMm: 300, width: 390 },
 } as const satisfies Record<string, Display>;
-
-/**
- * A text size on `display`, as css.ts writes it: its touch size on a touch
- * screen, else its own, narrowed only if the token is fluid.
- */
-const sizeOn = (
-  token: { size: number; fluid: Fluid | undefined; touch: number | undefined },
-  display: Display,
-) =>
-  display.touch && token.touch !== undefined
-    ? token.touch
-    : sizeAt(token.size, token.fluid, display.width);
 
 describe("reading sizes, at the accessibility framework's excellent bar", () => {
   // Legibility runs by x-height, as the angle it makes at the eye. ISO
@@ -299,26 +273,44 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
   };
   const small = dimension(tokens, "fontSize", "small");
   const readers = [
-    ["body", role("body"), role("body").xHeight, bars.body],
-    ["meta", role("meta"), role("meta").xHeight, bars.meta],
-    ["listPlace", role("listPlace"), role("listPlace").xHeight, bars.meta],
+    [
+      "body",
+      role("body").size,
+      role("body").fluid,
+      role("body").xHeight,
+      bars.body,
+    ],
+    [
+      "meta",
+      role("meta").size,
+      role("meta").fluid,
+      role("meta").xHeight,
+      bars.meta,
+    ],
+    [
+      "listPlace",
+      role("listPlace").size,
+      role("listPlace").fluid,
+      role("listPlace").xHeight,
+      bars.meta,
+    ],
     // Small copy is set in Archivo, as body is.
-    ["small", { ...small, size: small.px }, role("body").xHeight, bars.meta],
+    ["small", small.px, small.fluid, role("body").xHeight, bars.meta],
   ] as const;
 
   test("set nothing people read under 16px, on any screen", () => {
     const narrowest = 320;
     const readingSizes = [
-      ...typeRoles(tokens).flatMap((each) => [
-        [each.name, sizeAt(each.size, each.fluid, narrowest)] as const,
-        [each.name, each.touch ?? null] as const,
-      ]),
-      ...dimensions(tokens, "fontSize").flatMap((token) => [
-        [token.name, sizeAt(token.px, token.fluid, narrowest)] as const,
-        [token.name, token.touch ?? null] as const,
-      ]),
+      ...typeRoles(tokens).map(
+        (each) =>
+          [each.name, sizeAt(each.size, each.fluid, narrowest)] as const,
+      ),
+      ...dimensions(tokens, "fontSize").map(
+        (token) =>
+          [token.name, sizeAt(token.px, token.fluid, narrowest)] as const,
+      ),
     ];
-    expect(readingSizes.length).toBeGreaterThan(30);
+    expect(readingSizes.length).toBeGreaterThan(15);
     expect(
       readingSizes.filter(([, size]) => size !== null && !(size >= 16)),
     ).toEqual([]);
@@ -327,40 +319,23 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
   test.each(Object.entries(displays))(
     "clear body's 0.24 degrees and everything else's 0.19 on %s",
     (_, display) => {
-      const short = readers.flatMap(([name, token, xHeight, bar]) => {
-        const angle = degrees((sizeOn(token, display) ?? 0) * xHeight, display);
+      const short = readers.flatMap(([name, size, fluid, xHeight, bar]) => {
+        const angle = degrees(
+          (sizeAt(size, fluid, display.width) ?? 0) * xHeight,
+          display,
+        );
         return angle >= bar ? [] : [[name, Number(angle.toFixed(3)), bar]];
       });
       expect(short).toEqual([]);
     },
   );
 
-  test("follow the display, not the window: a narrow desktop window keeps its sizes", () => {
-    for (const name of ["body", "meta", "listPlace"]) {
-      expect(sizeOn(role(name), displays.laptop2xNarrow)).toBe(
-        sizeOn(role(name), displays.laptop2x),
-      );
+  test("set reading text at one size whatever the window, as no display reads it smaller", () => {
+    // A narrow window doesn't bring a display closer or make its pixels
+    // larger, and nothing a page can query says how far away it is read.
+    for (const [name, , fluid] of readers) {
+      expect([name, fluid]).toEqual([name, undefined]);
     }
-    expect(sizeOn(role("body"), displays.phone3x)).toBe(18);
-    expect(sizeOn(role("meta"), displays.phone3x)).toBe(16);
-  });
-
-  test("write the touch sizes in one media query on :root", () => {
-    const css = themeCss(tokens);
-    const query = "@media (any-hover: none) and (any-pointer: coarse)";
-    const block = css.slice(css.indexOf(query));
-    expect(block).toStartWith(`${query} {\n  :root {\n`);
-    for (const line of [
-      "--at-type-body-size: 18px;",
-      "--at-type-meta-size: 16px;",
-      "--at-font-size-small: 16px;",
-    ]) {
-      expect(block.slice(0, block.indexOf("\n}\n"))).toContain(line);
-    }
-    expect(css.split(query)).toHaveLength(2);
-    // Not by the primary pointer alone, which a touch-screen laptop or an
-    // accessibility setting can report as coarse.
-    expect(css).not.toContain("@media (pointer: coarse)");
   });
 
   test("keep a simple date inside the date column", () => {
@@ -371,8 +346,8 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
 
   test("find text under its bar", () => {
     // As the site had them: 18px body and 14px meta made 0.19 and 0.16
-    // degrees at the reference pixel, and a fluid 18px in a narrow laptop
-    // window would have been under body's bar.
+    // degrees at the reference pixel, and 18px body narrowed with the
+    // window would be under body's bar on a laptop in an 800px window.
     expect(degrees(18 * role("body").xHeight, displays.reference)).toBeLessThan(
       bars.body,
     );

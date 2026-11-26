@@ -307,11 +307,7 @@
         "dev.allthings": {
           "width": "75%",
           "letterSpacingEm": 0.06,
-          "textTransform": "uppercase",
-          "touch": {
-            "value": 16,
-            "unit": "px"
-          }
+          "textTransform": "uppercase"
         }
       }
     },
@@ -333,11 +329,7 @@
       "$extensions": {
         "dev.allthings": {
           "width": "100%",
-          "letterSpacingEm": 0,
-          "touch": {
-            "value": 18,
-            "unit": "px"
-          }
+          "letterSpacingEm": 0
         }
       }
     },
@@ -359,11 +351,7 @@
       "$extensions": {
         "dev.allthings": {
           "letterSpacingEm": 0.06,
-          "textTransform": "uppercase",
-          "touch": {
-            "value": 16,
-            "unit": "px"
-          }
+          "textTransform": "uppercase"
         }
       }
     }
@@ -687,15 +675,7 @@
         "value": 18,
         "unit": "px"
       },
-      "$description": "Small copy: talk titles, links, tables, captions. Bios are body copy.",
-      "$extensions": {
-        "dev.allthings": {
-          "touch": {
-            "value": 16,
-            "unit": "px"
-          }
-        }
-      }
+      "$description": "Small copy: talk titles, links, tables, captions. Bios are body copy."
     },
     "large": {
       "$value": {

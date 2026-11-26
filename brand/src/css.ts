@@ -53,18 +53,6 @@ export function length({ px, fluid }: Pick<Dimension, "px" | "fluid">): string {
 }
 
 /**
- * A touch screen: a phone or a tablet, where every input is a finger. It is
- * read closer than a desktop's display, at a smaller CSS pixel, so text
- * reads as large at fewer pixels; tokens with a `touch` size take it here.
- * It asks that no input can hover and some input is coarse, not that the
- * primary one is: a laptop with a touch screen still has a trackpad, and a
- * browser may report a coarse pointer for accessibility, so either keeps a
- * desktop's sizes. Text sizes follow the display, not the window: a desktop
- * window made narrow is still read from a desktop's distance.
- */
-export const touch = "(any-hover: none) and (any-pointer: coarse)";
-
-/**
  * The media condition that holds below a breakpoint `px` wide. Written as
  * `max-width` a fiftieth of a pixel short of it rather than as `width <`,
  * which Bun's minifier lowers to a `max-width` that can round up to the
@@ -162,32 +150,6 @@ export function themeCss(file: TokenFile, textures: Textures = {}): string {
     ),
     `--at-cursor-blink: ${file.motion.cursorBlink.$value.value}ms;`,
   ]);
-  // The text sizes a touch screen sets smaller.
-  const smaller = [
-    ...typeRoles(file).flatMap((role) =>
-      role.touch === undefined
-        ? []
-        : [`--at-type-${kebab(role.name)}-size: ${role.touch}px;`],
-    ),
-    ...dimensions(file, "fontSize").flatMap((token) =>
-      token.touch === undefined
-        ? []
-        : [`--at-font-size-${kebab(token.name)}: ${token.touch}px;`],
-    ),
-  ];
-  const onTouch =
-    smaller.length === 0
-      ? []
-      : [
-          [
-            `@media ${touch} {`,
-            block(":root", smaller)
-              .split("\n")
-              .map((line) => `  ${line}`)
-              .join("\n"),
-            "}",
-          ].join("\n"),
-        ];
   // Media queries can't read custom properties, so breakpoints are custom
   // media queries, which the build expands (expandCustomMedia).
   const breakpoints = dimensions(file, "breakpoint").map(
@@ -246,7 +208,6 @@ export function themeCss(file: TokenFile, textures: Textures = {}): string {
     [
       breakpoints.join("\n"),
       root,
-      ...onTouch,
       ...themes,
       ...type,
       ...swatches,
