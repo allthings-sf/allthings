@@ -158,6 +158,10 @@ li a.talk:hover .talk-title { color: red; line-height: 1.55; line-height: 1.2; }
   expect(leadingOf(css)[1]?.lineHeight).toBe("1.2");
 });
 
+/** Whether every selector in a list styles inline code, the one text that may shrink. */
+const onlyInlineCode = (selector: string) =>
+  selector.split(",").every((part) => /(?:^|\s)code$/.test(part.trim()));
+
 describe.each(stylesheets)("%s", (sheet, css) => {
   const declarations = declarationsOf(css);
 
@@ -201,7 +205,7 @@ describe.each(stylesheets)("%s", (sheet, css) => {
     const loose = rules.filter(
       ({ selector, value }) =>
         !allowed.test(value) &&
-        !(value === "0.9em" && /(?:^|\s)code$/.test(selector)),
+        !(value === "0.9em" && onlyInlineCode(selector)),
     );
     expect(loose).toEqual([]);
   });
@@ -238,6 +242,13 @@ describe.each(stylesheets)("%s", (sheet, css) => {
         Number(value("font-weight")) >= 700,
       ]).toEqual([selector, "var(--at-type-list-name-size)", true]);
     }
+  });
+
+  test("lets only inline code shrink, selector by selector", () => {
+    expect(onlyInlineCode("code")).toBe(true);
+    expect(onlyInlineCode(".brief-body code")).toBe(true);
+    expect(onlyInlineCode(".person-bio, code")).toBe(false);
+    expect(onlyInlineCode("code.lede")).toBe(false);
   });
 
   test("uses only custom properties the theme defines", () => {
