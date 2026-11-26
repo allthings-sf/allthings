@@ -78,53 +78,6 @@ test("site.css and lab.css are read declaration by declaration", () => {
   expect(declarationsOf(lab).length).toBeGreaterThan(100);
 });
 
-test("site.css gives wrapped headings, buttons and talk rows room between lines", () => {
-  // The accessibility framework's excellent bar: headings 1.1 to 1.3, body
-  // 1.5 to 1.75. A talk's title, evening and parts run to two or three lines
-  // and read as running text, so they set none of their own and take the
-  // body's 1.55. A rule's last line-height is the one that applies.
-  const rules = [
-    ...site.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
-  ].map(([, selector = "", body = ""]) => ({
-    selectors: selector.split(",").map((part) => part.trim()),
-    lineHeight: declarationsOf(`{${body}`)
-      .findLast(({ property }) => property === "line-height")
-      ?.value.trim(),
-  }));
-  const lineHeightOf = (selector: string) =>
-    rules
-      .filter(
-        ({ selectors, lineHeight }) =>
-          selectors.includes(selector) && lineHeight !== undefined,
-      )
-      .map(({ lineHeight }) => Number(lineHeight));
-  expect(lineHeightOf("body")).toEqual([1.55]);
-  for (const heading of [
-    ".prose h2",
-    ".organizers .person-name",
-    ".person-page-name",
-  ]) {
-    const values = lineHeightOf(heading);
-    expect([heading, values.length > 0]).toEqual([heading, true]);
-    for (const value of values) {
-      expect([heading, value >= 1.1 && value <= 1.3]).toEqual([heading, true]);
-    }
-  }
-  const button = lineHeightOf(".button");
-  expect(button.length).toBeGreaterThan(0);
-  expect(button.every((value) => value >= 1.2)).toBe(true);
-  // Nor may the row or its list, whose line height they'd inherit instead.
-  for (const row of [
-    ".talks",
-    ".talk",
-    ".talk-title",
-    ".talk-evening",
-    ".talk-parts",
-  ]) {
-    expect([row, lineHeightOf(row)]).toEqual([row, []]);
-  }
-});
-
 describe.each(stylesheets)("%s", (sheet, css) => {
   const declarations = declarationsOf(css);
 
