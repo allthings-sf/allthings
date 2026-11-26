@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { themeCss } from "allthings-brand/src/css.ts";
-import { tokens } from "allthings-brand/src/tokens.ts";
+import { tokens, typeRoles } from "allthings-brand/src/tokens.ts";
 
 /**
  * The site's own rules color only through the theme's roles, whose
@@ -78,7 +78,7 @@ test("site.css and lab.css are read declaration by declaration", () => {
   expect(declarationsOf(lab).length).toBeGreaterThan(100);
 });
 
-describe.each(stylesheets)("%s", (_, css) => {
+describe.each(stylesheets)("%s", (sheet, css) => {
   const declarations = declarationsOf(css);
 
   test("names no color of its own", () => {
@@ -100,8 +100,8 @@ describe.each(stylesheets)("%s", (_, css) => {
 
   test("sets type only in the type tokens' sizes, and shrinks only inline code", () => {
     // The tokens hold every size people read to the excellent bar: nothing
-    // under 16px, body at 0.2 degrees of x-height on a 1x desktop display
-    // (brand/tests/layout.test.ts). A rule can only scale one up, or set
+    // under 16px, body at 0.24 degrees of x-height and meta at 0.19 on every
+    // display a page is read on (brand/tests/layout.test.ts). A rule can only scale one up, or set
     // inline code in mono a tenth smaller than the text it sits in.
     const token = String.raw`var\(--at-(?:type-[a-z-]+-size|font-size-[a-z0-9-]+)\)`;
     const allowed = new RegExp(
@@ -124,6 +124,40 @@ describe.each(stylesheets)("%s", (_, css) => {
         !(value === "0.9em" && /(?:^|\s)code$/.test(selector)),
     );
     expect(loose).toEqual([]);
+  });
+
+  test("sets every button's label as large text, which its contrast is held to", () => {
+    // Night's buttons are white on Bridge at 5.5:1, enough for WCAG's
+    // enhanced contrast only for large text: 18.66px (14pt) and bold, or up.
+    const listName = typeRoles(tokens).find(({ name }) => name === "listName");
+    // 21px and heavy, as brand/foundations.md says: past 18.66px and bold.
+    expect(listName?.size).toBe(21);
+    const buttons = [
+      ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ]
+      .map(([, selector = "", body = ""]) => ({
+        selector: selector.trim(),
+        rule: declarationsOf(`{${body}`),
+      }))
+      .filter(({ rule }) =>
+        rule.some(
+          ({ property, value }) =>
+            property === "color" && value.trim() === "var(--at-button-text)",
+        ),
+      );
+    // The site's pages and the MCP App view have buttons; the labs have none.
+    if (sheet === "site.css" || sheet === "mcp-app.css") {
+      expect(buttons.length).toBeGreaterThan(0);
+    }
+    for (const { selector, rule } of buttons) {
+      const value = (name: string) =>
+        rule.find(({ property }) => property === name)?.value.trim();
+      expect([
+        selector,
+        value("font-size"),
+        Number(value("font-weight")) >= 700,
+      ]).toEqual([selector, "var(--at-type-list-name-size)", true]);
+    }
   });
 
   test("uses only custom properties the theme defines", () => {

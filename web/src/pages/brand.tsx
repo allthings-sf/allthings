@@ -137,7 +137,7 @@ function Palette() {
                 <td safe>{pair.use}</td>
                 <td>
                   <span
-                    class={`sample sample-${textFloor(pair.minLc) ?? "display"} at-swatch-${kebab(pair.background.name)}`}
+                    class={`sample sample-${pair.large && textFloor(pair.minLc) === "small" ? "large" : (textFloor(pair.minLc) ?? "display")} at-swatch-${kebab(pair.background.name)}`}
                   >
                     <span
                       class={`at-swatch-${kebab(pair.text.name)}`}

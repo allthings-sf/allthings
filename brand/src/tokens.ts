@@ -131,6 +131,8 @@ const ContrastPair = Schema.Struct({
   background: Reference("color"),
   minLc: Schema.Finite.check(Schema.isGreaterThan(0)),
   use: Description,
+  /** Set only as WCAG's large text: 24px, or 18.66px (14pt) and bold. */
+  large: Schema.optionalKey(Schema.Boolean),
 });
 
 const TokenFileShape = Schema.Struct({
@@ -399,6 +401,8 @@ export interface ContrastRequirement {
   readonly background: Color;
   readonly minLc: number;
   readonly use: string;
+  /** Whether the pair is set only as WCAG's large text, which needs less contrast. */
+  readonly large: boolean;
 }
 
 /** The pairings the brand uses for text, each with its minimum APCA Lc. */
@@ -410,6 +414,7 @@ export function contrastRequirements(
     background: resolveColor(file, pair.background),
     minLc: pair.minLc,
     use: pair.use,
+    large: pair.large ?? false,
   }));
 }
 
