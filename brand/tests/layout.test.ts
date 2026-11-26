@@ -4,8 +4,10 @@ import source from "../all-things.tokens.json" with { type: "json" };
 import { expandCustomMedia, length, themeCss } from "../src/css.ts";
 import { below, contentVw, portrait, sizes } from "../src/layout.ts";
 import {
+  dimension,
   dimensionGroups,
   dimensions,
+  type Fluid,
   measures,
   TokenFile,
   tokens,
@@ -115,7 +117,7 @@ describe("the theme's layout", () => {
       );
     }
     expect(css).toContain("--at-type-lead-size: clamp(22px, 3vw, 30px);");
-    expect(css).toContain("--at-type-body-size: 18px;");
+    expect(css).toContain("--at-type-body-size: 22px;");
   });
 
   test("names each breakpoint as a custom media query", () => {
@@ -213,5 +215,151 @@ describe("optical insets", () => {
       expect(css).toContain(`--at-type-${kebab}-inset: -${role.inset}em;`);
       expect(css).toContain(`text-indent: var(--at-type-${kebab}-inset);`);
     }
+  });
+});
+
+/**
+ * The size a length set with `fluid` comes to in a window `width` px wide,
+ * as length() writes it; null for one that follows its container instead.
+ */
+function sizeAt(
+  largest: number,
+  fluid: Fluid | undefined,
+  width: number,
+): number | null {
+  if (fluid === undefined) return largest;
+  if ("container" in fluid) return null;
+  const share = (fluid.viewport * width) / 100;
+  return Math.max(fluid.min?.value ?? 0, Math.min(share, largest));
+}
+
+interface Display {
+  /** The physical size of one CSS pixel, and the distance it's read from. */
+  readonly mmPerPx: number;
+  readonly distanceMm: number;
+  /** A window on it, in CSS pixels wide. */
+  readonly width: number;
+}
+
+/** The visual angle, in degrees, that `px` CSS pixels make on `display`. */
+const degrees = (px: number, { mmPerPx, distanceMm }: Display) =>
+  (Math.atan((px * mmPerPx) / distanceMm) * 180) / Math.PI;
+
+/**
+ * The displays a web page is read on, as the accessibility framework's
+ * catalog declares them: the CSS reference pixel (1/96 inch at 28 inches),
+ * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; and each
+ * desktop with a narrow window, which is read from as far away.
+ */
+const displays = {
+  reference: { mmPerPx: 0.2646, distanceMm: 711, width: 1280 },
+  referenceNarrow: { mmPerPx: 0.2646, distanceMm: 711, width: 600 },
+  laptop2x: { mmPerPx: 0.2, distanceMm: 500, width: 1512 },
+  laptop2xNarrow: { mmPerPx: 0.2, distanceMm: 500, width: 800 },
+  phone3x: { mmPerPx: 0.1657, distanceMm: 300, width: 390 },
+} as const satisfies Record<string, Display>;
+
+describe("reading sizes, at the accessibility framework's excellent bar", () => {
+  // Legibility runs by x-height, as the angle it makes at the eye. ISO
+  // 9241-3 prefers 20 arcminutes of character height for reading, about
+  // 0.24 degrees of x-height and about the critical print size of a reader
+  // near 60; its 16 arcminute minimum, about 0.19 degrees, is the least for
+  // anything else people read.
+  const bars = { body: 0.24, meta: 0.19 };
+  const role = (name: string) => {
+    const found = typeRoles(tokens).find((each) => each.name === name);
+    if (found === undefined) throw new Error(`No type role ${name}`);
+    return found;
+  };
+  const small = dimension(tokens, "fontSize", "small");
+  const readers = [
+    [
+      "body",
+      role("body").size,
+      role("body").fluid,
+      role("body").xHeight,
+      bars.body,
+    ],
+    [
+      "meta",
+      role("meta").size,
+      role("meta").fluid,
+      role("meta").xHeight,
+      bars.meta,
+    ],
+    [
+      "listPlace",
+      role("listPlace").size,
+      role("listPlace").fluid,
+      role("listPlace").xHeight,
+      bars.meta,
+    ],
+    // Small copy is set in Archivo, as body is.
+    ["small", small.px, small.fluid, role("body").xHeight, bars.meta],
+  ] as const;
+
+  test("set nothing people read under 16px, on any screen", () => {
+    const narrowest = 320;
+    const readingSizes = [
+      ...typeRoles(tokens).map(
+        (each) =>
+          [each.name, sizeAt(each.size, each.fluid, narrowest)] as const,
+      ),
+      ...dimensions(tokens, "fontSize").map(
+        (token) =>
+          [token.name, sizeAt(token.px, token.fluid, narrowest)] as const,
+      ),
+    ];
+    expect(readingSizes.length).toBeGreaterThan(15);
+    expect(
+      readingSizes.filter(([, size]) => size !== null && !(size >= 16)),
+    ).toEqual([]);
+  });
+
+  test.each(Object.entries(displays))(
+    "clear body's 0.24 degrees and everything else's 0.19 on %s",
+    (_, display) => {
+      const short = readers.flatMap(([name, size, fluid, xHeight, bar]) => {
+        const angle = degrees(
+          (sizeAt(size, fluid, display.width) ?? 0) * xHeight,
+          display,
+        );
+        return angle >= bar ? [] : [[name, Number(angle.toFixed(3)), bar]];
+      });
+      expect(short).toEqual([]);
+    },
+  );
+
+  test("set reading text at one size whatever the window, as no display reads it smaller", () => {
+    // A narrow window doesn't bring a display closer or make its pixels
+    // larger, and nothing a page can query says how far away it is read.
+    for (const [name, , fluid] of readers) {
+      expect([name, fluid]).toEqual([name, undefined]);
+    }
+  });
+
+  test("keep a simple date inside the date column", () => {
+    // 2026.09.30 in meta is 6.6 em with its tracking.
+    const date = 10 * (0.6 + 0.06) * role("meta").size;
+    expect(dimension(tokens, "size", "dateColumn").px).toBeGreaterThan(date);
+  });
+
+  test("find text under its bar", () => {
+    // As the site had them: 18px body and 14px meta made 0.19 and 0.16
+    // degrees at the reference pixel, and 18px body narrowed with the
+    // window would be under body's bar on a laptop in an 800px window.
+    expect(degrees(18 * role("body").xHeight, displays.reference)).toBeLessThan(
+      bars.body,
+    );
+    expect(degrees(14 * role("meta").xHeight, displays.reference)).toBeLessThan(
+      bars.meta,
+    );
+    expect(
+      degrees(18 * role("body").xHeight, displays.laptop2xNarrow),
+    ).toBeLessThan(bars.body);
+    const fluid = { min: { value: 18, unit: "px" }, viewport: 2.2 } as const;
+    expect(sizeAt(22, fluid, 800)).toBe(18);
+    expect(sizeAt(72, { viewport: 12 }, 320)).toBe(38.4);
+    expect(sizeAt(112, { container: 15.5 }, 320)).toBeNull();
   });
 });

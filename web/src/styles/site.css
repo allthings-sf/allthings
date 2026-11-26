@@ -161,8 +161,10 @@ main {
   }
 }
 
+/* At 320px wide, or zoomed to 400%, the last section wraps rather than scrolls. */
 .site-nav ul {
   display: flex;
+  flex-wrap: wrap;
   gap: 0 var(--at-space-4);
   margin: 0;
   padding: 0;
@@ -687,7 +689,6 @@ main > section,
 .row .shared {
   display: block;
   margin-top: var(--at-space-1);
-  font-weight: 400;
   text-decoration: none;
 }
 
@@ -899,15 +900,9 @@ main > section,
   line-height: 1.1;
 }
 
+/* A bio is reading copy: it takes the page's body type, as large as its prose. */
 .person-bio {
   max-width: var(--at-measure-prose);
-  font-size: var(--at-font-size-small);
-  line-height: 1.5;
-}
-
-.organizers .person-bio {
-  font-size: var(--at-type-body-size);
-  line-height: 1.55;
 }
 
 .person-links {
@@ -1623,8 +1618,12 @@ a.post-author:hover {
   gap: var(--at-space-1);
 }
 
-/* Figures: token names, hex values and contrast, in mono as written. */
-.figure {
+/*
+ * Figures: token names, hex values and contrast, in mono as written. A
+ * token's name in one is already mono, so it doesn't shrink as inline code.
+ */
+.figure,
+.figure code {
   font-family: var(--at-font-mono);
   font-size: var(--at-type-meta-size);
   line-height: 1.5;
@@ -2340,7 +2339,7 @@ th {
 
 .brief-body code {
   color: var(--at-meta);
-  font-size: 0.82em;
+  font-size: 0.9em;
   letter-spacing: 0.02em;
 }
 

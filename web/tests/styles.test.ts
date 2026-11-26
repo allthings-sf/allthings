@@ -158,6 +158,10 @@ li a.talk:hover .talk-title { color: red; line-height: 1.55; line-height: 1.2; }
   expect(leadingOf(css)[1]?.lineHeight).toBe("1.2");
 });
 
+/** Whether every selector in a list styles inline code, the one text that may shrink. */
+const onlyInlineCode = (selector: string) =>
+  selector.split(",").every((part) => /(?:^|\s)code$/.test(part.trim()));
+
 describe.each(stylesheets)("%s", (sheet, css) => {
   const declarations = declarationsOf(css);
 
@@ -176,6 +180,34 @@ describe.each(stylesheets)("%s", (sheet, css) => {
         expect(namedColors.has(word) ? declaration : word).toBe(word);
       }
     }
+  });
+
+  test("sets type only in the type tokens' sizes, and shrinks only inline code", () => {
+    // The tokens hold every size people read to the excellent bar: nothing
+    // under 16px, body at 0.24 degrees of x-height and meta at 0.19 on every
+    // display a page is read on (brand/tests/layout.test.ts). A rule can only scale one up, or set
+    // inline code in mono a tenth smaller than the text it sits in.
+    const token = String.raw`var\(--at-(?:type-[a-z-]+-size|font-size-[a-z0-9-]+)\)`;
+    const allowed = new RegExp(
+      `^(?:${token}|calc\\(${token} \\* (?:[1-9][0-9]*(?:\\.[0-9]+)?)\\)|min\\(\\s*${token},\\s*calc\\(${token} \\* (?:[1-9][0-9]*(?:\\.[0-9]+)?)\\)\\s*\\)|inherit|1em)$`,
+    );
+    const rules = [
+      ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ].flatMap(([, selector = "", body = ""]) =>
+      declarationsOf(`{${body}`)
+        .filter(({ property }) => property === "font-size")
+        .map(({ value }) => ({
+          selector: selector.trim(),
+          value: value.trim(),
+        })),
+    );
+    expect(rules.length).toBeGreaterThan(0);
+    const loose = rules.filter(
+      ({ selector, value }) =>
+        !allowed.test(value) &&
+        !(value === "0.9em" && onlyInlineCode(selector)),
+    );
+    expect(loose).toEqual([]);
   });
 
   test("sets every button's label as large text, which its contrast is held to", () => {
@@ -210,6 +242,13 @@ describe.each(stylesheets)("%s", (sheet, css) => {
         Number(value("font-weight")) >= 700,
       ]).toEqual([selector, "var(--at-type-list-name-size)", true]);
     }
+  });
+
+  test("lets only inline code shrink, selector by selector", () => {
+    expect(onlyInlineCode("code")).toBe(true);
+    expect(onlyInlineCode(".brief-body code")).toBe(true);
+    expect(onlyInlineCode(".person-bio, code")).toBe(false);
+    expect(onlyInlineCode("code.lede")).toBe(false);
   });
 
   test("uses only custom properties the theme defines", () => {
