@@ -292,13 +292,13 @@
       "$value": {
         "fontFamily": "{font.display}",
         "fontSize": {
-          "value": 14,
+          "value": 18,
           "unit": "px"
         },
         "fontWeight": 600,
         "lineHeight": 1.3,
         "letterSpacing": {
-          "value": 0.84,
+          "value": 1.08,
           "unit": "px"
         }
       },
@@ -307,7 +307,14 @@
         "dev.allthings": {
           "width": "75%",
           "letterSpacingEm": 0.06,
-          "textTransform": "uppercase"
+          "textTransform": "uppercase",
+          "fluid": {
+            "min": {
+              "value": 16,
+              "unit": "px"
+            },
+            "viewport": 1.8
+          }
         }
       }
     },
@@ -315,13 +322,13 @@
       "$value": {
         "fontFamily": "{font.display}",
         "fontSize": {
-          "value": 18,
+          "value": 22,
           "unit": "px"
         },
         "fontWeight": 400,
         "lineHeight": 1.55,
         "letterSpacing": {
-          "value": 0,
+          "value": 0.0,
           "unit": "px"
         }
       },
@@ -329,7 +336,14 @@
       "$extensions": {
         "dev.allthings": {
           "width": "100%",
-          "letterSpacingEm": 0
+          "letterSpacingEm": 0,
+          "fluid": {
+            "min": {
+              "value": 18,
+              "unit": "px"
+            },
+            "viewport": 2.2
+          }
         }
       }
     },
@@ -337,13 +351,13 @@
       "$value": {
         "fontFamily": "{font.mono}",
         "fontSize": {
-          "value": 14,
+          "value": 18,
           "unit": "px"
         },
         "fontWeight": 500,
         "lineHeight": 1.5,
         "letterSpacing": {
-          "value": 0.84,
+          "value": 1.08,
           "unit": "px"
         }
       },
@@ -351,7 +365,14 @@
       "$extensions": {
         "dev.allthings": {
           "letterSpacingEm": 0.06,
-          "textTransform": "uppercase"
+          "textTransform": "uppercase",
+          "fluid": {
+            "min": {
+              "value": 16,
+              "unit": "px"
+            },
+            "viewport": 1.8
+          }
         }
       }
     }
@@ -620,7 +641,7 @@
     },
     "dateColumn": {
       "$value": {
-        "value": 104,
+        "value": 132,
         "unit": "px"
       },
       "$description": "The date column of a list of evenings or talks: a simple date, 2026.09.30, in the meta role, with room to spare."
@@ -672,10 +693,21 @@
     "$type": "dimension",
     "small": {
       "$value": {
-        "value": 16,
+        "value": 18,
         "unit": "px"
       },
-      "$description": "Small copy: bios, talk titles, tables, captions."
+      "$description": "Small copy: talk titles, links, tables, captions. Bios are body copy.",
+      "$extensions": {
+        "dev.allthings": {
+          "fluid": {
+            "min": {
+              "value": 16,
+              "unit": "px"
+            },
+            "viewport": 1.8
+          }
+        }
+      }
     },
     "large": {
       "$value": {

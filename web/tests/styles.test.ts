@@ -178,6 +178,34 @@ describe.each(stylesheets)("%s", (sheet, css) => {
     }
   });
 
+  test("sets type only in the type tokens' sizes, and shrinks only inline code", () => {
+    // The tokens hold every size people read to the excellent bar: nothing
+    // under 16px, body at 0.24 degrees of x-height and meta at 0.19 on every
+    // display a page is read on (brand/tests/layout.test.ts). A rule can only scale one up, or set
+    // inline code in mono a tenth smaller than the text it sits in.
+    const token = String.raw`var\(--at-(?:type-[a-z-]+-size|font-size-[a-z0-9-]+)\)`;
+    const allowed = new RegExp(
+      `^(?:${token}|calc\\(${token} \\* (?:[1-9][0-9]*(?:\\.[0-9]+)?)\\)|min\\(\\s*${token},\\s*calc\\(${token} \\* (?:[1-9][0-9]*(?:\\.[0-9]+)?)\\)\\s*\\)|inherit|1em)$`,
+    );
+    const rules = [
+      ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ].flatMap(([, selector = "", body = ""]) =>
+      declarationsOf(`{${body}`)
+        .filter(({ property }) => property === "font-size")
+        .map(({ value }) => ({
+          selector: selector.trim(),
+          value: value.trim(),
+        })),
+    );
+    expect(rules.length).toBeGreaterThan(0);
+    const loose = rules.filter(
+      ({ selector, value }) =>
+        !allowed.test(value) &&
+        !(value === "0.9em" && /(?:^|\s)code$/.test(selector)),
+    );
+    expect(loose).toEqual([]);
+  });
+
   test("sets every button's label as large text, which its contrast is held to", () => {
     // Night's buttons are white on Bridge at 5.5:1, enough for WCAG's
     // enhanced contrast only for large text: 18.66px (14pt) and bold, or up.
