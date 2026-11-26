@@ -85,7 +85,7 @@ Contrast is designed with APCA, the perceptual model being explored for WCAG 3, 
 | Lavender | #DACFFF | — | Lc 80.0 · 11.9:1 | Neighborhoods and links on Night |
 | Glow | #FF6A3D | — | Lc 46.8 · 6.1:1 | The slash and display at 36px+ only |
 
-Buttons: white on Bridge Deep (Lc 91.7, 8.2:1) on Paper, and white on Bridge (Lc 81.7, 5.5:1) on Night. A button's label is always large text, 21px and heavy, so Night's clears WCAG's enhanced bar for large text (4.5:1); web/tests/styles.test.ts holds every button on the site's pages to that size. Violet fills take white text (Lc 91.7, 8.1:1).
+Buttons: white on Bridge Deep (Lc 91.7, 8.2:1) on Paper, and white on Bridge (Lc 81.7, 5.5:1) on Night. A button's label is always large text, 21px and heavy, so Night's clears WCAG's enhanced bar for large text (4.5:1); web/tests/styles.test.ts holds every button on the site's pages and in the MCP App view to that size. Violet fills take white text (Lc 91.7, 8.1:1).
 
 **Night is muted and grained.** A large, saturated dark ground tires the eyes and makes light text seem to glow, which readability scores don't measure. So Night keeps its violet hue at low chroma (OKLCH 0.22 / 0.035 / 293), and carries a fine, fixed grain ([`texture/grain.svg`](texture/grain.svg)) that gives it Paper's printed feel. Paper has no texture.
 

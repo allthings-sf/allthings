@@ -78,37 +78,7 @@ test("site.css and lab.css are read declaration by declaration", () => {
   expect(declarationsOf(lab).length).toBeGreaterThan(100);
 });
 
-test("site.css sets every button's label as large text, which its contrast is held to", () => {
-  // Night's buttons are white on Bridge at 5.5:1, enough for WCAG's
-  // enhanced contrast only for large text: 18.66px (14pt) and bold, or up.
-  const listName = typeRoles(tokens).find(({ name }) => name === "listName");
-  expect(listName?.size).toBeGreaterThanOrEqual(18.66);
-  const buttons = [
-    ...site.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
-  ]
-    .map(([, selector = "", body = ""]) => ({
-      selector: selector.trim(),
-      declarations: declarationsOf(`{${body}`),
-    }))
-    .filter(({ declarations }) =>
-      declarations.some(
-        ({ property, value }) =>
-          property === "color" && value.trim() === "var(--at-button-text)",
-      ),
-    );
-  expect(buttons.length).toBeGreaterThan(0);
-  for (const { selector, declarations } of buttons) {
-    const value = (name: string) =>
-      declarations.find(({ property }) => property === name)?.value.trim();
-    expect([
-      selector,
-      value("font-size"),
-      Number(value("font-weight")) >= 700,
-    ]).toEqual([selector, "var(--at-type-list-name-size)", true]);
-  }
-});
-
-describe.each(stylesheets)("%s", (_, css) => {
+describe.each(stylesheets)("%s", (sheet, css) => {
   const declarations = declarationsOf(css);
 
   test("names no color of its own", () => {
@@ -125,6 +95,40 @@ describe.each(stylesheets)("%s", (_, css) => {
       for (const word of words ?? []) {
         expect(namedColors.has(word) ? declaration : word).toBe(word);
       }
+    }
+  });
+
+  test("sets every button's label as large text, which its contrast is held to", () => {
+    // Night's buttons are white on Bridge at 5.5:1, enough for WCAG's
+    // enhanced contrast only for large text: 18.66px (14pt) and bold, or up.
+    const listName = typeRoles(tokens).find(({ name }) => name === "listName");
+    // 21px and heavy, as brand/foundations.md says: past 18.66px and bold.
+    expect(listName?.size).toBe(21);
+    const buttons = [
+      ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ]
+      .map(([, selector = "", body = ""]) => ({
+        selector: selector.trim(),
+        rule: declarationsOf(`{${body}`),
+      }))
+      .filter(({ rule }) =>
+        rule.some(
+          ({ property, value }) =>
+            property === "color" && value.trim() === "var(--at-button-text)",
+        ),
+      );
+    // The site's pages and the MCP App view have buttons; the labs have none.
+    if (sheet === "site.css" || sheet === "mcp-app.css") {
+      expect(buttons.length).toBeGreaterThan(0);
+    }
+    for (const { selector, rule } of buttons) {
+      const value = (name: string) =>
+        rule.find(({ property }) => property === name)?.value.trim();
+      expect([
+        selector,
+        value("font-size"),
+        Number(value("font-weight")) >= 700,
+      ]).toEqual([selector, "var(--at-type-list-name-size)", true]);
     }
   });
 
