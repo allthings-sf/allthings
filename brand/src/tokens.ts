@@ -70,7 +70,7 @@ const Fluid = Schema.Union([
 export type Fluid = typeof Fluid.Type;
 
 /**
- * A size for a touch screen (a coarse pointer: a phone or a tablet), where
+ * A size for a touch screen (every input a finger: a phone or a tablet), where
  * the page is read closer and its CSS pixel is physically smaller, so text
  * reads as large at fewer of them (css.ts, `touch`).
  */

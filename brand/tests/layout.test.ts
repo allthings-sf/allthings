@@ -238,7 +238,7 @@ interface Display {
   /** The physical size of one CSS pixel, and the distance it's read from. */
   readonly mmPerPx: number;
   readonly distanceMm: number;
-  /** A window on it, in CSS pixels wide, and whether its pointer is a finger. */
+  /** A window on it, in CSS pixels wide, and whether every input is a finger. */
   readonly width: number;
   readonly touch: boolean;
 }
@@ -250,8 +250,9 @@ const degrees = (px: number, { mmPerPx, distanceMm }: Display) =>
 /**
  * The displays a web page is read on, as the accessibility framework's
  * catalog declares them: the CSS reference pixel (1/96 inch at 28 inches),
- * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; and each
- * desktop with a narrow window, which is read from as far away.
+ * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; each
+ * desktop with a narrow window, which is read from as far away; and a laptop
+ * with a touch screen, whose trackpad still hovers, so it isn't touch-only.
  */
 const displays = {
   reference: { mmPerPx: 0.2646, distanceMm: 711, width: 1280, touch: false },
@@ -263,6 +264,12 @@ const displays = {
   },
   laptop2x: { mmPerPx: 0.2, distanceMm: 500, width: 1512, touch: false },
   laptop2xNarrow: { mmPerPx: 0.2, distanceMm: 500, width: 800, touch: false },
+  laptop2xTouchScreen: {
+    mmPerPx: 0.2,
+    distanceMm: 500,
+    width: 1512,
+    touch: false,
+  },
   phone3x: { mmPerPx: 0.1657, distanceMm: 300, width: 390, touch: true },
 } as const satisfies Record<string, Display>;
 
@@ -340,8 +347,9 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
 
   test("write the touch sizes in one media query on :root", () => {
     const css = themeCss(tokens);
-    const block = css.slice(css.indexOf("@media (pointer: coarse)"));
-    expect(block).toStartWith("@media (pointer: coarse) {\n  :root {\n");
+    const query = "@media (any-hover: none) and (any-pointer: coarse)";
+    const block = css.slice(css.indexOf(query));
+    expect(block).toStartWith(`${query} {\n  :root {\n`);
     for (const line of [
       "--at-type-body-size: 18px;",
       "--at-type-meta-size: 16px;",
@@ -349,7 +357,10 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
     ]) {
       expect(block.slice(0, block.indexOf("\n}\n"))).toContain(line);
     }
-    expect(css.split("@media (pointer: coarse)")).toHaveLength(2);
+    expect(css.split(query)).toHaveLength(2);
+    // Not by the primary pointer alone, which a touch-screen laptop or an
+    // accessibility setting can report as coarse.
+    expect(css).not.toContain("@media (pointer: coarse)");
   });
 
   test("keep a simple date inside the date column", () => {

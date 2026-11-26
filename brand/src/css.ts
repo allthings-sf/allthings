@@ -53,13 +53,16 @@ export function length({ px, fluid }: Pick<Dimension, "px" | "fluid">): string {
 }
 
 /**
- * A touch screen: a phone or a tablet, whose pointer is a finger. It is
+ * A touch screen: a phone or a tablet, where every input is a finger. It is
  * read closer than a desktop's display, at a smaller CSS pixel, so text
  * reads as large at fewer pixels; tokens with a `touch` size take it here.
- * Text sizes follow the display, not the window: a desktop window made
- * narrow is still read from a desktop's distance.
+ * It asks that no input can hover and some input is coarse, not that the
+ * primary one is: a laptop with a touch screen still has a trackpad, and a
+ * browser may report a coarse pointer for accessibility, so either keeps a
+ * desktop's sizes. Text sizes follow the display, not the window: a desktop
+ * window made narrow is still read from a desktop's distance.
  */
-export const touch = "(pointer: coarse)";
+export const touch = "(any-hover: none) and (any-pointer: coarse)";
 
 /**
  * The media condition that holds below a breakpoint `px` wide. Written as
