@@ -273,7 +273,7 @@ describe("its privileges in the catalog", () => {
 });
 
 describe("what the script grants", () => {
-  test("reads on public only tables site_reader reads, but the community's numbers and gaps, and X's daily reads", () => {
+  test("reads on public only tables site_reader reads, but the community's numbers and gaps, and X's daily budget", () => {
     const beyond = Object.keys(STUDIO_GRANTS)
       .filter((table) => table.startsWith("public."))
       .filter(
@@ -285,14 +285,20 @@ describe("what the script grants", () => {
     // Public counts of the community's own accounts, and the days a source
     // couldn't be read, which the site never shows; read only, by `bun run
     // community`. And X's daily budget (src/x-budget.ts), which the
-    // studio's commands that read X count and add to.
+    // studio's commands that read X hold against, and add to.
     expect(beyond).toEqual([
       "public.community_metrics",
       "public.community_gaps",
+      "public.x_holds",
       "public.x_reads",
     ]);
     expect(STUDIO_GRANTS["public.community_metrics"]).toEqual({ select: true });
     expect(STUDIO_GRANTS["public.community_gaps"]).toEqual({ select: true });
+    expect(STUDIO_GRANTS["public.x_holds"]).toEqual({
+      select: true,
+      insert: ["day", "mills"],
+      update: ["settled"],
+    });
     expect(STUDIO_GRANTS["public.x_reads"]).toEqual({
       select: true,
       insert: ["day", "kind", "id"],
@@ -516,6 +522,7 @@ const suites: Readonly<
   posts: ["posts.test.ts", "post-candidates.test.ts"],
   photos: ["photos.test.ts"],
   "people photo": ["profile-photo.test.ts"],
+  "people posts": ["x-budget.test.ts"],
   "hosts logo": ["host-logos.test.ts"],
   talks: ["talk-edits.test.ts"],
   community: ["community-metrics.test.ts"],

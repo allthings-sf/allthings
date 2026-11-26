@@ -103,17 +103,19 @@ const layer = Layer.mergeAll(PostSources.layer, EventPostWriter.layer).pipe(
 
 /**
  * What a search needs: the post tools, the searches, X's daily budget they
- * share with the sync Worker, and the database itself.
+ * share with the sync Worker, and the database itself. A dry run's budget
+ * never asks X, which bills each read, and writes nothing.
  */
-const candidatesLayer = Layer.mergeAll(
-  PostSources.layer,
-  EventPostWriter.layer,
-  CandidateSearches.layer,
-).pipe(
-  Layer.provideMerge(XBudget.layer),
-  Layer.provideMerge(FetchHttpClient.layer),
-  Layer.provideMerge(Database.scriptLayer),
-);
+const candidatesLayer = (dryRun: boolean) =>
+  Layer.mergeAll(
+    PostSources.layer,
+    EventPostWriter.layer,
+    CandidateSearches.layer,
+  ).pipe(
+    Layer.provideMerge(dryRun ? XBudget.dryRun : XBudget.layer),
+    Layer.provideMerge(FetchHttpClient.layer),
+    Layer.provideMerge(Database.scriptLayer),
+  );
 
 const optionalText = (name: string, description: string) =>
   Flag.String(name).pipe(Flag.withDescription(description), Flag.optional);
@@ -358,7 +360,7 @@ const find = Command.make(
           `X: ${xPosts} posts kept. ${spend._tag === "Success" ? spendLine(spend.success) : spend.failure.reason}.`,
         );
       }
-    }).pipe(Effect.provide(candidatesLayer)),
+    }).pipe(Effect.provide(candidatesLayer(dryRun))),
 ).pipe(
   Command.withDescription(
     "Search Bluesky (and X, with X_BEARER_TOKEN) for posts about evenings; add those that score enough as pending. Recent evenings by default.",
@@ -440,7 +442,7 @@ const sweepCommand = Command.make(
         }
         yield* Effect.sleep(Duration.minutes(every.value));
       }
-    }).pipe(Effect.provide(candidatesLayer)),
+    }).pipe(Effect.provide(candidatesLayer(dryRun))),
 ).pipe(
   Command.withDescription(
     "Search for posts about one evening, before it starts too; add those that score enough as pending; say what is new and what waits for review.",
@@ -480,7 +482,7 @@ const xSearches = Command.make(
               `Put the posts' URLs in a file, one a line, then: bun run posts add ${signals.slug} --from <file>`,
             ].join("\n"),
       );
-    }).pipe(Effect.provide(candidatesLayer)),
+    }).pipe(Effect.provide(candidatesLayer(true))),
 ).pipe(
   Command.withDescription(
     "The searches to run on x.com in a browser for posts about one evening.",

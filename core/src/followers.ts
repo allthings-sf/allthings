@@ -16,7 +16,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { DataSourceError } from "./errors.ts";
 import { orDataSourceError } from "./sql.ts";
-import { XBudget, type XBudgetRefused } from "./x-budget.ts";
+import { XBudget, XBudgetRefused } from "./x-budget.ts";
 
 /**
  * How many follow each person on X, kept as a snapshot on their profile
@@ -112,12 +112,13 @@ export interface FollowerSourceShape {
   ) => Effect.Effect<XAccount, FollowerReadError | XBudgetRefused>;
   /**
    * The accounts with these user ids, in as few requests as the source
-   * allows: each id's account, or why it can't be read.
+   * allows: each id's account, or why it can't be read. Ids X's daily
+   * budget left unasked are refused, and those read before them kept.
    */
   readonly readByIds?: (
     ids: ReadonlyArray<string>,
   ) => Effect.Effect<
-    ReadonlyMap<string, XAccount | FollowerReadError>,
+    ReadonlyMap<string, XAccount | FollowerReadError | XBudgetRefused>,
     FollowerReadError | XBudgetRefused
   >;
 }
@@ -330,7 +331,10 @@ export class FollowerSource extends Context.Service<
         ).pipe(Effect.map(({ data }) => accountOf(data)));
       const readByIds = (ids: ReadonlyArray<string>) =>
         Effect.gen(function* () {
-          const found = new Map<string, XAccount | FollowerReadError>();
+          const found = new Map<
+            string,
+            XAccount | FollowerReadError | XBudgetRefused
+          >();
           for (let start = 0; start < ids.length; start += idsPerRequest) {
             const chunk = ids.slice(start, start + idsPerRequest);
             const answer = yield* get(
@@ -339,7 +343,13 @@ export class FollowerSource extends Context.Service<
               { ids: chunk.join(",") },
               chunk.length,
               Schema.decodeUnknownEffect(XApiMany),
-            );
+            ).pipe(Effect.catchTag("XBudgetRefused", Effect.succeed));
+            // X's daily budget refused this chunk: it and the rest are left
+            // unasked, and what the chunks before it read is kept.
+            if (answer instanceof XBudgetRefused) {
+              for (const id of ids.slice(start)) found.set(id, answer);
+              break;
+            }
             for (const user of answer.data ?? []) {
               found.set(user.id, accountOf(user));
             }
@@ -369,9 +379,13 @@ export class FollowerSource extends Context.Service<
   static readonly fromConfig = Layer.unwrap(
     Effect.gen(function* () {
       const token = yield* Config.option(Config.Redacted("X_BEARER_TOKEN"));
-      return Option.isSome(token)
-        ? FollowerSource.xApi
-        : FollowerSource.fxtwitter;
+      // Either source, with what either needs.
+      const source: Layer.Layer<
+        FollowerSource,
+        Config.ConfigError,
+        HttpClient.HttpClient | XBudget
+      > = Option.isSome(token) ? FollowerSource.xApi : FollowerSource.fxtwitter;
+      return source;
     }),
   );
 }
@@ -467,7 +481,10 @@ export const refreshFollowers = (options: RefreshOptions) =>
     const ids = batch.flatMap((row) =>
       row.xUserId === null ? [] : [row.xUserId],
     );
-    const prefetched = new Map<string, XAccount | FollowerReadError>();
+    const prefetched = new Map<
+      string,
+      XAccount | FollowerReadError | XBudgetRefused
+    >();
     let prefetchOutOfTime = false;
     // X's daily budget refused a read: nothing more is asked, and what is
     // left waits, untried, for a later run.
@@ -507,9 +524,11 @@ export const refreshFollowers = (options: RefreshOptions) =>
       const known =
         row.xUserId === null ? undefined : prefetched.get(row.xUserId);
       // By id where both are known: the account, whatever its handle now.
+      // An id X's daily budget left unasked stops the refresh here.
       const byId =
         known !== undefined
-          ? known instanceof FollowerReadError
+          ? known instanceof FollowerReadError ||
+            known instanceof XBudgetRefused
             ? Effect.fail(known)
             : Effect.succeed(known)
           : row.xUserId !== null && source.readById !== undefined

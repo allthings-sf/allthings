@@ -96,6 +96,7 @@ export const STUDIO_COMMANDS = [
   "posts",
   "photos",
   "people photo",
+  "people posts",
   "hosts logo",
   "talks",
   "community",
@@ -394,9 +395,15 @@ export const STUDIO_GRANTS: Readonly<Record<string, TableGrants>> = {
   // public tables beyond site_reader's (core/tests/studio-role.test.ts).
   "public.community_metrics": { select: true },
   "public.community_gaps": { select: true },
-  // posts find, people posts: X's daily budget (src/x-budget.ts), the
-  // day's reads counted before each request to X, and a row for each post
-  // and user an answer holds. The site never reads it either.
+  // posts find, people posts: X's daily budget (src/x-budget.ts), a hold
+  // for each request to X, taken against the day's reads and open holds and
+  // settled once its answer is recorded, and a row for each post and user
+  // an answer holds. The site never reads them either.
+  "public.x_holds": {
+    select: true,
+    insert: ["day", "mills"],
+    update: ["settled"],
+  },
   "public.x_reads": { select: true, insert: ["day", "kind", "id"] },
 
   // ── planning's collaboration (src/collab/collab.ts, bun run collab), read

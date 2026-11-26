@@ -513,7 +513,7 @@ describe("site_sync", () => {
     ).toBeUndefined();
   });
 
-  test("counts X's daily reads and records each answer's, once, and may do nothing else with them", async () => {
+  test("holds each X request against the day's budget, records its answer's reads, once, and may do nothing else with them", async () => {
     const x = Layer.succeed(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
@@ -551,6 +551,15 @@ describe("site_sync", () => {
       "permission denied",
     );
     expect(await refusal("DELETE FROM x_reads")).toContain("permission denied");
+    // Each lookup's hold, settled once its answer was recorded.
+    const holds = await db.query<{ settled: boolean }>(
+      "SELECT settled FROM x_holds",
+    );
+    expect(holds.rows).toEqual([{ settled: true }, { settled: true }]);
+    expect(await refusal("UPDATE x_holds SET mills = 0")).toContain(
+      "permission denied",
+    );
+    expect(await refusal("DELETE FROM x_holds")).toContain("permission denied");
   });
 
   test("searches past evenings for posts, and reports what it would add", async () => {

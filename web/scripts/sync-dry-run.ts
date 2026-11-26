@@ -99,7 +99,7 @@ const report = await Effect.runPromise(
           Layer.mergeAll(Luma.layer, LumaApi.layer, CoverSource.layer),
         ),
         // X's daily budget, which a dry run only reports: it never asks X.
-        Layer.provideMerge(XBudget.layer),
+        Layer.provideMerge(XBudget.dryRun),
         Layer.provideMerge(
           Layer.mergeAll(Database.layer, FetchHttpClient.layer, untouched),
         ),

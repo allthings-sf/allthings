@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Exit, Layer, Schema } from "effect";
+import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import {
   HttpClient,
   type HttpClientError,
@@ -18,25 +18,28 @@ import { orDataSourceError } from "./sql.ts";
  * without this, nothing but time windows bounds what a loop, a bug or a
  * large run spends in a day.
  *
- * Every X request goes through {@link XBudget}. Before it is sent, the
- * day's spend so far and the most its answer can bill must fit in the
- * budget; otherwise nothing is sent, and the caller skips X with why
+ * Every X request goes through {@link XBudget}, in the database the Worker
+ * and the CLI share (migrations/0043_x_reads.ts), so they spend one
+ * budget. Before a request is sent, the most its answer can bill is held
+ * for the day (`x_holds`), under a lock, if the day's spend and it fit in
+ * the budget; otherwise nothing is sent, and the caller skips X with why
  * ("X daily budget spent: $1.80 of $2.00"). Once spent, X is skipped until
  * 00:00 UTC, when the day starts over, as X's billing day does. After X
  * answers, each post and user the answer holds is recorded for the day in
- * `x_reads` (migrations/0043_x_reads.ts), once, as X bills it, in the
- * database the Worker and the CLI share, so they spend one budget. A spend
- * that can't be read, or an answer that can't be recorded, refuses too:
- * X is never asked while what it has cost today is unknown.
+ * `x_reads`, once, as X bills it, and the hold is let go. A request
+ * unanswered, cut short, or whose answer can't be recorded keeps its hold,
+ * counted at its most for the rest of the day; a spend that can't be read
+ * refuses the request. So X is never asked past the budget, nor while what
+ * it has cost today is unknown.
  *
  * What X bills, from docs.x.com's pricing
  * (https://docs.x.com/x-api/getting-started/pricing, read 2026-11-26):
  * "Posts: Read" $0.005 and "User: Read" $0.010 per resource returned,
- * "deduplicated within a 24-hour UTC day window". The estimate errs high:
- * an author X expands with a post (`includes.users`) is counted as a user
- * read, which the pricing doesn't settle either way, and X calls its
- * deduplication "a soft guarantee". It can pass the budget only when two
- * callers check at once, each by at most what its one request can bill.
+ * "deduplicated within a 24-hour UTC day window". The day's spend is an
+ * estimate. It errs high where it can: an author X expands with a post
+ * (`includes.users`) is counted as a user read, which the pricing doesn't
+ * settle either way. But X calls its deduplication "a soft guarantee", so
+ * on a day it fails, X's bill can run past what the budget counted.
  *
  * Announcing on X (src/social/x.ts) isn't counted: each post there is
  * approved by a person and sent once, never retried, and refusing a
@@ -172,10 +175,13 @@ export const billedIn = (
 
 export interface XBudgetShape {
   /**
-   * Sends `request` to X, if the day's spend and the most its answer can
-   * bill (`atMost`) fit in the budget, and records what a 200 answer holds;
-   * otherwise sends nothing and fails with {@link XBudgetRefused}. Any
-   * other answer is returned as it came, and bills nothing.
+   * Sends `request` to X if the most its answer can bill (`atMost`) fits in
+   * what the day has left, holding that much for the day until X answers;
+   * otherwise sends nothing and fails with {@link XBudgetRefused}. What a
+   * 200 answer holds is recorded, and its hold let go; any other answer,
+   * which X doesn't bill, lets its hold go and comes back as X sent it. A
+   * request that fails, is cut short, or whose answer can't be read or
+   * recorded keeps its hold, counted at its most for the rest of the day.
    */
   readonly execute: (
     request: HttpClientRequest.HttpClientRequest,
@@ -184,9 +190,51 @@ export interface XBudgetShape {
     HttpClientResponse.HttpClientResponse,
     HttpClientError.HttpClientError | XBudgetRefused
   >;
-  /** What today (UTC) has spent so far, against the budget. */
+  /** What today (UTC) has spent so far, its open holds too, against the budget. */
   readonly today: Effect.Effect<XSpend, XBudgetRefused>;
 }
+
+/** Why X wasn't asked: the day's spend is unknown. */
+const spendUnread = () =>
+  new XBudgetRefused({
+    reason: "X daily budget unknown: today's spend couldn't be read",
+  });
+
+/** Why a dry run never asks X. */
+export const dryRunReason = "a dry run never reads X, which bills each read";
+
+/** The UTC day of now, as `YYYY-MM-DD`. */
+const today = Effect.map(DateTime.now, DateTime.formatIsoDateUtc);
+
+/** `day`'s spend in `sql`: its reads, priced, and its open holds. */
+const spentOn = (sql: SqlClient, day: string) =>
+  orDataSourceError(
+    sql<{ posts: number; users: number; held: number }>`
+      SELECT
+        (SELECT count(*) FROM x_reads WHERE day = ${day} AND kind = 'post')::int AS posts,
+        (SELECT count(*) FROM x_reads WHERE day = ${day} AND kind = 'user')::int AS users,
+        (SELECT COALESCE(sum(mills), 0) FROM x_holds WHERE day = ${day} AND NOT settled)::int AS held`,
+  ).pipe(
+    Effect.map(([row]) =>
+      row === undefined
+        ? 0
+        : row.posts * xPrice.post + row.users * xPrice.user + row.held,
+    ),
+  );
+
+/** Today's spend in `sql` against `budget`. */
+const spendToday = (sql: SqlClient, budget: number) =>
+  Effect.gen(function* () {
+    const day = yield* today;
+    const spent = yield* spentOn(sql, day).pipe(Effect.mapError(spendUnread));
+    return { day, spent, budget } satisfies XSpend;
+  });
+
+/**
+ * The key of the lock every hold is taken under (`pg_advisory_xact_lock`),
+ * across every process that spends the budget.
+ */
+const holdLock = 430043;
 
 /** The budget X's callers share. */
 export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
@@ -194,7 +242,7 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
 ) {
   /**
    * A budget of `usd` a day (held to {@link dailyBudget}'s bounds), kept in
-   * `x_reads`. Needs a `SqlClient` and an `HttpClient`.
+   * `x_holds` and `x_reads`. Needs a `SqlClient` and an `HttpClient`.
    */
   static readonly make = (usd: number) =>
     Layer.effect(
@@ -203,101 +251,125 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
         const budget = dailyBudget(usd);
         const sql = yield* SqlClient;
         const client = yield* HttpClient.HttpClient;
-        // Once an answer couldn't be recorded, what X has billed is
-        // unknown: nothing more is sent from this process.
-        let unrecorded: string | undefined;
-        const unrecordedReason =
-          "X daily budget unknown: an answer from X couldn't be recorded, so X isn't asked again in this run";
 
-        const spentOn = (day: string) =>
-          orDataSourceError(
-            sql<{ kind: string; count: number }>`
-              SELECT kind, count(*)::int AS count FROM x_reads
-              WHERE day = ${day} GROUP BY kind`,
-          ).pipe(
-            Effect.map((rows) =>
-              rows.reduce(
-                (sum, { kind, count }) =>
-                  sum + count * (kind === "user" ? xPrice.user : xPrice.post),
-                0,
-              ),
-            ),
-          );
+        /**
+         * `most` held for today, if the day's spend and every other hold
+         * leave room for it: its hold, or the spend that refused it. One
+         * hold at a time, across every process, so none takes what another
+         * just took.
+         */
+        const hold = (most: number) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* sql`SELECT pg_advisory_xact_lock(${sql.literal(String(holdLock))})`;
+                const day = yield* today;
+                const spent = yield* spentOn(sql, day);
+                // Once spent, nothing is sent, not even what bills nothing.
+                if (spent >= budget || spent + most > budget) {
+                  return { _tag: "Refused", spent } as const;
+                }
+                const [held] = yield* sql<{ id: string }>`
+                  INSERT INTO x_holds ${sql.insert({ day, mills: most })}
+                  RETURNING id`;
+                if (held === undefined)
+                  return yield* Effect.fail(spendUnread());
+                return { _tag: "Held", id: held.id, day } as const;
+              }),
+            )
+            .pipe(Effect.mapError(spendUnread));
 
-        const today = Effect.gen(function* () {
-          const day = DateTime.formatIsoDateUtc(yield* DateTime.now);
-          const spent = yield* spentOn(day).pipe(
-            Effect.mapError(
-              () =>
-                new XBudgetRefused({
-                  reason:
-                    "X daily budget unknown: today's spend couldn't be read",
-                }),
-            ),
-          );
-          return { day, spent, budget } satisfies XSpend;
-        });
+        /**
+         * Lets hold `id` go, recording `rows`, what X billed for its
+         * answer. One that fails keeps the hold, counted at its most: the
+         * day's spend errs high, never low.
+         */
+        const settle = (
+          id: string,
+          rows: ReadonlyArray<{ day: string; kind: string; id: string }>,
+        ) =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                if (rows.length > 0) {
+                  yield* sql`INSERT INTO x_reads ${sql.insert(rows)} ON CONFLICT DO NOTHING`;
+                }
+                yield* sql`UPDATE x_holds SET settled = true WHERE id = ${id}`;
+              }),
+            )
+            .pipe(Effect.ignore);
 
         const execute = (
           request: HttpClientRequest.HttpClientRequest,
           atMost: XBill,
         ) =>
           Effect.gen(function* () {
-            if (unrecorded !== undefined) {
-              return yield* new XBudgetRefused({ reason: unrecorded });
-            }
-            const { day, spent } = yield* today;
             const most =
               Math.max(0, atMost.posts ?? 0) * xPrice.post +
               Math.max(0, atMost.users ?? 0) * xPrice.user;
-            // Once spent, nothing is sent, not even what could bill nothing.
-            if (spent >= budget || spent + most > budget) {
+            let held = yield* hold(most);
+            // Held on one day, sent on the next: held again on the day X
+            // bills it.
+            if (held._tag === "Held" && held.day !== (yield* today)) {
+              yield* settle(held.id, []);
+              held = yield* hold(most);
+            }
+            if (held._tag === "Refused") {
+              const { spent } = held;
               return yield* new XBudgetRefused({
                 reason: `X daily budget spent: ${dollars(spent)} of ${dollars(budget)}${spent < budget ? `, too little for a read of up to ${dollars(most)}` : ""}`,
               });
             }
+            // From here, until X's answer is recorded, the hold stands: a
+            // request that fails or is cut short stays counted at its most.
             const response = yield* client.execute(request);
-            if (response.status !== 200) return response;
-            // X may bill this answer from here on: unless it is recorded
-            // (a body that fails, an insert that fails, or a caller's
-            // timeout cutting either short), nothing more is sent.
-            return yield* Effect.gen(function* () {
-              // Read once, to count what X billed; the caller reads its copy.
-              const text = yield* response.text;
-              const { posts, users } = billedIn(parsed(text));
-              const rows = [
+            if (response.status !== 200) {
+              yield* settle(held.id, []);
+              return response;
+            }
+            // Read once, to record what X billed; the caller reads its copy.
+            const text = yield* response.text;
+            const answer = parsed(text);
+            // An answer that isn't JSON doesn't say what X billed for it:
+            // its hold stays.
+            if (answer !== undefined) {
+              const { posts, users } = billedIn(answer);
+              const { day } = held;
+              yield* settle(held.id, [
                 ...[...posts].map((id) => ({ day, kind: "post", id })),
                 ...[...users].map((id) => ({ day, kind: "user", id })),
-              ];
-              if (rows.length > 0) {
-                yield* orDataSourceError(
-                  sql`INSERT INTO x_reads ${sql.insert(rows)} ON CONFLICT DO NOTHING`,
-                ).pipe(
-                  Effect.mapError(
-                    () => new XBudgetRefused({ reason: unrecordedReason }),
-                  ),
-                );
-              }
-              return HttpClientResponse.fromWeb(
-                request,
-                new Response(text, {
-                  status: response.status,
-                  headers: Object.entries(response.headers),
-                }),
-              );
-            }).pipe(
-              Effect.onExit((exit) =>
-                Effect.sync(() => {
-                  if (Exit.isFailure(exit)) unrecorded = unrecordedReason;
-                }),
-              ),
+              ]);
+            }
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(text, {
+                status: response.status,
+                headers: Object.entries(response.headers),
+              }),
             );
           });
 
-        return XBudget.of({ execute, today });
+        return XBudget.of({ execute, today: spendToday(sql, budget) });
       }),
     );
 
   /** {@link X_DAILY_BUDGET_USD} a day. Needs a `SqlClient` and an `HttpClient`. */
   static readonly layer = XBudget.make(X_DAILY_BUDGET_USD);
+
+  /**
+   * The budget of a dry run, which writes nothing: X is never asked
+   * ({@link dryRunReason}), and today's spend is only read. A cached answer
+   * (src/x-posts-source.ts) still serves. Needs a `SqlClient`.
+   */
+  static readonly dryRun = Layer.effect(
+    XBudget,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      return XBudget.of({
+        execute: () =>
+          Effect.fail(new XBudgetRefused({ reason: dryRunReason })),
+        today: spendToday(sql, dailyBudget(X_DAILY_BUDGET_USD)),
+      });
+    }),
+  );
 }

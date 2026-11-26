@@ -11,10 +11,14 @@ import { XBudget } from "../src/x-budget.ts";
  * DATABASE_URL, from X's own API with X_BEARER_TOKEN (by user id, in
  * batches), else the FixTweet API: the profiles whose snapshot is
  * missing or older than --stale-days, oldest first, at most --max. The sync
- * Worker does the same on its schedule; this is for now.
+ * Worker does the same on its schedule; this is for now. X's reads go
+ * through X's daily budget (src/x-budget.ts), which they record in the
+ * database, so DATABASE_URL is site_sync's.
  *
- *   bun run followers --dry-run   read the counts and print them; write nothing
- *   bun run followers             the same, stored
+ *   bun run followers --dry-run   write nothing, and ask X nothing (it bills
+ *                                 each read); without X's token, print
+ *                                 FixTweet's counts
+ *   bun run followers             read the counts and store them
  *
  * DATABASE_URL comes from the environment only; .env files are not read.
  */
@@ -23,7 +27,9 @@ const command = Command.make(
   "followers",
   {
     dryRun: Flag.Boolean("dry-run").pipe(
-      Flag.withDescription("Read the counts and print them; write nothing."),
+      Flag.withDescription(
+        "Write nothing, and ask X nothing, since it bills each read; without X's token, print FixTweet's counts.",
+      ),
       Flag.withDefault(false),
     ),
     max: Flag.Int("max").pipe(
@@ -66,9 +72,10 @@ const command = Command.make(
       );
     }).pipe(
       Effect.provide(
-        // X's reads go through the daily budget the sync Worker spends too.
+        // X's reads go through the daily budget the sync Worker spends too;
+        // a dry run asks X nothing, since it bills each read.
         FollowerSource.fromConfig.pipe(
-          Layer.provide(XBudget.layer),
+          Layer.provide(dryRun ? XBudget.dryRun : XBudget.layer),
           Layer.provide(FetchHttpClient.layer),
           Layer.provideMerge(Database.scriptLayer),
         ),

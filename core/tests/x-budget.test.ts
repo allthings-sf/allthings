@@ -1,6 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { PGlite } from "@electric-sql/pglite";
-import { ConfigProvider, DateTime, Effect, Exit, Layer } from "effect";
+import {
+  ConfigProvider,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+} from "effect";
 import * as TestClock from "effect/testing/TestClock";
 import {
   HttpClient,
@@ -8,16 +16,22 @@ import {
   HttpClientResponse,
   UrlParams,
 } from "effect/http";
+import type { SqlClient } from "effect/sql/SqlClient";
 import { SITE_SYNC_GRANTS } from "../../infra/scripts/site-sync.ts";
 import { STUDIO_GRANTS } from "../../infra/scripts/studio.ts";
 import { xReads } from "../migrations/0043_x_reads.ts";
 import { COMMUNITY, CommunitySources } from "../src/community-metrics.ts";
 import { FollowerSource } from "../src/followers.ts";
-import { type EventSignals, makeXSearch } from "../src/posts/candidates.ts";
+import {
+  type CandidateSearchShape,
+  type EventSignals,
+  makeXSearch,
+} from "../src/posts/candidates.ts";
 import {
   billedIn,
   dailyBudget,
   dollars,
+  dryRunReason,
   spendLine,
   X_DAILY_BUDGET_USD,
   XBudget,
@@ -32,10 +46,13 @@ import {
 } from "./support/database.ts";
 
 /**
- * X's daily budget (src/x-budget.ts): its bounds, what an answer bills, a
- * request refused once the day is spent, one count every caller of X
- * shares, the day starting over at 00:00 UTC, and X never asked while
- * what it cost is unknown. Each test has a fresh database and a fake X.
+ * X's daily budget (src/x-budget.ts): its bounds; what an answer bills; a
+ * request refused once the day is spent; one count every caller of X
+ * shares, an answer in flight held against the others; the day starting
+ * over at 00:00 UTC; a request unanswered or unrecorded counted at its
+ * most; and a dry run that asks X nothing. Each test has a fresh database
+ * and a fake X. `bun run test:studio` runs it as the studio, for `people
+ * posts` and `posts find`.
  */
 
 const databases: Array<PGlite> = [];
@@ -79,38 +96,44 @@ const post = (id: string) => ({
 
 /**
  * A fake X: users by ids, one user by id, posts by ids (all user 1's) and
- * an empty search, each as X answers; `asked` holds each path asked.
+ * an empty search, each as X answers, unless `answer` answers instead;
+ * `asked` holds each path asked. `meanwhile` runs as each request arrives.
  */
-const fakeX = (status = 200) => {
+const fakeX = (
+  options: {
+    readonly answer?: () => Response;
+    readonly meanwhile?: () => Promise<void>;
+  } = {},
+) => {
   const asked: Array<string> = [];
   const layer = Layer.succeed(
     HttpClient.HttpClient,
-    HttpClient.make((request) => {
-      const url = new URL(request.url);
-      const ids = (
-        new URLSearchParams(UrlParams.toString(request.urlParams)).get("ids") ??
-        ""
-      )
-        .split(",")
-        .filter((id) => id !== "");
-      asked.push(url.pathname);
-      const body =
-        url.pathname === "/2/users"
-          ? { data: ids.map(user) }
-          : url.pathname === "/2/tweets"
-            ? { data: ids.map(post), includes: { users: [user("1")] } }
-            : url.pathname.startsWith("/2/users/")
-              ? { data: user(url.pathname.split("/").at(-1) ?? "") }
-              : { meta: { result_count: 0 } };
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(
+    HttpClient.make((request) =>
+      Effect.promise(async () => {
+        const url = new URL(request.url);
+        const ids = (
+          new URLSearchParams(UrlParams.toString(request.urlParams)).get(
+            "ids",
+          ) ?? ""
+        )
+          .split(",")
+          .filter((id) => id !== "");
+        asked.push(url.pathname);
+        await options.meanwhile?.();
+        const body =
+          url.pathname === "/2/users"
+            ? { data: ids.map(user) }
+            : url.pathname === "/2/tweets"
+              ? { data: ids.map(post), includes: { users: [user("1")] } }
+              : url.pathname.startsWith("/2/users/")
+                ? { data: user(url.pathname.split("/").at(-1) ?? "") }
+                : { meta: { result_count: 0 } };
+        return HttpClientResponse.fromWeb(
           request,
-          status === 200
-            ? Response.json(body)
-            : Response.json({ title: "CreditsDepleted" }, { status }),
-        ),
-      );
-    }),
+          options.answer?.() ?? Response.json(body),
+        );
+      }),
+    ),
   );
   return { asked, layer };
 };
@@ -119,7 +142,7 @@ const fakeX = (status = 200) => {
 const budgetOf = (
   db: PGlite,
   x: ReturnType<typeof fakeX>,
-  usd = xBudgetBounds.min,
+  usd: number = xBudgetBounds.min,
 ) =>
   XBudget.make(usd).pipe(Layer.provide(Layer.mergeAll(x.layer, sqlLayer(db))));
 
@@ -133,6 +156,11 @@ const lookUp = (ids: ReadonlyArray<string>) =>
       { users: ids.length },
     ),
   );
+
+/** The day's spend, as the budget counts it. */
+const spent = XBudget.use((budget) => budget.today).pipe(
+  Effect.map(({ spent }) => spent),
+);
 
 /** Ids `from` to `to`, as strings. */
 const range = (from: number, to: number) =>
@@ -156,6 +184,15 @@ const recorded = async (db: PGlite, day = "2026-11-26") =>
       )
     ).rows.map(({ kind, count }) => [kind, count]),
   );
+
+/** The day's holds still open, in thousandths of a dollar. */
+const open = async (db: PGlite, day = "2026-11-26") =>
+  (
+    await db.query<{ mills: number }>(
+      `SELECT mills FROM x_holds WHERE day = $1 AND NOT settled ORDER BY mills`,
+      [day],
+    )
+  ).rows.map(({ mills }) => mills);
 
 describe("the daily budget", () => {
   test("is whole cents from $0.50 up to $5: never nothing, never unbounded", () => {
@@ -245,88 +282,145 @@ describe("what an answer bills", () => {
 });
 
 describe("a request to X", () => {
-  test.skipIf(studioRun)(
-    "is refused once the day is spent: what wouldn't fit, then everything, and X bills each account once a day",
-    async () => {
-      const db = await fresh();
-      const x = fakeX();
-      const steps = await Effect.runPromise(
-        Effect.gen(function* () {
-          const results: Array<string> = [];
-          for (const ids of [
-            range(1, 20), // $0.20 of $0.50
-            range(1, 20), // the same accounts: billed once a day
-            range(21, 40), // $0.40
-            range(41, 60), // $0.20 more wouldn't fit
-            range(41, 50), // $0.10 just fits: $0.50
-            ["51"], // nothing does
-          ]) {
-            results.push(outcome(yield* Effect.exit(lookUp(ids))));
-          }
-          results.push(outcome(yield* Effect.exit(lookUp([]))));
-          return {
-            results,
-            today: yield* XBudget.use((budget) => budget.today),
-          };
-        }).pipe(
-          Effect.provide(budgetOf(db, x)),
-          Effect.provide(clockAt(midday)),
-        ),
-      );
-      expect(steps.results).toEqual([
-        "sent",
-        "sent",
-        "sent",
-        "X daily budget spent: $0.40 of $0.50, too little for a read of up to $0.20",
-        "sent",
-        "X daily budget spent: $0.50 of $0.50",
-        // A request that can bill nothing still waits for tomorrow's budget.
-        "X daily budget spent: $0.50 of $0.50",
-      ]);
-      expect(x.asked).toHaveLength(4);
-      expect(steps.today).toEqual({
-        day: "2026-11-26",
-        spent: 500,
-        budget: 500,
-      });
-      expect(await recorded(db)).toEqual({ user: 50 });
-    },
-  );
+  test("is refused once the day is spent: what wouldn't fit, then everything, and X bills each account once a day", async () => {
+    const db = await fresh();
+    const x = fakeX();
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const results: Array<string> = [];
+        for (const ids of [
+          range(1, 20), // $0.20 of $0.50
+          range(1, 20), // the same accounts: billed once a day
+          range(21, 40), // $0.40
+          range(41, 60), // $0.20 more wouldn't fit
+          range(41, 50), // $0.10 just fits: $0.50
+          ["51"], // nothing does
+          [], // not even what bills nothing
+        ]) {
+          results.push(outcome(yield* Effect.exit(lookUp(ids))));
+        }
+        return {
+          results,
+          today: yield* XBudget.use((budget) => budget.today),
+        };
+      }).pipe(Effect.provide(budgetOf(db, x)), Effect.provide(clockAt(midday))),
+    );
+    expect(run.results).toEqual([
+      "sent",
+      "sent",
+      "sent",
+      "X daily budget spent: $0.40 of $0.50, too little for a read of up to $0.20",
+      "sent",
+      "X daily budget spent: $0.50 of $0.50",
+      "X daily budget spent: $0.50 of $0.50",
+    ]);
+    expect(x.asked).toHaveLength(4);
+    expect(run.today).toEqual({ day: "2026-11-26", spent: 500, budget: 500 });
+    expect(await recorded(db)).toEqual({ user: 50 });
+    // Each answer recorded let its hold go.
+    expect(await open(db)).toEqual([]);
+  });
 
-  test.skipIf(studioRun)(
-    "answered with anything but 200 bills nothing and comes back as X sent it",
-    async () => {
-      const db = await fresh();
-      const x = fakeX(402);
-      const answer = await Effect.runPromise(
-        lookUp(["1"]).pipe(
-          Effect.flatMap((response) =>
-            Effect.map(response.text, (text) => ({
-              status: response.status,
-              text,
-            })),
+  test("answered with anything but 200 bills nothing and comes back as X sent it", async () => {
+    const db = await fresh();
+    const x = fakeX({
+      answer: () =>
+        Response.json({ title: "CreditsDepleted" }, { status: 402 }),
+    });
+    const answer = await Effect.runPromise(
+      lookUp(["1"]).pipe(
+        Effect.flatMap((response) =>
+          Effect.map(response.text, (text) => ({
+            status: response.status,
+            text,
+          })),
+        ),
+        Effect.provide(budgetOf(db, x)),
+        Effect.provide(clockAt(midday)),
+      ),
+    );
+    expect(answer).toEqual({
+      status: 402,
+      text: JSON.stringify({ title: "CreditsDepleted" }),
+    });
+    expect(await recorded(db)).toEqual({});
+    expect(await open(db)).toEqual([]);
+  });
+
+  test("unanswered, cut short or unrecorded stays counted at its most for the day", async () => {
+    // A 200 whose body breaks off.
+    const broken = await fresh();
+    const cut = fakeX({
+      answer: () =>
+        new Response(
+          new ReadableStream({
+            start: (controller) => controller.error(new Error("cut")),
+          }),
+          { status: 200 },
+        ),
+    });
+    const afterCut = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sent = yield* Effect.exit(lookUp(range(1, 3)));
+        return { failed: Exit.isFailure(sent), spent: yield* spent };
+      }).pipe(
+        Effect.provide(budgetOf(broken, cut)),
+        Effect.provide(clockAt(midday)),
+      ),
+    );
+    expect(afterCut).toEqual({ failed: true, spent: 30 });
+
+    // A 200 that isn't JSON: what X billed for it is unknown.
+    const garbled = await fresh();
+    const notJson = fakeX({
+      answer: () => new Response("<html>", { status: 200 }),
+    });
+    const afterGarble = await Effect.runPromise(
+      lookUp(["1"]).pipe(
+        Effect.andThen(spent),
+        Effect.provide(budgetOf(garbled, notJson)),
+        Effect.provide(clockAt(midday)),
+      ),
+    );
+    expect(afterGarble).toBe(10);
+    expect(await open(garbled)).toEqual([10]);
+
+    // A caller's timeout that cuts the request off before X answers.
+    const hung = await fresh();
+    const arrived = Effect.runSync(Deferred.make<void>());
+    const hanging = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make(() =>
+        Deferred.succeed(arrived, undefined).pipe(Effect.andThen(Effect.never)),
+      ),
+    );
+    const afterHang = await Effect.runPromise(
+      Effect.gen(function* () {
+        const request = yield* Effect.forkChild(lookUp(range(1, 2)));
+        yield* Deferred.await(arrived);
+        yield* Fiber.interrupt(request);
+        return yield* spent;
+      }).pipe(
+        Effect.provide(
+          XBudget.make(0.5).pipe(
+            Layer.provide(Layer.mergeAll(hanging, sqlLayer(hung))),
           ),
-          Effect.provide(budgetOf(db, x)),
-          Effect.provide(clockAt(midday)),
         ),
-      );
-      expect(answer).toEqual({
-        status: 402,
-        text: JSON.stringify({ title: "CreditsDepleted" }),
-      });
-      expect(await recorded(db)).toEqual({});
-    },
-  );
+        Effect.provide(clockAt(midday)),
+      ),
+    );
+    expect(afterHang).toBe(20);
+  });
 
   test.skipIf(studioRun)(
-    "is never sent while what the day cost is unknown: its spend unread, or an answer unrecorded",
+    "is never sent while the day's spend can't be read",
     async () => {
-      const unread = await fresh();
-      await unread.exec(`DROP TABLE x_reads`);
+      const db = await fresh();
+      await db.exec(`DROP TABLE x_reads`);
       const x = fakeX();
       const refused = await Effect.runPromiseExit(
         lookUp(["1"]).pipe(
-          Effect.provide(budgetOf(unread, x)),
+          Effect.provide(budgetOf(db, x)),
           Effect.provide(clockAt(midday)),
         ),
       );
@@ -334,104 +428,75 @@ describe("a request to X", () => {
         "X daily budget unknown: today's spend couldn't be read",
       );
       expect(x.asked).toEqual([]);
+    },
+  );
 
-      const unrecorded = await fresh();
-      await unrecorded.exec(`
+  test.skipIf(studioRun)(
+    "whose answer can't be recorded stays counted at its most",
+    async () => {
+      const db = await fresh();
+      await db.exec(`
         CREATE FUNCTION refuse_x_reads() RETURNS trigger LANGUAGE plpgsql AS
           $$ BEGIN RAISE EXCEPTION 'no'; END $$;
         CREATE TRIGGER refuse_x_reads BEFORE INSERT ON x_reads
           FOR EACH ROW EXECUTE FUNCTION refuse_x_reads();`);
-      const y = fakeX();
-      const both = await Effect.runPromise(
+      const x = fakeX();
+      const run = await Effect.runPromise(
         Effect.gen(function* () {
-          const first = outcome(yield* Effect.exit(lookUp(["1"])));
-          const second = outcome(yield* Effect.exit(lookUp(["2"])));
-          return [first, second];
+          const first = outcome(yield* Effect.exit(lookUp(range(1, 20))));
+          const second = outcome(yield* Effect.exit(lookUp(range(1, 20))));
+          const third = outcome(yield* Effect.exit(lookUp(range(1, 20))));
+          return { first, second, third, spent: yield* spent };
         }).pipe(
-          Effect.provide(budgetOf(unrecorded, y)),
+          Effect.provide(budgetOf(db, x)),
           Effect.provide(clockAt(midday)),
         ),
       );
-      const why =
-        "X daily budget unknown: an answer from X couldn't be recorded, so X isn't asked again in this run";
-      expect(both).toEqual([why, why]);
-      // X answered the first, which may be billed; the second never left.
-      expect(y.asked).toEqual(["/2/users"]);
-
-      // A 200 whose body breaks off may be billed too: nothing more is sent.
-      const broken = await fresh();
-      let sent = 0;
-      const cut = Layer.succeed(
-        HttpClient.HttpClient,
-        HttpClient.make((request) =>
-          Effect.sync(() => {
-            sent++;
-            return HttpClientResponse.fromWeb(
-              request,
-              new Response(
-                new ReadableStream({
-                  start: (controller) => controller.error(new Error("cut")),
-                }),
-                { status: 200 },
-              ),
-            );
-          }),
-        ),
-      );
-      const afterCut = await Effect.runPromise(
-        Effect.gen(function* () {
-          const first = yield* Effect.exit(lookUp(["1"]));
-          const second = outcome(yield* Effect.exit(lookUp(["2"])));
-          return { first: Exit.isFailure(first), second };
-        }).pipe(
-          Effect.provide(
-            XBudget.make(0.5).pipe(
-              Layer.provide(Layer.mergeAll(cut, sqlLayer(broken))),
-            ),
-          ),
-          Effect.provide(clockAt(midday)),
-        ),
-      );
-      expect(afterCut).toEqual({ first: true, second: why });
-      expect(sent).toBe(1);
+      // The same accounts, but none recorded: each read counts at its most.
+      expect(run).toEqual({
+        first: "sent",
+        second: "sent",
+        third:
+          "X daily budget spent: $0.40 of $0.50, too little for a read of up to $0.20",
+        spent: 400,
+      });
+      expect(x.asked).toHaveLength(2);
+      expect(await open(db)).toEqual([200, 200]);
     },
   );
 });
 
 describe("the day", () => {
-  test.skipIf(studioRun)(
-    "starts over at 00:00 UTC, as X's billing day does",
-    async () => {
-      const db = await fresh();
-      // Nov 26 spent: 100 posts, $0.50.
-      await db.exec(
-        `INSERT INTO x_reads (day, kind, id) SELECT '2026-11-26', 'post', g::text FROM generate_series(1, 100) g`,
-      );
-      const x = fakeX();
-      const run = await Effect.runPromise(
-        Effect.gen(function* () {
-          const before = outcome(yield* Effect.exit(lookUp(["1"])));
-          // One second to midnight, then midnight.
-          yield* TestClock.adjust("1 second");
-          const after = outcome(yield* Effect.exit(lookUp(["1"])));
-          return {
-            before,
-            after,
-            today: yield* XBudget.use((budget) => budget.today),
-          };
-        }).pipe(
-          Effect.provide(budgetOf(db, x)),
-          Effect.provide(clockAt(DateTime.makeUnsafe("2026-11-26T23:59:59Z"))),
-        ),
-      );
-      expect(run.before).toBe("X daily budget spent: $0.50 of $0.50");
-      expect(run.after).toBe("sent");
-      expect(run.today).toEqual({ day: "2026-11-27", spent: 10, budget: 500 });
-      // The day before keeps its record.
-      expect(await recorded(db, "2026-11-26")).toEqual({ post: 100 });
-      expect(await recorded(db, "2026-11-27")).toEqual({ user: 1 });
-    },
-  );
+  test("starts over at 00:00 UTC, as X's billing day does", async () => {
+    const db = await fresh();
+    // Nov 26 spent: 100 posts, $0.50.
+    await db.exec(
+      `INSERT INTO x_reads (day, kind, id) SELECT '2026-11-26', 'post', g::text FROM generate_series(1, 100) g`,
+    );
+    const x = fakeX();
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const before = outcome(yield* Effect.exit(lookUp(["1"])));
+        // One second to midnight, then midnight.
+        yield* TestClock.adjust("1 second");
+        const after = outcome(yield* Effect.exit(lookUp(["1"])));
+        return {
+          before,
+          after,
+          today: yield* XBudget.use((budget) => budget.today),
+        };
+      }).pipe(
+        Effect.provide(budgetOf(db, x)),
+        Effect.provide(clockAt(DateTime.makeUnsafe("2026-11-26T23:59:59Z"))),
+      ),
+    );
+    expect(run.before).toBe("X daily budget spent: $0.50 of $0.50");
+    expect(run.after).toBe("sent");
+    expect(run.today).toEqual({ day: "2026-11-27", spent: 10, budget: 500 });
+    // The day before keeps its record.
+    expect(await recorded(db, "2026-11-26")).toEqual({ post: 100 });
+    expect(await recorded(db, "2026-11-27")).toEqual({ user: 1 });
+  });
 });
 
 describe("every caller of X", () => {
@@ -454,74 +519,161 @@ describe("every caller of X", () => {
     ConfigProvider.ConfigProvider,
     ConfigProvider.fromEnv({ env: { X_BEARER_TOKEN: "test" } }),
   );
+  /** The post search, as `posts find` asks it. */
+  const search = Effect.gen(function* () {
+    const xSearch: CandidateSearchShape = yield* makeXSearch;
+    return yield* xSearch.search(signals);
+  });
 
-  test.skipIf(studioRun)(
-    "spends one count: the Worker's followers and community, the CLI's posts and post search",
-    async () => {
-      const db = await fresh();
-      const x = fakeX();
-      /** `effect` as one process does it, with a budget of its own over the shared database. */
-      const asProcess = <A, E, R>(
-        effect: Effect.Effect<A, E, R>,
-        layer: Layer.Layer<R, unknown, XBudget>,
-      ) =>
-        Effect.runPromiseExit(
-          effect.pipe(
-            Effect.provide(
-              layer.pipe(
-                Layer.provideMerge(budgetOf(db, x)),
-                Layer.provide(Layer.mergeAll(x.layer, sqlLayer(db), config)),
-              ) as Layer.Layer<R>,
+  /**
+   * `effect` as one process runs it, over `x`, with a budget (`budget`, a
+   * live one by default) of its own over the shared database `db`.
+   */
+  const asProcess = <A, E, R>(
+    db: PGlite,
+    x: ReturnType<typeof fakeX>,
+    effect: Effect.Effect<A, E, R | XBudget>,
+    layer: Layer.Layer<R, unknown, XBudget | HttpClient.HttpClient | SqlClient>,
+    budget: Layer.Layer<XBudget> = budgetOf(db, x),
+  ) =>
+    Effect.runPromiseExit(
+      effect.pipe(
+        Effect.provide(
+          layer.pipe(
+            Layer.provideMerge(budget),
+            Layer.provide(Layer.mergeAll(x.layer, sqlLayer(db))),
+            // The token, for the layer and for a search the effect makes.
+            Layer.provideMerge(config),
+          ),
+        ),
+        Effect.provide(clockAt(midday)),
+      ),
+    );
+
+  test("spends one count: the Worker's followers and community, the CLI's posts and post search", async () => {
+    const db = await fresh();
+    const x = fakeX();
+
+    // The Worker's follower refresh: 30 accounts, $0.30.
+    const followers = await asProcess(
+      db,
+      x,
+      FollowerSource.use(
+        (source) => source.readByIds?.(range(1, 30)) ?? Effect.die("no batch"),
+      ),
+      FollowerSource.xApi,
+    );
+    expect(Exit.isSuccess(followers)).toBe(true);
+
+    // The CLI's `people posts`: ten posts by user 1, whom the Worker read
+    // today, so only the posts are billed: $0.35.
+    const posts = await asProcess(
+      db,
+      x,
+      XPostsSource.use((source) => source.posts(range(101, 110))),
+      XPostsSource.xApi(),
+    );
+    expect(Exit.isSuccess(posts)).toBe(true);
+
+    // The Worker's community snapshot: our account, $0.36.
+    const community = await asProcess(
+      db,
+      x,
+      CommunitySources.use((sources) => sources.read("x")),
+      CommunitySources.live,
+    );
+    expect(Exit.isSuccess(community)).toBe(true);
+
+    // The CLI's `posts find`: a search could bill $0.375 more, past $0.50.
+    expect(outcome(await asProcess(db, x, search, Layer.empty))).toBe(
+      "X daily budget spent: $0.36 of $0.50, too little for a read of up to $0.375",
+    );
+
+    expect(x.asked).toEqual([
+      "/2/users",
+      "/2/tweets",
+      `/2/users/${COMMUNITY.xUserId}`,
+    ]);
+    expect(await recorded(db)).toEqual({ post: 10, user: 31 });
+  });
+
+  test("holds a request in flight against the others: two never both take the last of the day", async () => {
+    const db = await fresh();
+    /** What the CLI's lookup met while the Worker's was in flight. */
+    const meanwhile: Array<string> = [];
+    const cli = fakeX();
+    const worker = fakeX({
+      meanwhile: async () => {
+        meanwhile.push(
+          outcome(
+            await Effect.runPromiseExit(
+              lookUp(range(31, 55)).pipe(
+                Effect.provide(budgetOf(db, cli)),
+                Effect.provide(clockAt(midday)),
+              ),
             ),
-            Effect.provide(clockAt(midday)),
           ),
         );
+      },
+    });
+    const sent = await Effect.runPromiseExit(
+      lookUp(range(1, 30)).pipe(
+        Effect.provide(budgetOf(db, worker)),
+        Effect.provide(clockAt(midday)),
+      ),
+    );
+    expect(Exit.isSuccess(sent)).toBe(true);
+    // The Worker's 30 accounts were held, $0.30: $0.25 more didn't fit.
+    expect(meanwhile).toEqual([
+      "X daily budget spent: $0.30 of $0.50, too little for a read of up to $0.25",
+    ]);
+    expect(cli.asked).toEqual([]);
+    expect(await recorded(db)).toEqual({ user: 30 });
+    expect(await open(db)).toEqual([]);
+  });
 
-      // The Worker's follower refresh: 30 accounts, $0.30.
-      const followers = await asProcess(
-        FollowerSource.use(
-          (source) =>
-            source.readByIds?.(range(1, 30)) ?? Effect.die("no batch"),
-        ),
-        FollowerSource.xApi,
-      );
-      expect(Exit.isSuccess(followers)).toBe(true);
-
-      // The CLI's `people posts`: ten posts by user 1, whom the Worker read
-      // today, so only the posts are billed: $0.35.
-      const posts = await asProcess(
-        XPostsSource.use((source) => source.posts(range(101, 110))),
-        XPostsSource.xApi(),
-      );
-      expect(Exit.isSuccess(posts)).toBe(true);
-
-      // The Worker's community snapshot: our account, $0.36.
-      const community = await asProcess(
-        CommunitySources.use((sources) => sources.read("x")),
-        CommunitySources.live,
-      );
-      expect(Exit.isSuccess(community)).toBe(true);
-
-      // The CLI's `posts find`: a search could bill $0.375 more, past $0.50.
-      const search = await asProcess(
-        Effect.gen(function* () {
-          const xSearch = yield* makeXSearch;
-          return yield* xSearch.search(signals);
-        }),
-        Layer.empty,
-      );
-      expect(outcome(search)).toBe(
-        "X daily budget spent: $0.36 of $0.50, too little for a read of up to $0.375",
-      );
-
-      expect(x.asked).toEqual([
-        "/2/users",
-        "/2/tweets",
-        `/2/users/${COMMUNITY.xUserId}`,
-      ]);
-      expect(await recorded(db)).toEqual({ post: 10, user: 31 });
-    },
-  );
+  test("in a dry run asks X nothing and writes nothing: the follower refresh, the post search and people posts", async () => {
+    const db = await fresh();
+    const x = fakeX();
+    const dryRun = XBudget.dryRun.pipe(Layer.provide(sqlLayer(db)));
+    const followers = await asProcess(
+      db,
+      x,
+      FollowerSource.use(
+        (source) => source.readByIds?.(range(1, 3)) ?? Effect.die("no batch"),
+      ),
+      FollowerSource.xApi,
+      dryRun,
+    );
+    // Each id is left unasked, with why.
+    expect(
+      Exit.isSuccess(followers)
+        ? [...followers.value.values()].map((read) =>
+            "reason" in read ? read.reason : "read",
+          )
+        : "failed",
+    ).toEqual([dryRunReason, dryRunReason, dryRunReason]);
+    expect(outcome(await asProcess(db, x, search, Layer.empty, dryRun))).toBe(
+      dryRunReason,
+    );
+    const posts = await asProcess(
+      db,
+      x,
+      XPostsSource.use((source) => source.posts(["101"])),
+      XPostsSource.xApi(),
+      dryRun,
+    );
+    expect(outcome(posts)).toBe(dryRunReason);
+    // A dry run still says what the day has spent.
+    expect(
+      await Effect.runPromise(
+        spent.pipe(Effect.provide(dryRun), Effect.provide(clockAt(midday))),
+      ),
+    ).toBe(0);
+    expect(x.asked).toEqual([]);
+    expect(await recorded(db)).toEqual({});
+    expect(await open(db)).toEqual([]);
+  });
 });
 
 describe("migration 0043's grants", () => {
@@ -533,34 +685,44 @@ describe("migration 0043's grants", () => {
         await db.exec(
           `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '${role}') THEN CREATE ROLE ${role} NOLOGIN; END IF; END $$`,
         );
-        await db.exec(`REVOKE ALL ON public.x_reads FROM ${role}`);
+        await db.exec(
+          `REVOKE ALL ON public.x_reads, public.x_holds FROM ${role}`,
+        );
       }
       const statement = xReads.at(-1) ?? "";
       expect(statement).toContain("DO $grant$");
       await db.exec(statement);
-      /** What `role` holds on x_reads, as `column privilege` lines. */
-      const held = async (role: string) =>
+      /** What `role` holds on `table`, as `column privilege` lines. */
+      const held = async (role: string, table: string) =>
         (
           await db.query<{ grant: string }>(
             `SELECT column_name || ' ' || lower(privilege_type) AS grant
              FROM information_schema.column_privileges
-             WHERE grantee = $1 AND table_schema = 'public' AND table_name = 'x_reads'
+             WHERE grantee = $1 AND table_schema = 'public' AND table_name = $2
              ORDER BY 1`,
-            [role],
+            [role, table],
           )
         ).rows.map(({ grant }) => grant);
-      const listed = SITE_SYNC_GRANTS["x_reads"] ?? {};
-      expect(await held("site_sync")).toEqual(
-        [
-          ...(listed.select ?? []).map((column) => `${column} select`),
-          ...(listed.insert ?? []).map((column) => `${column} insert`),
-        ].toSorted(),
-      );
+      for (const table of ["x_holds", "x_reads"]) {
+        const listed = SITE_SYNC_GRANTS[table] ?? {};
+        expect(await held("site_sync", table)).toEqual(
+          [
+            ...(listed.select ?? []).map((column) => `${column} select`),
+            ...(listed.insert ?? []).map((column) => `${column} insert`),
+            ...(listed.update ?? []).map((column) => `${column} update`),
+          ].toSorted(),
+        );
+        expect(await held("studio", table)).toEqual([]);
+      }
+      expect(STUDIO_GRANTS["public.x_holds"]).toEqual({
+        select: true,
+        insert: ["day", "mills"],
+        update: ["settled"],
+      });
       expect(STUDIO_GRANTS["public.x_reads"]).toEqual({
         select: true,
         insert: ["day", "kind", "id"],
       });
-      expect(await held("studio")).toEqual([]);
     },
   );
 });

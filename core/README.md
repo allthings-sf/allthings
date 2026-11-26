@@ -308,21 +308,39 @@ returns ($0.005) and each user ($0.010), once a UTC day each
 this repository makes of X goes through one budget a day
 (`src/x-budget.ts`): the sync Worker's post search, follower counts and
 community snapshot, and the same from `bun run posts find`, `bun run
-followers` and `bun run community-snapshot`, and `bun run people posts`.
-Before each request, the day's spend and the most its answer can bill must
-fit in `X_DAILY_BUDGET_USD`, $2.00; otherwise X isn't asked, and the step
-says why (`X daily budget spent: $1.80 of $2.00`) until 00:00 UTC, when the
-day starts over. After each answer, its posts and users are recorded in
-`x_reads`, once a day each, as X bills them, so the Worker and the CLI
-spend one budget. A spend that can't be read, or an answer that can't be
-recorded, refuses too: X is never asked while what it cost is unknown. Each
-sync run's summary says the day's spend so far: `X daily budget: $0.42 of
-$2.00 spent (21%)`.
+followers` and `bun run community-snapshot`, and `bun run people posts`,
+all in the database, so the Worker and the CLI spend one budget
+(`migrations/0043_x_reads.ts`):
+
+- Before each request, the most its answer can bill is held for the day
+  (`x_holds`), under a lock, if the day's spend and every other hold leave
+  room for it in `X_DAILY_BUDGET_USD`, $2.00. Otherwise X isn't asked, and
+  the step says why (`X daily budget spent: $1.80 of $2.00`) until 00:00
+  UTC, when the day starts over. Two callers at once never both take the
+  last of it.
+- After each answer, its posts and users are recorded in `x_reads`, once a
+  day each, as X bills them, and the hold is let go. A request unanswered,
+  cut short, or whose answer can't be read or recorded keeps its hold,
+  counted at its most for the rest of the day. A spend that can't be read
+  refuses the request.
+- A dry run asks X nothing, since X bills each read, and writes nothing:
+  `followers --dry-run`, `posts find --dry-run`, `people posts --dry-run`
+  (which still reads what `--cache` holds), and the sync's own.
+
+Each sync run's summary says the day's spend so far: `X daily budget: $0.42
+of $2.00 spent (21%)`. It is an estimate. It errs high where it can (an
+author X returns with a post counts as a user read, which X's pricing
+doesn't settle), but X calls its once-a-day billing of a resource "a soft
+guarantee", so on a day that fails, X's bill can run past it.
 
 The budget is a reviewed constant: raising it is a pull request, and it is
 held from $0.50 up to, not including, $5, so it is never nothing and never
-unbounded. A command that reads X needs a connection that may count and
-record it: site_sync's, or the studio's.
+unbounded. A command that reads X needs a connection that may hold and
+record against it: site_sync's, or the studio's. Once migration 0043 has
+reached production ("Running them", below), run `infra/scripts/studio.ts
+--dry-run`, then `--apply`, as the owner, before `posts find` or `people
+posts` next runs: until then the studio can't read the day's spend, and X
+is refused. site_sync gets its grant with the migration.
 
 ## Speaker order: X followers
 
@@ -356,8 +374,8 @@ account: its id, its count and a lost handle. The post search knows X
 authors by id too.
 
 ```sh
-DATABASE_URL=… bun run followers --dry-run   # read the counts, write nothing
-DATABASE_URL=… bun run followers             # store them
+DATABASE_URL=… bun run followers --dry-run   # write nothing, and ask X nothing (it bills each read)
+DATABASE_URL=… bun run followers             # read the counts and store them
 DATABASE_URL=… bun run followers --stale-days 0 --max 1000   # re-read everyone
 ```
 
@@ -889,7 +907,7 @@ the night itself), and the ones that score at least 5 are added as
 `pending`. Nothing is approved here: an organizer approves or hides each.
 
 ```sh
-DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts find --dry-run   # the last week's evenings, scored, nothing written
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts find --dry-run   # the last week's evenings, scored, nothing written (X isn't asked: it bills each read)
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts find --past   # every evening so far
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts pending   # what waits for review
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts approve <post url>   # show it on its evening's page

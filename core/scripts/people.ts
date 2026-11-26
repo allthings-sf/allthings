@@ -67,7 +67,8 @@ import { shellWord } from "./shell.ts";
  * those read --days or more days ago), drops each one X no longer serves,
  * and writes the file; --dry-run prints what would change. --cache <dir>
  * keeps X's answers for the rest of their UTC day, so a rerun reads (and
- * is billed for) nothing twice.
+ * is billed for) nothing twice. With --dry-run, either asks X nothing the
+ * cache doesn't hold, and writes nothing: --find lists who would be read.
  *
  * photo sets a profile's photo from a local file (src/profile-photo.ts).
  * <profile> is its id, its slug (as /people/<slug> has it) or its exact
@@ -80,8 +81,9 @@ import { shellWord } from "./shell.ts";
  * photo it replaces loses its images row only when nothing else uses it;
  * its object stays in the bucket.
  *
- * DATABASE_URL (the studio's connection string for `photo`, profile_editor's
- * for applying the file: core's README, "Filling in profiles"), MEDIA_UPLOAD_URL
+ * DATABASE_URL (the studio's connection string for `photo` and `posts`,
+ * profile_editor's for applying the file: core's README, "Filling in
+ * profiles"), MEDIA_UPLOAD_URL
  * and MEDIA_UPLOAD_TOKEN (the upload Worker, for --approve) come from the
  * environment only; .env files are not read.
  */
@@ -330,7 +332,7 @@ const posts = Command.make(
     ),
     dryRun: Flag.Boolean("dry-run").pipe(
       Flag.withDescription(
-        "--refresh: print what would change; write nothing.",
+        "Ask X nothing --cache doesn't hold (X bills each read), and write nothing: --find lists who would be read, --refresh prints what would change.",
       ),
       Flag.withDefault(false),
     ),
@@ -353,13 +355,14 @@ const posts = Command.make(
             directory,
             day: today,
             // A dry run keeps nothing, not even in the cache.
-            readOnly: refresh && dryRun,
+            readOnly: dryRun,
           }),
         }),
       ).pipe(
         // X's daily budget, which the sync Worker spends too, kept in the
-        // database: the studio's connection may count and record it.
-        Layer.provide(XBudget.layer),
+        // database: the studio's connection may count and record it. A dry
+        // run's asks X nothing the cache doesn't hold, and writes nothing.
+        Layer.provide(dryRun ? XBudget.dryRun : XBudget.layer),
         Layer.provide(Layer.merge(FetchHttpClient.layer, Database.scriptLayer)),
       );
       if (find) {
