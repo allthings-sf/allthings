@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 import source from "../all-things.tokens.json" with { type: "json" };
-import { expandCustomMedia, length, themeCss } from "../src/css.ts";
+import { expandCustomMedia, length, scaled, themeCss } from "../src/css.ts";
 import { below, contentVw, portrait, sizes } from "../src/layout.ts";
 import {
   dimension,
@@ -100,7 +100,11 @@ describe("the theme's layout", () => {
     )) {
       for (const token of dimensions(tokens, group)) {
         const name = `--at-${group.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}-${token.name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}: `;
-        expect(css.split(name)).toHaveLength(2);
+        // Text sizes under display's 36px, and lengths that hold text, grow
+        // on a 1x display, and are declared there too.
+        expect(css.split(name)).toHaveLength(
+          (group === "fontSize" && token.px < 36) || token.withType ? 3 : 2,
+        );
       }
     }
     expect(css).toContain("--at-layout-margin: clamp(16px, 4.5vw, 64px);");
@@ -237,8 +241,9 @@ interface Display {
   /** The physical size of one CSS pixel, and the distance it's read from. */
   readonly mmPerPx: number;
   readonly distanceMm: number;
-  /** A window on it, in CSS pixels wide. */
+  /** A window on it, in CSS pixels wide, and its device pixel ratio. */
   readonly width: number;
+  readonly dpr: number;
 }
 
 /** The visual angle, in degrees, that `px` CSS pixels make on `display`. */
@@ -248,16 +253,42 @@ const degrees = (px: number, { mmPerPx, distanceMm }: Display) =>
 /**
  * The displays a web page is read on, as the accessibility framework's
  * catalog declares them: the CSS reference pixel (1/96 inch at 28 inches),
- * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; and each
- * desktop with a narrow window, which is read from as far away.
+ * a 14-inch laptop at 2x from 50 cm and a phone at 3x from 30 cm; a 49-inch
+ * 5120x1440 ultrawide at 1x from 70 cm, whose pixel looks smallest of all;
+ * and each desktop with a narrow window, which is read from as far away.
  */
 const displays = {
-  reference: { mmPerPx: 0.2646, distanceMm: 711, width: 1280 },
-  referenceNarrow: { mmPerPx: 0.2646, distanceMm: 711, width: 600 },
-  laptop2x: { mmPerPx: 0.2, distanceMm: 500, width: 1512 },
-  laptop2xNarrow: { mmPerPx: 0.2, distanceMm: 500, width: 800 },
-  phone3x: { mmPerPx: 0.1657, distanceMm: 300, width: 390 },
+  reference: { mmPerPx: 0.2646, distanceMm: 711, width: 1280, dpr: 1 },
+  referenceNarrow: { mmPerPx: 0.2646, distanceMm: 711, width: 600, dpr: 1 },
+  laptop2x: { mmPerPx: 0.2, distanceMm: 500, width: 1512, dpr: 2 },
+  laptop2xNarrow: { mmPerPx: 0.2, distanceMm: 500, width: 800, dpr: 2 },
+  phone3x: { mmPerPx: 0.1657, distanceMm: 300, width: 390, dpr: 3 },
+  ultrawide1x: { mmPerPx: 0.2341, distanceMm: 700, width: 2515, dpr: 1 },
+  ultrawide1xNarrow: { mmPerPx: 0.2341, distanceMm: 700, width: 900, dpr: 1 },
 } as const satisfies Record<string, Display>;
+
+/** How much larger text people read is on a 1x display (css.ts, `desktop1x`). */
+const factor = tokens.$extensions["dev.allthings"].desktop1x;
+
+/** The display size, from which headlines and marks don't grow on a 1x display. */
+const displaySize = dimension(tokens, "fontSize", "display").px;
+
+/**
+ * A size on `display`, as css.ts writes it: `factor` larger on a 1x
+ * display, whatever its window, if it's text people read (under the
+ * display size), else the token's own.
+ */
+function sizeOn(
+  largest: number,
+  fluid: Fluid | undefined,
+  display: Display,
+): number | null {
+  const at =
+    display.dpr < 1.5 && largest < displaySize
+      ? scaled({ px: largest, fluid }, factor)
+      : { px: largest, fluid };
+  return sizeAt(at.px, at.fluid, display.width);
+}
 
 describe("reading sizes, at the accessibility framework's excellent bar", () => {
   // Legibility runs by x-height, as the angle it makes at the eye. ISO
@@ -321,7 +352,7 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
     (_, display) => {
       const short = readers.flatMap(([name, size, fluid, xHeight, bar]) => {
         const angle = degrees(
-          (sizeAt(size, fluid, display.width) ?? 0) * xHeight,
+          (sizeOn(size, fluid, display) ?? 0) * xHeight,
           display,
         );
         return angle >= bar ? [] : [[name, Number(angle.toFixed(3)), bar]];
@@ -338,16 +369,55 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
     }
   });
 
-  test("keep a simple date inside the date column", () => {
+  test("keep a simple date inside the date column, on a 1x display too", () => {
+    const column = dimension(tokens, "size", "dateColumn");
+    expect(column.withType).toBe(true);
     // 2026.09.30 in meta is 6.6 em with its tracking.
-    const date = 10 * (0.6 + 0.06) * role("meta").size;
-    expect(dimension(tokens, "size", "dateColumn").px).toBeGreaterThan(date);
+    const date = (size: number) => 10 * (0.6 + 0.06) * size;
+    for (const display of [displays.laptop2x, displays.ultrawide1x]) {
+      // A length that holds text grows on a 1x display, whatever its size.
+      const width = display.dpr < 1.5 ? scaled(column, factor).px : column.px;
+      const meta = sizeOn(role("meta").size, role("meta").fluid, display) ?? 0;
+      expect(width).toBeGreaterThan(date(meta));
+    }
+  });
+
+  test("set body at 25px and meta at 20px on a 1x display, and keep the scale's order", () => {
+    const on = (name: string) =>
+      sizeOn(role(name).size, role(name).fluid, displays.ultrawide1x) ?? 0;
+    expect(on("body")).toBe(25);
+    expect(on("meta")).toBe(20);
+    expect(on("listName")).toBeGreaterThan(on("meta"));
+    expect(on("lead")).toBeGreaterThan(on("body"));
+    expect(on("label")).toBeGreaterThan(on("lead"));
+    // Headlines and marks, from the display size up, stay as they are.
+    expect(on("eventLockup")).toBe(
+      sizeAt(role("eventLockup").size, role("eventLockup").fluid, 2515) ?? -1,
+    );
+    expect(factor).toBeCloseTo(25 / 22, 3);
+  });
+
+  test("write the 1x sizes in one media query on :root, by resolution alone", () => {
+    const css = themeCss(tokens);
+    const query = "@media (max-resolution: 1.49dppx) {";
+    const block = css.slice(css.indexOf(query));
+    expect(block).toStartWith(`${query}\n  :root {\n`);
+    for (const line of [
+      "--at-type-body-size: 25px;",
+      "--at-type-meta-size: 20px;",
+      "--at-type-list-name-size: 24px;",
+      "--at-size-date-column: 150px;",
+    ]) {
+      expect(block.slice(0, block.indexOf("\n}\n"))).toContain(line);
+    }
+    expect(css.split("max-resolution")).toHaveLength(2);
   });
 
   test("find text under its bar", () => {
     // As the site had them: 18px body and 14px meta made 0.19 and 0.16
     // degrees at the reference pixel, and 18px body narrowed with the
-    // window would be under body's bar on a laptop in an 800px window.
+    // window would be under body's bar on a laptop in an 800px window; and
+    // 22px body is 0.22 degrees on a 1x ultrawide.
     expect(degrees(18 * role("body").xHeight, displays.reference)).toBeLessThan(
       bars.body,
     );
@@ -357,6 +427,13 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
     expect(
       degrees(18 * role("body").xHeight, displays.laptop2xNarrow),
     ).toBeLessThan(bars.body);
+    expect(
+      degrees(22 * role("body").xHeight, displays.ultrawide1x),
+    ).toBeLessThan(bars.body);
+    expect(scaled({ px: 72, fluid: { viewport: 12 } }, 1.5)).toEqual({
+      px: 108,
+      fluid: { viewport: 18 },
+    });
     const fluid = { min: { value: 18, unit: "px" }, viewport: 2.2 } as const;
     expect(sizeAt(22, fluid, 800)).toBe(18);
     expect(sizeAt(72, { viewport: 12 }, 320)).toBe(38.4);

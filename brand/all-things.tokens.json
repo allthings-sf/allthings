@@ -623,7 +623,12 @@
         "value": 132,
         "unit": "px"
       },
-      "$description": "The date column of a list of evenings or talks: a simple date, 2026.09.30, in the meta role, with room to spare."
+      "$description": "The date column of a list of evenings or talks: a simple date, 2026.09.30, in the meta role, with room to spare.",
+      "$extensions": {
+        "dev.allthings": {
+          "withType": true
+        }
+      }
     },
     "tileS": {
       "$value": {
@@ -956,6 +961,7 @@
     "dev.allthings": {
       "gridColumns": 12,
       "ledgerColumns": 3,
+      "desktop1x": 1.1364,
       "contrast": [
         {
           "text": "{color.ink}",

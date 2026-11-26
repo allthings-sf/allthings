@@ -53,6 +53,42 @@ export function length({ px, fluid }: Pick<Dimension, "px" | "fluid">): string {
 }
 
 /**
+ * A display at 1x: a device pixel ratio under 1.5, where a CSS pixel is a
+ * whole device pixel and physically small on today's desktop monitors, so
+ * text needs more of them to look as big as it does at the reference pixel
+ * or on a 2x laptop. There text people read (below the display size) and
+ * every length that holds it is the tokens' `desktop1x` larger. It only
+ * ever enlarges, so it asks nothing about the window or the pointer: a
+ * screen it catches that needed less still gets enough.
+ */
+export const desktop1x = "(max-resolution: 1.49dppx)";
+
+/**
+ * A length `factor` larger: its size and floor to the whole pixel, its
+ * share of the screen or container to the hundredth.
+ */
+export function scaled(
+  { px, fluid }: Pick<Dimension, "px" | "fluid">,
+  factor: number,
+): Pick<Dimension, "px" | "fluid"> {
+  const share = (value: number) => Math.round(value * factor * 100) / 100;
+  const whole = (value: number) => Math.round(value * factor);
+  if (fluid === undefined) return { px: whole(px), fluid };
+  if ("container" in fluid) {
+    return { px: whole(px), fluid: { container: share(fluid.container) } };
+  }
+  return {
+    px: whole(px),
+    fluid: {
+      ...(fluid.min === undefined
+        ? {}
+        : { min: { value: whole(fluid.min.value), unit: "px" as const } }),
+      viewport: share(fluid.viewport),
+    },
+  };
+}
+
+/**
  * The media condition that holds below a breakpoint `px` wide. Written as
  * `max-width` a fiftieth of a pixel short of it rather than as `width <`,
  * which Bun's minifier lowers to a `max-width` that can round up to the
@@ -150,6 +186,46 @@ export function themeCss(file: TokenFile, textures: Textures = {}): string {
     ),
     `--at-cursor-blink: ${file.motion.cursorBlink.$value.value}ms;`,
   ]);
+  // What grows on a 1x desktop display: the text people read, and the
+  // lengths that hold it. Headlines and marks, from the display size up, are
+  // far past any reading bar already and sized to fit the grid, which
+  // doesn't grow, so they stay.
+  const factor = extension.desktop1x;
+  const display = dimensions(file, "fontSize").find(
+    (token) => token.name === "display",
+  )?.px;
+  if (display === undefined) throw new Error("No display font size");
+  const larger = [
+    ...typeRoles(file)
+      .filter((role) => role.size < display)
+      .map(
+        (role) =>
+          `--at-type-${kebab(role.name)}-size: ${length(scaled({ px: role.size, fluid: role.fluid }, factor))};`,
+      ),
+    ...dimensionGroups.flatMap((group) =>
+      dimensions(file, group)
+        .filter((token) =>
+          group === "fontSize" ? token.px < display : token.withType,
+        )
+        .map(
+          (token) =>
+            `--at-${kebab(group)}-${kebab(token.name)}: ${length(scaled(token, factor))};`,
+        ),
+    ),
+  ];
+  const onDesktop1x =
+    larger.length === 0
+      ? []
+      : [
+          [
+            `@media ${desktop1x} {`,
+            block(":root", larger)
+              .split("\n")
+              .map((line) => `  ${line}`)
+              .join("\n"),
+            "}",
+          ].join("\n"),
+        ];
   // Media queries can't read custom properties, so breakpoints are custom
   // media queries, which the build expands (expandCustomMedia).
   const breakpoints = dimensions(file, "breakpoint").map(
@@ -208,6 +284,7 @@ export function themeCss(file: TokenFile, textures: Textures = {}): string {
     [
       breakpoints.join("\n"),
       root,
+      ...onDesktop1x,
       ...themes,
       ...type,
       ...swatches,
