@@ -78,6 +78,86 @@ test("site.css and lab.css are read declaration by declaration", () => {
   expect(declarationsOf(lab).length).toBeGreaterThan(100);
 });
 
+/** A stylesheet's rules: each one's selectors, and its last line-height, the one CSS applies. */
+const leadingOf = (css: string) =>
+  [
+    ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+  ].map(([, selector = "", body = ""]) => ({
+    selectors: selector.split(",").map((part) => part.trim()),
+    lineHeight: declarationsOf(`{${body}`)
+      .findLast(({ property }) => property === "line-height")
+      ?.value.trim(),
+  }));
+
+/** The element a selector styles: its last compound, after any combinator. */
+const subjectOf = (selector: string) =>
+  selector
+    .trim()
+    .split(/\s*[>+~]\s*|\s+/)
+    .filter(Boolean)
+    .at(-1) ?? "";
+
+/** The selectors in `css` that set a line height on an element of `className`. */
+const settingLeadingOn = (css: string, className: string) => {
+  const ofClass = new RegExp(`\\.${className}(?![\\w-])`);
+  return leadingOf(css).flatMap(({ selectors, lineHeight }) =>
+    lineHeight === undefined
+      ? []
+      : selectors.filter((selector) => ofClass.test(subjectOf(selector))),
+  );
+};
+
+test("site.css gives wrapped headings, buttons and talk rows room between lines", () => {
+  // The accessibility framework's excellent bar: headings 1.1 to 1.3, body
+  // 1.5 to 1.75. A talk's title, evening and parts run to two or three lines
+  // and read as running text, so no rule styling them, their row or its list
+  // sets a line height: they take the body's 1.55.
+  const rules = leadingOf(site);
+  const lineHeightOf = (selector: string) =>
+    rules
+      .filter(
+        ({ selectors, lineHeight }) =>
+          selectors.includes(selector) && lineHeight !== undefined,
+      )
+      .map(({ lineHeight }) => Number(lineHeight));
+  expect(lineHeightOf("body")).toEqual([1.55]);
+  for (const heading of [
+    ".prose h2",
+    ".organizers .person-name",
+    ".person-page-name",
+  ]) {
+    const values = lineHeightOf(heading);
+    expect([heading, values.length > 0]).toEqual([heading, true]);
+    for (const value of values) {
+      expect([heading, value >= 1.1 && value <= 1.3]).toEqual([heading, true]);
+    }
+  }
+  const button = lineHeightOf(".button");
+  expect(button.length).toBeGreaterThan(0);
+  expect(button.every((value) => value >= 1.2)).toBe(true);
+  for (const row of [
+    "talks",
+    "talk",
+    "talk-title",
+    "talk-evening",
+    "talk-parts",
+  ]) {
+    expect([row, settingLeadingOn(site, row)]).toEqual([row, []]);
+  }
+});
+
+test("finds a rule that sets a talk row's leading however it's selected", () => {
+  const css = `.talks > .talk { line-height: 1; }
+li a.talk:hover .talk-title { color: red; line-height: 1.55; line-height: 1.2; }
+.talk-titles { line-height: 1; }
+.talk .date { line-height: 1; }`;
+  expect(settingLeadingOn(css, "talk")).toEqual([".talks > .talk"]);
+  expect(settingLeadingOn(css, "talk-title")).toEqual([
+    "li a.talk:hover .talk-title",
+  ]);
+  expect(leadingOf(css)[1]?.lineHeight).toBe("1.2");
+});
+
 describe.each(stylesheets)("%s", (sheet, css) => {
   const declarations = declarationsOf(css);
 
