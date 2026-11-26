@@ -59,7 +59,7 @@ export function length({ px, fluid }: Pick<Dimension, "px" | "fluid">): string {
  * or on a 2x laptop. There text people read (below the display size) and
  * every length that holds it is the tokens' `desktop1x` larger.
  */
-export const desktop1x = "(max-resolution: 1.49dppx) and (min-width: 62.5rem)";
+export const desktop1x = "(max-resolution: 1.49dppx) and (min-width: 1000px)";
 
 /**
  * A length `factor` larger: its size and floor to the whole pixel, its

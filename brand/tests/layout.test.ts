@@ -348,7 +348,7 @@ describe("reading sizes, at the accessibility framework's excellent bar", () => 
     const css = themeCss(tokens);
     const block = css.slice(css.indexOf("@media (max-resolution"));
     expect(block).toStartWith(
-      "@media (max-resolution: 1.49dppx) and (min-width: 62.5rem) {\n  :root {\n",
+      "@media (max-resolution: 1.49dppx) and (min-width: 1000px) {\n  :root {\n",
     );
     for (const line of [
       "--at-type-body-size: clamp(20px, 2.5vw, 25px);",
