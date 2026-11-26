@@ -530,22 +530,29 @@ describe("every caller of X", () => {
   });
 
   /**
-   * `effect` as one process runs it, over `x`, with a budget (`budget`, a
-   * live one by default) of its own over the shared database `db`.
+   * `effect` as one process runs it, over `x`, with a budget of its own
+   * (`budgetFor`, a live one by default) over the shared database `db`,
+   * through one connection: the studio's, in its run.
    */
   const asProcess = <A, E, R>(
     db: PGlite,
     x: ReturnType<typeof fakeX>,
     effect: Effect.Effect<A, E, R | XBudget>,
     layer: Layer.Layer<R, unknown, XBudget | HttpClient.HttpClient | SqlClient>,
-    budget: Layer.Layer<XBudget, unknown> = budgetOf(db, x),
-  ) =>
-    Effect.runPromiseExit(
+    budgetFor: (
+      sql: Layer.Layer<SqlClient, unknown>,
+    ) => Layer.Layer<XBudget, unknown> = (sql) =>
+      XBudget.make(xBudgetBounds.min).pipe(
+        Layer.provide(Layer.mergeAll(x.layer, sql)),
+      ),
+  ) => {
+    const sql = sqlLayer(db);
+    return Effect.runPromiseExit(
       effect.pipe(
         Effect.provide(
           layer.pipe(
-            Layer.provideMerge(budget),
-            Layer.provide(Layer.mergeAll(x.layer, sqlLayer(db))),
+            Layer.provideMerge(budgetFor(sql)),
+            Layer.provide(Layer.mergeAll(x.layer, sql)),
             // The token, for the layer and for a search the effect makes.
             Layer.provideMerge(config),
           ),
@@ -553,6 +560,11 @@ describe("every caller of X", () => {
         Effect.provide(clockAt(midday)),
       ),
     );
+  };
+
+  /** A dry run's budget over `sql`. */
+  const dryRun = (sql: Layer.Layer<SqlClient, unknown>) =>
+    XBudget.dryRun.pipe(Layer.provide(sql));
 
   test("spends one count: the Worker's followers and community, the CLI's posts and post search", async () => {
     const db = await fresh();
@@ -601,45 +613,49 @@ describe("every caller of X", () => {
     expect(await recorded(db)).toEqual({ post: 10, user: 31 });
   });
 
-  test("holds a request in flight against the others: two never both take the last of the day", async () => {
-    const db = await fresh();
-    /** What the CLI's lookup met while the Worker's was in flight. */
-    const meanwhile: Array<string> = [];
-    const cli = fakeX();
-    const worker = fakeX({
-      meanwhile: async () => {
-        meanwhile.push(
-          outcome(
-            await Effect.runPromiseExit(
-              lookUp(range(31, 55)).pipe(
-                Effect.provide(budgetOf(db, cli)),
-                Effect.provide(clockAt(midday)),
+  // Two processes on one PGlite connection: the studio's run, which makes its
+  // role on each connection it opens, can't nest one in the other.
+  test.skipIf(studioRun)(
+    "holds a request in flight against the others: two never both take the last of the day",
+    async () => {
+      const db = await fresh();
+      /** What the CLI's lookup met while the Worker's was in flight. */
+      const meanwhile: Array<string> = [];
+      const cli = fakeX();
+      const worker = fakeX({
+        meanwhile: async () => {
+          meanwhile.push(
+            outcome(
+              await Effect.runPromiseExit(
+                lookUp(range(31, 55)).pipe(
+                  Effect.provide(budgetOf(db, cli)),
+                  Effect.provide(clockAt(midday)),
+                ),
               ),
             ),
-          ),
-        );
-      },
-    });
-    const sent = await Effect.runPromiseExit(
-      lookUp(range(1, 30)).pipe(
-        Effect.provide(budgetOf(db, worker)),
-        Effect.provide(clockAt(midday)),
-      ),
-    );
-    expect(Exit.isSuccess(sent)).toBe(true);
-    // The Worker's 30 accounts were held, $0.30: $0.25 more didn't fit.
-    expect(meanwhile).toEqual([
-      "X daily budget spent: $0.30 of $0.50, too little for a read of up to $0.25",
-    ]);
-    expect(cli.asked).toEqual([]);
-    expect(await recorded(db)).toEqual({ user: 30 });
-    expect(await open(db)).toEqual([]);
-  });
+          );
+        },
+      });
+      const sent = await Effect.runPromiseExit(
+        lookUp(range(1, 30)).pipe(
+          Effect.provide(budgetOf(db, worker)),
+          Effect.provide(clockAt(midday)),
+        ),
+      );
+      expect(Exit.isSuccess(sent)).toBe(true);
+      // The Worker's 30 accounts were held, $0.30: $0.25 more didn't fit.
+      expect(meanwhile).toEqual([
+        "X daily budget spent: $0.30 of $0.50, too little for a read of up to $0.25",
+      ]);
+      expect(cli.asked).toEqual([]);
+      expect(await recorded(db)).toEqual({ user: 30 });
+      expect(await open(db)).toEqual([]);
+    },
+  );
 
   test("in a dry run asks X nothing and writes nothing: the follower refresh, the post search and people posts", async () => {
     const db = await fresh();
     const x = fakeX();
-    const dryRun = XBudget.dryRun.pipe(Layer.provide(sqlLayer(db)));
     const followers = await asProcess(
       db,
       x,
@@ -671,7 +687,10 @@ describe("every caller of X", () => {
     // A dry run still says what the day has spent.
     expect(
       await Effect.runPromise(
-        spent.pipe(Effect.provide(dryRun), Effect.provide(clockAt(midday))),
+        spent.pipe(
+          Effect.provide(dryRun(sqlLayer(db))),
+          Effect.provide(clockAt(midday)),
+        ),
       ),
     ).toBe(0);
     expect(x.asked).toEqual([]);
