@@ -535,10 +535,10 @@ main > section,
 
 /* A date is set a hair tighter than the meta role, on one line where its
    cut is wide enough, else breaking after its year (CutDate in
-   pages/slash-grid.tsx): never past its cut, where the grid clips it. */
+   pages/slash-grid.tsx), at meta's line height: never past its cut, where
+   the grid clips it. */
 .cut-date {
   letter-spacing: -0.02em;
-  line-height: 1.2;
 }
 
 .slash-grid-dated a:hover .cut-date,
