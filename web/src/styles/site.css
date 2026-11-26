@@ -689,7 +689,6 @@ main > section,
 .row .shared {
   display: block;
   margin-top: var(--at-space-1);
-  font-weight: 400;
   text-decoration: none;
 }
 
@@ -978,16 +977,18 @@ main > section,
   grid-area: date;
 }
 
+/* A talk's title, evening and parts run to 60 characters and more, and are
+   read as running text, so they're set at body size. */
 .talk-title {
   grid-area: title;
-  font-size: var(--at-font-size-small);
+  font-size: var(--at-type-body-size);
   font-weight: 600;
   line-height: 1.35;
 }
 
 .talk-evening {
   grid-area: evening;
-  font-size: var(--at-font-size-small);
+  font-size: var(--at-type-body-size);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -995,7 +996,7 @@ main > section,
 /* Every part a person had in the evening, after it: "talk: State of Effect 2026 · MC". */
 .talk-parts {
   grid-area: evening;
-  font-size: var(--at-font-size-small);
+  font-size: var(--at-type-body-size);
   line-height: 1.35;
 }
 
