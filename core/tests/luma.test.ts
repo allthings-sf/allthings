@@ -619,7 +619,8 @@ describe("rehearsing a sync", () => {
           `SELECT luma_event_id, jsonb_build_object(
              'name', name, 'startDate', start_date, 'endDate', end_date,
              'isDraft', is_draft, 'streetAddress', street_address,
-             'shortLocation', short_location, 'fullAddress', full_address) AS fields
+             'shortLocation', short_location, 'fullAddress', full_address,
+             'venueGuestsOnly', venue_guests_only) AS fields
            FROM events WHERE luma_event_id IS NOT NULL`,
         )
       ).rows.map((row) => [row.luma_event_id, row.fields]),

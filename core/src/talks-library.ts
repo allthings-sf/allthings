@@ -127,7 +127,7 @@ const make = Effect.gen(function* () {
     Result: LibraryRow,
     execute: (now) => sql`
       SELECT
-        ${sql.literal(listingJson)} AS listing,
+        ${listingJson(sql, now)} AS listing,
         e.recording_url AS "recordingUrl",
         ${talksOf(sql, "e", {
           talk: sql`'id', t.id, 'title', t.title, 'format', t.format,
