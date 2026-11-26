@@ -131,6 +131,8 @@ const ownTime: Readonly<Record<string, string>> = {
   "core/src/social/announce-x.ts": "announcing on X",
   "core/src/social/announce.ts": "announcing",
   "core/src/social/sent-posts.ts": "recording what was posted",
+  "web/src/client/mcp-app/format.ts":
+    "the MCP App view, in the agent host's browser: today's date in San Francisco",
   "web/src/images/kept.ts": "timing image variants read from the bucket",
   "web/src/metrics.ts": "timing each request's data point",
   "web/src/images/route.ts": "timing image variants",
