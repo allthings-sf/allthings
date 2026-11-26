@@ -111,10 +111,14 @@ const fakeX = (
     HttpClient.make((request) =>
       Effect.promise(async () => {
         const url = new URL(request.url);
+        // The ids as a parameter (`setUrlParam`) or in the URL itself, as
+        // `people posts` writes them.
         const ids = (
           new URLSearchParams(UrlParams.toString(request.urlParams)).get(
             "ids",
-          ) ?? ""
+          ) ??
+          url.searchParams.get("ids") ??
+          ""
         )
           .split(",")
           .filter((id) => id !== "");
