@@ -67,16 +67,16 @@ Derive new ones from the venue's address, and prefer the local name over the off
 
 ## Color
 
-Contrast is designed with APCA, the perceptual model being explored for WCAG 3, and every pairing must also pass WCAG 2.2 AA, which remains the standard: 4.5:1 for text and 3:1 for large text. APCA is the stricter guide in practice. WCAG 2 passes black on Glow at 6.6:1, yet it reads badly at text sizes; APCA rates it Lc 49.5, fit for headlines only. APCA targets: **Lc 90** preferred for body text, **Lc 75** minimum for small text, **Lc 60** at 24px and up, **Lc 45** for headlines and marks. The design-token tests check both.
+Contrast is designed with APCA, the perceptual model being explored for WCAG 3, and every pairing must also pass WCAG 2.2 AA, which remains the standard: 4.5:1 for text and 3:1 for large text. Text people read goes further, to WCAG's enhanced contrast (AAA): 7:1 for text, and 4.5:1 for text set only large (24px, or 18.66px and bold), in both modes. Dates, meta, links and small orange text on Paper were deepened to reach it in November 2026 (Karl text from #5E5A55 at 6.1:1, Violet from #5B34D6 at 6.4:1, Bridge Deep from #9A2B22 at 6.8:1), each keeping its hue. APCA is the stricter guide in practice. WCAG 2 passes black on Glow at 6.6:1, yet it reads badly at text sizes; APCA rates it Lc 49.5, fit for headlines only. APCA targets: **Lc 90** preferred for body text, **Lc 75** minimum for small text, **Lc 60** at 24px and up, **Lc 45** for headlines and marks. The design-token tests check both.
 
 | Token | Hex | On Paper | On Night | Use |
 | --- | --- | --- | --- | --- |
 | Paper | #F4F1EC | — | Lc 97.6 · 15.5:1 | Light ground; text on Night |
 | Ink | #141210 | Lc 97.1 · 16.6:1 | — | Text on Paper |
 | Bridge | #C0362C | Lc 68.1 · 4.9:1 | — | The slash; text only at 24px+ |
-| Bridge Deep | #9A2B22 | Lc 77.3 · 6.8:1 | — | Small orange text; Paper buttons |
-| Violet | #5B34D6 | Lc 75.9 · 6.4:1 | — | Neighborhoods and links on Paper |
-| Karl text | #5E5A55 | Lc 75.5 · 6.1:1 | — | Dates and meta on Paper |
+| Bridge Deep | #95261E | Lc 78.8 · 7.2:1 | — | Small orange text; Paper buttons |
+| Violet | #5529CD | Lc 78.7 · 7.2:1 | — | Neighborhoods and links on Paper |
+| Karl text | #534F4A | Lc 80.0 · 7.2:1 | — | Dates and meta on Paper |
 | Karl | #E6E2DC | — | — | Quiet surfaces on Paper (named for the fog) |
 | Night | #1B1729 | — | — | Dark ground |
 | Night raised | #242033 | — | — | Surfaces on Night |
@@ -85,7 +85,7 @@ Contrast is designed with APCA, the perceptual model being explored for WCAG 3, 
 | Lavender | #DACFFF | — | Lc 80.0 · 11.9:1 | Neighborhoods and links on Night |
 | Glow | #FF6A3D | — | Lc 46.8 · 6.1:1 | The slash and display at 36px+ only |
 
-Buttons: white on Bridge Deep (Lc 90.3, 7.7:1) on Paper, and white on Bridge (Lc 81.7, 5.5:1) on Night. Violet fills take white text (Lc 89.0, 7.2:1).
+Buttons: white on Bridge Deep (Lc 91.7, 8.2:1) on Paper, and white on Bridge (Lc 81.7, 5.5:1) on Night. A button's label is always large text, 21px and heavy, so Night's clears WCAG's enhanced bar for large text (4.5:1); web/tests/styles.test.ts holds every button on the site's pages and in the MCP App view to that size. Violet fills take white text (Lc 91.7, 8.1:1).
 
 **Night is muted and grained.** A large, saturated dark ground tires the eyes and makes light text seem to glow, which readability scores don't measure. So Night keeps its violet hue at low chroma (OKLCH 0.22 / 0.035 / 293), and carries a fine, fixed grain ([`texture/grain.svg`](texture/grain.svg)) that gives it Paper's printed feel. Paper has no texture.
 
