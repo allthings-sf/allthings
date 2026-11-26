@@ -120,7 +120,7 @@ Sizes are the largest. The wordmark, event lockup, label, lead and statement shr
   - The page: at most 1440px wide, with a margin of 4.5% of the screen, from 16px on phones to 64px.
   - The grid: 12 columns with 24px gutters. In a ledger, each fact's label takes 3 columns and the fact the other 9.
   - Spacing on a 4px scale, three rule weights (1, 2 and 3px), portrait and tile sizes, and the breakpoints (480, 600, 768 and 1024px).
-  - Reading measures: 68 characters to a line of reading copy, 36 to a lead.
+  - Reading measures: 54ch to a line of reading copy, which holds about 68 characters of Archivo, and 36ch to a lead. A ch is the width of a zero, wider than the average letter, so a measure in ch holds about a quarter more characters than its number: 68ch ran 84 to 90.
 - The site's stylesheet writes no length of its own but a 1px hairline, and em where a length follows the type (tracking, an underline's offset, inline code's size): no inline styles, no magic widths, no breakpoint of a page's own. A test fails the build on any other.
 - Reading copy keeps its measure and gives the rest of the row to what sits beside it. Speakers on a stage share the row rather than squeezing into narrow fixed columns.
 - A lineup is as dense as its evening is long (web/src/pages/lineup.ts). Up to 3 talks, each speaker gets a full card: portrait, title, links and bio. Up to 6, each talk shows its people as rows of portrait, role, name and title, and bios stay on /people. Beyond 6, as in a lightning round, one compact row per talk, with its description behind a disclosure. A panel or fireside chat always shows its people as rows; moderators and guests keep their role.

@@ -341,7 +341,7 @@ main > section,
   font-stretch: 112%;
   text-indent: var(--at-type-event-lockup-inset);
   letter-spacing: -0.03em;
-  line-height: 1;
+  line-height: 1.1;
 }
 
 .intro {
@@ -438,7 +438,7 @@ main > section,
   color: var(--at-button-text);
   font-size: var(--at-type-list-name-size);
   font-weight: 800;
-  line-height: 1;
+  line-height: 1.2;
   text-decoration: none;
 }
 
@@ -896,7 +896,7 @@ main > section,
   font-stretch: 112%;
   text-indent: var(--at-type-event-lockup-inset);
   letter-spacing: -0.03em;
-  line-height: 1;
+  line-height: 1.1;
 }
 
 .person-bio {
@@ -943,7 +943,7 @@ main > section,
   font-stretch: 112%;
   text-indent: var(--at-type-event-lockup-inset);
   letter-spacing: -0.03em;
-  line-height: 1;
+  line-height: 1.1;
 }
 
 .person-page-bio {
@@ -982,25 +982,24 @@ main > section,
   grid-area: date;
 }
 
+/* A talk's title, evening and parts take the body's line height: they run
+   to two or three lines on narrow screens, and read as running text. */
 .talk-title {
   grid-area: title;
   font-size: var(--at-font-size-small);
   font-weight: 600;
-  line-height: 1.35;
 }
 
 .talk-evening {
   grid-area: evening;
   font-size: var(--at-font-size-small);
   font-weight: 700;
-  line-height: 1.35;
 }
 
 /* Every part a person had in the evening, after it: "talk: State of Effect 2026 · MC". */
 .talk-parts {
   grid-area: evening;
   font-size: var(--at-font-size-small);
-  line-height: 1.35;
 }
 
 /* A row that is one link (a.talk, as on person pages) underlines its title

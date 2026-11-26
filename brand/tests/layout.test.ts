@@ -102,7 +102,7 @@ describe("the theme's layout", () => {
       }
     }
     expect(css).toContain("--at-layout-margin: clamp(16px, 4.5vw, 64px);");
-    expect(css).toContain("--at-measure-prose: 68ch;");
+    expect(css).toContain("--at-measure-prose: 54ch;");
     expect(css).toContain("--at-ledger-label: 3;");
     expect(css).toContain("--at-ledger-content: 9;");
   });
@@ -194,5 +194,25 @@ describe("optical insets", () => {
       expect(css).toContain(`--at-type-${kebab}-inset: -${role.inset}em;`);
       expect(css).toContain(`text-indent: var(--at-type-${kebab}-inset);`);
     }
+  });
+});
+
+describe("the reading measure", () => {
+  // A ch is the width of a zero, wider than the average letter of running
+  // English in Archivo: measured in Chromium on the site's prose at 2515px
+  // wide, a full line holds 1.24 to 1.32 characters to a ch, so the old
+  // 68ch ran 84 to 90 characters a line.
+  const charactersPerCh = { median: 1.26, widest: 1.32 };
+  const prose = measures(tokens).find(({ name }) => name === "prose");
+
+  test("holds 55 to 75 characters a line of prose, and never more than 80", () => {
+    const characters = prose?.characters ?? 0;
+    expect(characters * charactersPerCh.median).toBeGreaterThanOrEqual(55);
+    expect(characters * charactersPerCh.median).toBeLessThanOrEqual(75);
+    expect(characters * charactersPerCh.widest).toBeLessThanOrEqual(80);
+  });
+
+  test("would have caught the old measure", () => {
+    expect(68 * charactersPerCh.widest).toBeGreaterThan(80);
   });
 });

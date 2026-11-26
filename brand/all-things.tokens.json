@@ -818,8 +818,8 @@
   "measure": {
     "$type": "number",
     "prose": {
-      "$value": 68,
-      "$description": "Characters to a line of reading copy: descriptions, bios, posts and prose."
+      "$value": 54,
+      "$description": "Characters to a line of reading copy (descriptions, bios, posts and prose), in ch: 54ch holds about 68 characters of Archivo, whose letters average narrower than the zero a ch measures."
     },
     "lead": {
       "$value": 36,
