@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import { Context, DateTime, Effect, Exit, Layer, Schema } from "effect";
 import {
   HttpClient,
   type HttpClientError,
@@ -206,6 +206,8 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
         // Once an answer couldn't be recorded, what X has billed is
         // unknown: nothing more is sent from this process.
         let unrecorded: string | undefined;
+        const unrecordedReason =
+          "X daily budget unknown: an answer from X couldn't be recorded, so X isn't asked again in this run";
 
         const spentOn = (day: string) =>
           orDataSourceError(
@@ -256,30 +258,39 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
             }
             const response = yield* client.execute(request);
             if (response.status !== 200) return response;
-            // Read once, to count what X billed; the caller reads its copy.
-            const text = yield* response.text;
-            const { posts, users } = billedIn(parsed(text));
-            const rows = [
-              ...[...posts].map((id) => ({ day, kind: "post", id })),
-              ...[...users].map((id) => ({ day, kind: "user", id })),
-            ];
-            if (rows.length > 0) {
-              yield* orDataSourceError(
-                sql`INSERT INTO x_reads ${sql.insert(rows)} ON CONFLICT DO NOTHING`,
-              ).pipe(
-                Effect.mapError(() => {
-                  unrecorded =
-                    "X daily budget unknown: an answer from X couldn't be recorded, so X isn't asked again in this run";
-                  return new XBudgetRefused({ reason: unrecorded });
+            // X may bill this answer from here on: unless it is recorded
+            // (a body that fails, an insert that fails, or a caller's
+            // timeout cutting either short), nothing more is sent.
+            return yield* Effect.gen(function* () {
+              // Read once, to count what X billed; the caller reads its copy.
+              const text = yield* response.text;
+              const { posts, users } = billedIn(parsed(text));
+              const rows = [
+                ...[...posts].map((id) => ({ day, kind: "post", id })),
+                ...[...users].map((id) => ({ day, kind: "user", id })),
+              ];
+              if (rows.length > 0) {
+                yield* orDataSourceError(
+                  sql`INSERT INTO x_reads ${sql.insert(rows)} ON CONFLICT DO NOTHING`,
+                ).pipe(
+                  Effect.mapError(
+                    () => new XBudgetRefused({ reason: unrecordedReason }),
+                  ),
+                );
+              }
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(text, {
+                  status: response.status,
+                  headers: Object.entries(response.headers),
                 }),
               );
-            }
-            return HttpClientResponse.fromWeb(
-              request,
-              new Response(text, {
-                status: response.status,
-                headers: Object.entries(response.headers),
-              }),
+            }).pipe(
+              Effect.onExit((exit) =>
+                Effect.sync(() => {
+                  if (Exit.isFailure(exit)) unrecorded = unrecordedReason;
+                }),
+              ),
             );
           });
 

@@ -357,6 +357,43 @@ describe("a request to X", () => {
       expect(both).toEqual([why, why]);
       // X answered the first, which may be billed; the second never left.
       expect(y.asked).toEqual(["/2/users"]);
+
+      // A 200 whose body breaks off may be billed too: nothing more is sent.
+      const broken = await fresh();
+      let sent = 0;
+      const cut = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() => {
+            sent++;
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                new ReadableStream({
+                  start: (controller) => controller.error(new Error("cut")),
+                }),
+                { status: 200 },
+              ),
+            );
+          }),
+        ),
+      );
+      const afterCut = await Effect.runPromise(
+        Effect.gen(function* () {
+          const first = yield* Effect.exit(lookUp(["1"]));
+          const second = outcome(yield* Effect.exit(lookUp(["2"])));
+          return { first: Exit.isFailure(first), second };
+        }).pipe(
+          Effect.provide(
+            XBudget.make(0.5).pipe(
+              Layer.provide(Layer.mergeAll(cut, sqlLayer(broken))),
+            ),
+          ),
+          Effect.provide(clockAt(midday)),
+        ),
+      );
+      expect(afterCut).toEqual({ first: true, second: why });
+      expect(sent).toBe(1);
     },
   );
 });
