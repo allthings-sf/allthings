@@ -10,17 +10,19 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClientRequest } from "effect/http";
+import { type XBill, XBudget } from "./x-budget.ts";
 
 /**
  * Posts on X as X's own API gives them, with the app's bearer token
  * (X_BEARER_TOKEN, 1Password's "allthings X app", field "Bearer Token"),
  * for `bun run people posts` (src/x-posts-refresh.ts): someone's own
  * recent posts, to pick their standouts from, and posts by id, to read
- * their counts again. Read only, never written. X bills each post a read
- * returns ($0.005 on pay-per-use, once a UTC day per post), so a cache,
- * when given, keeps every answer in its directory for the day it names (the
- * caller's UTC day, from the Clock).
+ * their counts again. Read only, never written. X bills each post and user
+ * a read returns, once a UTC day each, so every request goes through X's
+ * daily budget (src/x-budget.ts), which the sync Worker spends too, and a
+ * cache, when given, keeps every answer in its directory for the day it
+ * names (the caller's UTC day, from the Clock).
  */
 
 /** A post as read: its id, author, when, its words and its public counts. */
@@ -165,8 +167,9 @@ export class XPostsSource extends Context.Service<
   XPostsSourceShape
 >()("allthings/XPostsSource") {
   /**
-   * X's API with X_BEARER_TOKEN; `cache`, when given, keeps each answer
-   * in its directory for its day (YYYY-MM-DD, UTC). Needs an `HttpClient`.
+   * X's API with X_BEARER_TOKEN, within X's daily budget; `cache`, when
+   * given, keeps each answer in its directory for its day (YYYY-MM-DD,
+   * UTC), and an answer it holds is never asked of X. Needs the `XBudget`.
    */
   static readonly xApi = (cache?: {
     readonly directory: string;
@@ -178,14 +181,16 @@ export class XPostsSource extends Context.Service<
       XPostsSource,
       Effect.gen(function* () {
         const token = yield* Config.Redacted("X_BEARER_TOKEN");
-        const client = yield* HttpClient.HttpClient;
-        const fetchJson = (what: string, url: URL) =>
+        const xBudget = yield* XBudget;
+        /** `url`'s answer, which holds at most `atMost` (X's daily budget refuses it otherwise). */
+        const fetchJson = (what: string, url: URL, atMost: XBill) =>
           Effect.gen(function* () {
-            const response = yield* client.execute(
+            const response = yield* xBudget.execute(
               HttpClientRequest.get(url.toString()).pipe(
                 HttpClientRequest.bearerToken(Redacted.value(token)),
                 HttpClientRequest.acceptJson,
               ),
+              atMost,
             );
             if (response.status !== 200) {
               return yield* new XReadError({
@@ -223,6 +228,9 @@ export class XPostsSource extends Context.Service<
                     retryable: true,
                   }),
                 ),
+              // Spent for today: never tried again.
+              XBudgetRefused: ({ reason }) =>
+                Effect.fail(new XReadError({ what, reason, retryable: false })),
             }),
             Effect.retry({
               schedule: Schedule.exponential(Duration.seconds(2)),
@@ -234,7 +242,12 @@ export class XPostsSource extends Context.Service<
         // Each answer kept for its UTC day: X bills a post read once a day.
         // Only in a directory no other account may write, since an answer
         // read from it is taken as X's: a shared one isn't used at all.
-        const get = <S extends Schema.Top>(what: string, url: URL, schema: S) =>
+        const get = <S extends Schema.Top>(
+          what: string,
+          url: URL,
+          schema: S,
+          atMost: XBill,
+        ) =>
           Effect.gen(function* () {
             const key = createHash("sha256")
               .update(url.toString())
@@ -276,7 +289,7 @@ export class XPostsSource extends Context.Service<
                     ),
                   );
             if (cached !== undefined) return cached;
-            const body = yield* fetchJson(what, url);
+            const body = yield* fetchJson(what, url, atMost);
             const decoded = yield* decode(body).pipe(
               Effect.mapError(
                 () =>
@@ -320,6 +333,7 @@ export class XPostsSource extends Context.Service<
             `@${handle}`,
             api(`users/by/username/${encodeURIComponent(handle)}`),
             User,
+            { users: 1 },
           ).pipe(
             Effect.map(({ data }) => ({ id: data.id, handle: data.username })),
           );
@@ -330,18 +344,21 @@ export class XPostsSource extends Context.Service<
             const followed = new Set<string>();
             let next: string | undefined;
             do {
+              const pageSize = Math.min(100, max - found.length);
               const page = yield* get(
                 `posts of ${userId}`,
                 api(`users/${encodeURIComponent(userId)}/tweets`, {
                   exclude: "retweets,replies",
                   start_time: since,
-                  max_results: String(Math.min(100, max - found.length)),
+                  max_results: String(pageSize),
                   "tweet.fields": tweetFields,
                   expansions: "author_id",
                   "user.fields": "username",
                   ...(next === undefined ? {} : { pagination_token: next }),
                 }),
                 Tweets,
+                // Its posts, and their one author.
+                { posts: pageSize, users: 1 },
               );
               const handles = new Map(
                 (page.includes?.users ?? []).map((user) => [
@@ -379,6 +396,7 @@ export class XPostsSource extends Context.Service<
                   "user.fields": "username",
                 }),
                 Tweets,
+                { posts: chunk.length, users: chunk.length },
               );
               const handles = new Map(
                 (answer.includes?.users ?? []).map((user) => [

@@ -4,6 +4,7 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import * as Database from "../src/database.ts";
 import { FollowerSource, refreshFollowers } from "../src/followers.ts";
+import { XBudget } from "../src/x-budget.ts";
 
 /**
  * Refreshes X follower counts (src/followers.ts) in the Postgres at
@@ -57,14 +58,19 @@ const command = Command.make(
           ...report.renamed.map((line) => `renamed: ${line}`),
           ...report.lost.map((line) => `lost: ${line}`),
           ...report.failed.map((line) => `failed: ${line}`),
+          ...(report.skipped === undefined
+            ? []
+            : [`stopped: ${report.skipped}`]),
           `${report.refreshed.length} read, ${report.renamed.length} renamed, ${report.lost.length} handles lost, ${report.failed.length} failed, ${report.remaining} left for later${dryRun ? " (dry run: nothing written)" : ""}.`,
         ].join("\n"),
       );
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(
-          FollowerSource.fromConfig.pipe(Layer.provide(FetchHttpClient.layer)),
-          Database.scriptLayer,
+        // X's reads go through the daily budget the sync Worker spends too.
+        FollowerSource.fromConfig.pipe(
+          Layer.provide(XBudget.layer),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provideMerge(Database.scriptLayer),
         ),
       ),
     ),

@@ -19,6 +19,7 @@ import {
   findCandidates,
   refreshPosts,
 } from "../src/x-posts-refresh.ts";
+import { XBudget } from "../src/x-budget.ts";
 import { XPostsSource } from "../src/x-posts-source.ts";
 import { encode, placeholder } from "./encode.ts";
 import { mediaOrigin, uploadMedia } from "./media.ts";
@@ -55,11 +56,13 @@ import { shellWord } from "./shell.ts";
  * --posts-days (30) or more days ago: what `posts --refresh` is for.
  *
  * posts reads X with X_BEARER_TOKEN (1Password's "allthings X app",
- * "Bearer Token"; read only). --find prints, as JSON, each person's own
+ * "Bearer Token"; read only), within X's daily budget (src/x-budget.ts),
+ * which it counts and records in DATABASE_URL: the studio's connection.
+ * --find prints, as JSON, each person's own
  * posts of the last --days days, ranked by how they were taken up, for
  * an agent to pick up to three that stand out for building software and
- * write them into the file as `xPosts`; it writes nothing, and reads the
- * profiles' X handles from DATABASE_URL (site_reader's is enough).
+ * write them into the file as `xPosts`; it writes nothing else, and reads
+ * the profiles' X handles from DATABASE_URL.
  * --refresh reads the counts of every post the file holds again (only
  * those read --days or more days ago), drops each one X no longer serves,
  * and writes the file; --dry-run prints what would change. --cache <dir>
@@ -353,7 +356,12 @@ const posts = Command.make(
             readOnly: refresh && dryRun,
           }),
         }),
-      ).pipe(Layer.provide(FetchHttpClient.layer));
+      ).pipe(
+        // X's daily budget, which the sync Worker spends too, kept in the
+        // database: the studio's connection may count and record it.
+        Layer.provide(XBudget.layer),
+        Layer.provide(Layer.merge(FetchHttpClient.layer, Database.scriptLayer)),
+      );
       if (find) {
         if (top < 1 || read < 5) {
           return yield* Effect.fail(

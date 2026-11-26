@@ -35,6 +35,7 @@ import { movePost, pendingPosts, setPostStatus } from "../src/posts/review.ts";
 import { PostSources } from "../src/posts/sources.ts";
 import { EventPostWriter } from "../src/posts/store.ts";
 import { clockLayer, seededDatabase, sqlLayer } from "./support/database.ts";
+import { xBudgetUncounted } from "./support/x-budget.ts";
 
 /**
  * Finding posts about an evening: the score, read from what a post says;
@@ -536,6 +537,7 @@ describe("what platforms answer", () => {
           endsAt: at("2026-10-02T04:00:00Z"),
         });
       }).pipe(
+        Effect.provide(xBudgetUncounted),
         Effect.provide(Layer.merge(client, clockLayer)),
         Effect.provideService(
           ConfigProvider.ConfigProvider,
@@ -578,6 +580,7 @@ describe("what platforms answer", () => {
             1,
           );
         }).pipe(
+          Effect.provide(xBudgetUncounted),
           Effect.provide(Layer.merge(client, clockLayer)),
           Effect.provideService(
             ConfigProvider.ConfigProvider,
@@ -643,6 +646,7 @@ describe("what platforms answer", () => {
         const x: CandidateSearchShape = yield* makeXSearch;
         return yield* x.search(signals);
       }).pipe(
+        Effect.provide(xBudgetUncounted),
         Effect.provide(client),
         Effect.provideService(
           ConfigProvider.ConfigProvider,
@@ -684,6 +688,7 @@ describe("what platforms answer", () => {
         const x: CandidateSearchShape = yield* makeXSearch;
         return yield* x.search(signals, 1);
       }).pipe(
+        Effect.provide(xBudgetUncounted),
         Effect.provide(client),
         Effect.provideService(
           ConfigProvider.ConfigProvider,
@@ -735,6 +740,7 @@ describe("what platforms answer", () => {
         }
         return yield* Fiber.join(fiber);
       }).pipe(
+        Effect.provide(xBudgetUncounted),
         Effect.provide(Layer.merge(client, clockLayer)),
         Effect.provideService(
           ConfigProvider.ConfigProvider,

@@ -112,6 +112,11 @@ interface ColumnGrants {
  *   temporary reason: it inserts a row per day and source, and on each
  *   later try that day updates its reason, tries and latest try, reading
  *   the key to find a source's first gap.
+ * - x_reads: X's daily budget (core/src/x-budget.ts), which the post
+ *   search, the follower refresh and the community snapshot share: before
+ *   each request to X it counts the day's reads by kind, and after each
+ *   answer it inserts a row per post and user, never replacing one (ON
+ *   CONFLICT DO NOTHING).
  *
  * Row locks taken while an image is claimed (FOR UPDATE) need UPDATE on the
  * table, which these grant.
@@ -257,6 +262,12 @@ export const SITE_SYNC_GRANTS: Readonly<Record<string, ColumnGrants>> = {
     select: ["day", "source", "tries"],
     insert: ["day", "source", "reason", "first_at", "last_at"],
     update: ["reason", "tries", "last_at"],
+  },
+  // X's daily budget (core/src/x-budget.ts): the day's reads counted by
+  // kind, and a row for each post and user an answer holds.
+  x_reads: {
+    select: ["day", "kind"],
+    insert: ["day", "kind", "id"],
   },
 };
 

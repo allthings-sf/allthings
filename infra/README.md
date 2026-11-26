@@ -131,7 +131,7 @@ Three reviewed constants in [`src/sync.ts`](src/sync.ts) decide what it does, so
 | `mode`     | `"write"`: the sync's one writer, since the app's cron stopped | unchanged |
 | `plan`     | `"paid"`: the app's own limits, on Workers Paid                | unchanged |
 
-Each run logs one JSON line per step and one summary line (`source: "luma-sync"`). A run in `write` mode then logs one `step: "site"` line: telling the Web Worker its data may have changed (`tellSite`), `done` or `failed` with the site's answer, or `skipped` without the `SITE` binding or `SITE_REFRESH_TOKEN`. When the site took it, one `step: "prewarm"` line follows, with what the prewarm built and found kept.
+Each run logs one JSON line per step and one summary line (`source: "luma-sync"`), whose `xBudget` says what X has cost today against its daily budget (core's [`src/x-budget.ts`](../core/src/x-budget.ts)): `X daily budget: $0.42 of $2.00 spent (21%)`. Past the budget, each step skips X with why until 00:00 UTC; until migration 0043 has made `x_reads`, every step skips X (`X daily budget unknown`). A run in `write` mode then logs one `step: "site"` line: telling the Web Worker its data may have changed (`tellSite`), `done` or `failed` with the site's answer, or `skipped` without the `SITE` binding or `SITE_REFRESH_TOKEN`. When the site took it, one `step: "prewarm"` line follows, with what the prewarm built and found kept.
 
 **It writes every hour.** The handover is done (below):
 

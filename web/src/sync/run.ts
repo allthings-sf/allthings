@@ -36,6 +36,7 @@ import {
   needsAction,
   snapshotCommunity,
 } from "allthings-core/src/community-metrics.ts";
+import { spendLine, XBudget } from "allthings-core/src/x-budget.ts";
 import { Clock, Context, DateTime, Duration, Effect, Exit } from "effect";
 
 /**
@@ -63,7 +64,9 @@ import { Clock, Context, DateTime, Duration, Effect, Exit } from "effect";
  *   would change.
  *
  * Each step logs one JSON line, and the run one summary line, for Workers
- * Logs to index.
+ * Logs to index; the summary says what X has cost today against its daily
+ * budget (core's src/x-budget.ts), which every X request in a run, the
+ * CLI's too, goes through: once it is spent, each step skips X with why.
  */
 
 export type SyncMode = "write" | "dry-run";
@@ -216,6 +219,13 @@ export interface SyncReport {
   readonly ok: boolean;
   readonly tookMs: number;
   readonly steps: Readonly<Record<string, StepReport>>;
+  /**
+   * What X has cost today (UTC) against its daily budget, after the run
+   * (core's src/x-budget.ts), as the summary line says it: "X daily
+   * budget: $0.42 of $2.00 spent (21%)", or why it is unknown. Shown on
+   * every run, so a day half spent is seen before X is refused.
+   */
+  readonly xBudget: string;
 }
 
 /** Runs one step, logs it, and reports it; a failed step never throws. */
@@ -718,12 +728,23 @@ export const runSync = (mode: SyncMode, limits: SyncLimits) =>
     const started = yield* Clock.currentTimeMillis;
     yield* log({ step: "start", mode });
     const steps = yield* mode === "write" ? write(limits) : dryRun(limits);
+    const xBudget = yield* (yield* XBudget).today.pipe(
+      Effect.map(spendLine),
+      Effect.catch((refused) => Effect.succeed(refused.reason)),
+    );
     const report: SyncReport = {
       mode,
       ok: Object.values(steps).every((outcome) => outcome.status !== "failed"),
       tookMs: (yield* Clock.currentTimeMillis) - started,
       steps,
+      xBudget,
     };
-    yield* log({ step: "summary", mode, ok: report.ok, tookMs: report.tookMs });
+    yield* log({
+      step: "summary",
+      mode,
+      ok: report.ok,
+      tookMs: report.tookMs,
+      xBudget,
+    });
     return report;
   });

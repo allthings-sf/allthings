@@ -394,6 +394,10 @@ export const STUDIO_GRANTS: Readonly<Record<string, TableGrants>> = {
   // public tables beyond site_reader's (core/tests/studio-role.test.ts).
   "public.community_metrics": { select: true },
   "public.community_gaps": { select: true },
+  // posts find, people posts: X's daily budget (src/x-budget.ts), the
+  // day's reads counted before each request to X, and a row for each post
+  // and user an answer holds. The site never reads it either.
+  "public.x_reads": { select: true, insert: ["day", "kind", "id"] },
 
   // ── planning's collaboration (src/collab/collab.ts, bun run collab), read
   // whole: the studio is who invites, and who reads what was handed in.

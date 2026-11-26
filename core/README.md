@@ -300,6 +300,30 @@ DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run tal
   --speaker ada-lovelace --speaker grace-hopper:moderator --approve <token>
 ```
 
+## X's daily budget
+
+X's API is pay-per-use: from prepaid credits, it bills each post an answer
+returns ($0.005) and each user ($0.010), once a UTC day each
+([pricing](https://docs.x.com/x-api/getting-started/pricing)). Every read
+this repository makes of X goes through one budget a day
+(`src/x-budget.ts`): the sync Worker's post search, follower counts and
+community snapshot, and the same from `bun run posts find`, `bun run
+followers` and `bun run community-snapshot`, and `bun run people posts`.
+Before each request, the day's spend and the most its answer can bill must
+fit in `X_DAILY_BUDGET_USD`, $2.00; otherwise X isn't asked, and the step
+says why (`X daily budget spent: $1.80 of $2.00`) until 00:00 UTC, when the
+day starts over. After each answer, its posts and users are recorded in
+`x_reads`, once a day each, as X bills them, so the Worker and the CLI
+spend one budget. A spend that can't be read, or an answer that can't be
+recorded, refuses too: X is never asked while what it cost is unknown. Each
+sync run's summary says the day's spend so far: `X daily budget: $0.42 of
+$2.00 spent (21%)`.
+
+The budget is a reviewed constant: raising it is a pull request, and it is
+held from $0.50 up to, not including, $5, so it is never nothing and never
+unbounded. A command that reads X needs a connection that may count and
+record it: site_sync's, or the studio's.
+
 ## Speaker order: X followers
 
 Speaker lists are ordered by how many follow each person on X, most first.
@@ -310,8 +334,8 @@ speakers: whoever took part latest first).
 
 Each profile keeps a snapshot, `x_followers` with `x_followers_at`, read from
 public data: X's own API with the app's bearer token (`X_BEARER_TOKEN`), by
-user id, up to 100 accounts a request, $0.010 each on pay-per-use, or the
-keyless FixTweet API without it. The sync
+user id, up to 100 accounts a request, $0.010 each within X's daily budget
+(above), or the keyless FixTweet API without it. The sync
 Worker refreshes the missing and oldest snapshots on its schedule, a bounded number per run, reading for
 at most its window (30 s); a handle X doesn't know, or a failed read,
 leaves the snapshot as it was, and the least recently tried go first
@@ -1349,18 +1373,20 @@ followers` first. The ranking only orders the list; an agent picks up to
 
 Both read X's own API with the app's bearer token, read only, which bills
 each post it returns ($0.005, once a UTC day per post) and each account
-it looks up ($0.010): `--find` reads at most `--read` (100, and at least 5,
+it looks up ($0.010), within X's daily budget, which they count and
+record in the database, so both take the studio's connection: `--find`
+reads at most `--read` (100, and at least 5,
 the fewest X answers a page) posts a person, after looking the account up
 once where the profile has no X user id yet; `--refresh` reads one per post
 the file holds, up to 100 a request, and drops a post X now gives as
 another account's. `--cache <dir>` keeps every answer that reads as one
 for the rest of its UTC day, so a rerun is free; a dry run reads it but
-keeps nothing new. `--find` reads the profiles' handles from the
-database, where site_reader's connection is enough:
+keeps nothing new, and an answer it holds is never asked of X again, nor
+counted. `--find` reads the profiles' handles from the database too:
 
 ```sh
-DATABASE_URL=$(op read "op://allthings/allthings site_reader/credential") X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --find --only "Ada Lovelace" --cache /tmp/x-cache
-X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --refresh --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --find --only "Ada Lovelace" --cache /tmp/x-cache
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --refresh --dry-run
 ```
 
 ### A photo from a file

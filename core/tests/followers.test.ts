@@ -19,6 +19,8 @@ import {
 } from "../src/followers.ts";
 import { clockLayer, seededDatabase, sqlLayer } from "./support/database.ts";
 import { configFrom, fakeLumaBy, type Reply, settle } from "./support/luma.ts";
+import { xBudgetUncounted } from "./support/x-budget.ts";
+import { XBudget } from "../src/x-budget.ts";
 
 /**
  * X follower counts: the order speaker lists take from them, the FixTweet
@@ -193,6 +195,7 @@ const fakeXApi = (
 /** FollowerSource.xApi over `http`, with a bearer token. */
 const xApiSource = (http: Layer.Layer<HttpClient.HttpClient>) =>
   FollowerSource.xApi.pipe(
+    Layer.provide(xBudgetUncounted),
     Layer.provide(http),
     Layer.provide(
       Layer.succeed(
@@ -651,6 +654,56 @@ describe("refreshFollowers", () => {
     expect(report.failed).toHaveLength(3);
     expect(report.refreshed).toEqual([]);
   }, 15_000);
+
+  test("stops at X's daily budget: X isn't asked, what is left waits untried, and the report says why", async () => {
+    const db = await seededDatabase();
+    databases.push(db);
+    await refresh(db, { ada: 120, linus: 9000, future: 3 });
+    await db.exec(
+      `UPDATE profiles SET x_followers_at = x_followers_at - interval '30 days', x_followers_tried_at = NULL WHERE twitter_handle IS NOT NULL`,
+    );
+    // $0.49 of the day's $0.50 spent: the three accounts could cost $0.03.
+    await db.exec(
+      `INSERT INTO x_reads (day, kind, id) SELECT '2026-10-03', 'user', g::text FROM generate_series(1, 49) g`,
+    );
+    const x = fakeXApi({ "11": { username: "ada", followers: 130 } });
+    const sql = sqlLayer(db);
+    const report = await Effect.runPromise(
+      refreshFollowers({
+        dryRun: false,
+        maxProfiles: 10,
+        staleAfter: "7 days",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            FollowerSource.xApi.pipe(
+              Layer.provide(XBudget.make(0.5)),
+              Layer.provide(Layer.mergeAll(x.layer, sql)),
+              Layer.provide(
+                Layer.succeed(
+                  ConfigProvider.ConfigProvider,
+                  ConfigProvider.fromEnv({ env: { X_BEARER_TOKEN: "test" } }),
+                ),
+              ),
+            ),
+            sql,
+            clockLayer,
+          ),
+        ),
+      ),
+    );
+    expect(x.requests).toEqual([]);
+    expect(report.skipped).toBe(
+      "X daily budget spent: $0.49 of $0.50, too little for a read of up to $0.03",
+    );
+    expect(report.refreshed).toEqual([]);
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(3);
+    const { rows } = await db.query(
+      `SELECT name FROM profiles WHERE x_followers_tried_at IS NOT NULL`,
+    );
+    expect(rows).toEqual([]);
+  });
 
   test("a dry run reads and reports, and writes nothing", async () => {
     const db = await seededDatabase();

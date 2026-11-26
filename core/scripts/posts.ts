@@ -24,8 +24,8 @@ import {
   eveningSignals,
   findCandidates,
   xBrowserSearches,
-  xCostPerPost,
 } from "../src/posts/candidates.ts";
+import { spendLine, XBudget } from "../src/x-budget.ts";
 import {
   pendingJson,
   pendingLines,
@@ -101,12 +101,16 @@ const layer = Layer.mergeAll(PostSources.layer, EventPostWriter.layer).pipe(
   Layer.provide(Database.scriptLayer),
 );
 
-/** What a search needs: the post tools, the searches, and the database itself. */
+/**
+ * What a search needs: the post tools, the searches, X's daily budget they
+ * share with the sync Worker, and the database itself.
+ */
 const candidatesLayer = Layer.mergeAll(
   PostSources.layer,
   EventPostWriter.layer,
   CandidateSearches.layer,
 ).pipe(
+  Layer.provideMerge(XBudget.layer),
   Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(Database.scriptLayer),
 );
@@ -326,8 +330,8 @@ const find = Command.make(
           ? { maxRequests: maxRequests.value }
           : {}),
       });
-      // X bills each post its search returns; what this run kept, priced: a
-      // floor, since X also bills posts the finder drops (no author handle).
+      // X bills each post its search returns, and the day's budget counts
+      // them all, the finder's dropped ones too (no author handle).
       const xPosts = reports.reduce(
         (sum, report) =>
           sum +
@@ -349,8 +353,9 @@ const find = Command.make(
               .join("\n"),
       );
       if (!json) {
+        const spend = yield* Effect.result((yield* XBudget).today);
         yield* Console.log(
-          `X: ${xPosts} posts kept, so at least $${(xPosts * xCostPerPost).toFixed(2)} at pay-per-use.`,
+          `X: ${xPosts} posts kept. ${spend._tag === "Success" ? spendLine(spend.success) : spend.failure.reason}.`,
         );
       }
     }).pipe(Effect.provide(candidatesLayer)),

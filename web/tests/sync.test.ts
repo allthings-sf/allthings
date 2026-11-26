@@ -20,6 +20,7 @@ import { LumaDrafts } from "allthings-core/src/luma/drafts.ts";
 import { LumaCompanyHosts } from "allthings-core/src/luma/company-hosts.ts";
 import { LumaVenueVisibility } from "allthings-core/src/luma/venue-visibility.ts";
 import { LumaVenues } from "allthings-core/src/luma/venues.ts";
+import { XBudget } from "allthings-core/src/x-budget.ts";
 import {
   clockAt,
   migratedDatabase,
@@ -219,7 +220,18 @@ async function run(
   );
   const bucket = fakeBucket();
   const logged: Array<Record<string, unknown>> = [];
+  /** The internet beyond Luma, which answers nothing here. */
+  const nowhere = Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(request, new Response("", { status: 404 })),
+      ),
+    ),
+  );
   const layer = Layer.mergeAll(
+    // X's daily budget, which the summary reports; nothing here asks X.
+    XBudget.layer.pipe(Layer.provide(nowhere)),
     LumaSync.layer,
     LumaVenueVisibility.layer,
     LumaVenues.layer,
@@ -258,17 +270,7 @@ async function run(
       }),
     ),
     EventPostWriter.layer,
-    Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make((request) =>
-        Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            new Response("", { status: 404 }),
-          ),
-        ),
-      ),
-    ),
+    nowhere,
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -516,6 +518,11 @@ describe("a sync run that writes", () => {
       expect(logged.every((entry) => entry["source"] === "luma-sync")).toBe(
         true,
       );
+      // Every summary says what X has cost today against its budget.
+      expect(logged.at(-1)).toMatchObject({
+        step: "summary",
+        xBudget: "X daily budget: $0.00 of $2.00 spent (0%)",
+      });
     } finally {
       await db.close();
     }
@@ -1320,7 +1327,17 @@ describe("the Worker, from its bindings", () => {
         source: "luma-sync",
         step: "summary",
         ok: true,
+        // What X has cost today, against its budget: Ada's account at least,
+        // recorded as site_sync.
+        xBudget: expect.stringMatching(
+          /^X daily budget: \$0\.\d{2,3} of \$2\.00 spent \(\d+%\)$/,
+        ),
       });
+      expect(report.xBudget).toBe(String(logs.lines.at(-3)?.["xBudget"]));
+      const billed = await db.query<{ kind: string }>(
+        "SELECT DISTINCT kind FROM x_reads",
+      );
+      expect(billed.rows).toContainEqual({ kind: "user" });
       expect(logs.lines.at(-2)).toMatchObject({
         source: "luma-sync",
         step: "site",

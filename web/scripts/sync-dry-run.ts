@@ -20,6 +20,7 @@ import { LumaDrafts } from "allthings-core/src/luma/drafts.ts";
 import { CommunitySources } from "allthings-core/src/community-metrics.ts";
 import { LumaVenueVisibility } from "allthings-core/src/luma/venue-visibility.ts";
 import { LumaVenues } from "allthings-core/src/luma/venues.ts";
+import { XBudget } from "allthings-core/src/x-budget.ts";
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { runSync, syncLimits } from "../src/sync/run.ts";
@@ -97,6 +98,8 @@ const report = await Effect.runPromise(
         Layer.provide(
           Layer.mergeAll(Luma.layer, LumaApi.layer, CoverSource.layer),
         ),
+        // X's daily budget, which a dry run only reports: it never asks X.
+        Layer.provideMerge(XBudget.layer),
         Layer.provideMerge(
           Layer.mergeAll(Database.layer, FetchHttpClient.layer, untouched),
         ),

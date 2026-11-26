@@ -41,6 +41,7 @@ import ideaPostponedMigration from "./0039_idea_postponed.ts";
 import proposalsMigration from "./0040_proposals.ts";
 import talkArtifactsMigration from "./0041_talk_artifacts.ts";
 import venueGuestsOnlyMigration from "./0042_venue_guests_only.ts";
+import xReadsMigration from "./0043_x_reads.ts";
 import type { Migration } from "./statements.ts";
 
 /**
@@ -92,6 +93,7 @@ export const migrations: Readonly<Record<string, Migration>> = {
   "0040_proposals": proposalsMigration,
   "0041_talk_artifacts": talkArtifactsMigration,
   "0042_venue_guests_only": venueGuestsOnlyMigration,
+  "0043_x_reads": xReadsMigration,
 };
 
 /** The migrations, in id order, for the migrator. */

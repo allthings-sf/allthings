@@ -14,6 +14,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import { published } from "./catalog.ts";
 import { DataSourceError } from "./errors.ts";
 import { orDataSourceError } from "./sql.ts";
+import { XBudget, XBudgetRefused } from "./x-budget.ts";
 
 /**
  * The community's public numbers, one snapshot a day, so they have a
@@ -26,7 +27,8 @@ import { orDataSourceError } from "./sql.ts";
  * Each day keeps the first value read for each source and metric: a source
  * that fails is read again on the next hourly run, until one succeeds or
  * the day ends. X bills each read, so it is read at most once a day: only
- * in the run of the day's first hour (UTC), whatever comes of it.
+ * in the run of the day's first hour (UTC), whatever comes of it, and only
+ * while X's daily budget (src/x-budget.ts) has a cent left, else skipped.
  *
  * A source that can't be read now is a **gap** or a **failure**
  * ({@link CommunityReadError}'s `temporary`, decided by
@@ -253,9 +255,14 @@ export function youtubeCount(
   return Number.isFinite(value) ? Math.round(value) : undefined;
 }
 
-/** How each source is read. */
+/**
+ * How each source is read; X's read can be refused by X's daily budget
+ * (src/x-budget.ts), which skips it.
+ */
 export interface CommunitySourcesShape {
-  readonly read: (source: Source) => Effect.Effect<Metrics, CommunityReadError>;
+  readonly read: (
+    source: Source,
+  ) => Effect.Effect<Metrics, CommunityReadError | XBudgetRefused>;
 }
 
 export class CommunitySources extends Context.Service<
@@ -265,7 +272,8 @@ export class CommunitySources extends Context.Service<
   /**
    * Each source from its public API (or YouTube's channel page), Luma's
    * from the database the sync writes it to. Needs an `HttpClient`, a
-   * `SqlClient` and X_BEARER_TOKEN. With GITHUB_TOKEN, GitHub is read with
+   * `SqlClient`, X_BEARER_TOKEN and the `XBudget`, which X's read goes
+   * through. With GITHUB_TOKEN, GitHub is read with
    * it, in that token's own allowance rather than the caller's address's
    * (GitHub Actions' built-in token, `.github/workflows/community.yaml`);
    * the sync Worker has none and reads GitHub without a key.
@@ -278,6 +286,13 @@ export class CommunitySources extends Context.Service<
       // Without it, X alone fails; a dry run never reads X.
       const githubToken = yield* Config.option(Config.Redacted("GITHUB_TOKEN"));
       const xToken = yield* Config.option(Config.Redacted("X_BEARER_TOKEN"));
+      const xBudget = yield* XBudget;
+      /** How `source`'s requests are sent: X's within its daily budget, a user each. */
+      const executeFor = (source: Source) =>
+        source === "x"
+          ? (request: HttpClientRequest.HttpClientRequest) =>
+              xBudget.execute(request, { users: 1 })
+          : client.execute;
       /**
        * `request` for `source`, within 15 s: its answer when 200, else a
        * read error, a gap or a failure as `isGapAnswer` says, with why
@@ -290,9 +305,10 @@ export class CommunitySources extends Context.Service<
         request: HttpClientRequest.HttpClientRequest,
       ) =>
         Effect.gen(function* () {
+          const execute = executeFor(source);
           /** One request: its answer, and a refusal's body, which says why. */
           const send = Effect.gen(function* () {
-            const response = yield* client.execute(
+            const response = yield* execute(
               request.pipe(
                 HttpClientRequest.setHeader("user-agent", "allthings.dev"),
               ),
@@ -361,7 +377,8 @@ export class CommunitySources extends Context.Service<
           Effect.flatMap((response) => response.json),
           Effect.flatMap(Schema.decodeUnknownEffect(schema)),
           Effect.mapError((error) =>
-            error instanceof CommunityReadError
+            error instanceof CommunityReadError ||
+            error instanceof XBudgetRefused
               ? error
               : // The API moved: someone has to look.
                 new CommunityReadError({
@@ -370,11 +387,11 @@ export class CommunitySources extends Context.Service<
                   temporary: false,
                 }),
           ),
-        ) as Effect.Effect<S["Type"], CommunityReadError>;
+        ) as Effect.Effect<S["Type"], CommunityReadError | XBudgetRefused>;
 
       const readers: Record<
         Source,
-        Effect.Effect<Metrics, CommunityReadError>
+        Effect.Effect<Metrics, CommunityReadError | XBudgetRefused>
       > = {
         x: Option.match(xToken, {
           onNone: () =>
@@ -712,7 +729,10 @@ export const snapshotCommunity = ({
       }
       const read = yield* Effect.result(reader.read(source));
       if (read._tag === "Failure") {
-        (read.failure.temporary ? gaps : failed)[source] = read.failure.reason;
+        const failure = read.failure;
+        // X's daily budget is spent: a skip, as outside the first hour.
+        if (failure._tag === "XBudgetRefused") skipped[source] = failure.reason;
+        else (failure.temporary ? gaps : failed)[source] = failure.reason;
         continue;
       }
       const rows = Object.entries(read.success).map(([metric, value]) => ({
