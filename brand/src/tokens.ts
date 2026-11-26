@@ -324,6 +324,11 @@ export interface TypeRole {
    * brand/marks from the fonts). The CSS pulls the text back by it.
    */
   readonly inset: number;
+  /**
+   * The height of the role's lowercase x, in ems (brand/type-metrics.json):
+   * with the size, what sets the visual angle its text makes on a display.
+   */
+  readonly xHeight: number;
 }
 
 /** The fonts' measurements per role, as brand/marks writes them. */
@@ -333,19 +338,23 @@ const TypeMetrics = Schema.Struct({
     Schema.String,
     Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 0.2 })),
   ),
+  xHeight: Schema.Record(
+    Schema.String,
+    Schema.Finite.check(Schema.isBetween({ minimum: 0.3, maximum: 0.8 })),
+  ),
 });
 
 export const typeMetrics = Schema.decodeUnknownSync(TypeMetrics)(metricsSource);
 
-/** A role's measured inset; one the fonts weren't measured for is an error. */
-function insetOf(role: string): number {
-  const inset = typeMetrics.inset[role];
-  if (inset === undefined) {
+/** A role's measurement; one the fonts weren't measured for is an error. */
+function measured(metric: "inset" | "xHeight", role: string): number {
+  const value = typeMetrics[metric][role];
+  if (value === undefined) {
     throw new Error(
-      `No inset for type role ${role}: run \`uv run generate.py\` in brand/marks`,
+      `No ${metric} for type role ${role}: run \`uv run generate.py\` in brand/marks`,
     );
   }
-  return inset;
+  return value;
 }
 
 /** The type scale, in the token file's order. */
@@ -364,7 +373,8 @@ export function typeRoles(file: TokenFile): ReadonlyArray<TypeRole> {
       width: extension.width,
       uppercase: extension.textTransform === "uppercase",
       fluid: extension.fluid,
-      inset: insetOf(name),
+      inset: measured("inset", name),
+      xHeight: measured("xHeight", name),
     };
   });
 }

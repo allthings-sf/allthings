@@ -183,6 +183,25 @@ describe("image sizes from the layout", () => {
   });
 });
 
+describe("x-heights", () => {
+  // What legibility thresholds are measured by, with the size: the angle a
+  // lowercase x makes at the eye (brand/foundations.md, Typography).
+  test("measure each role's from its face", () => {
+    const roles = typeRoles(tokens);
+    for (const role of roles) {
+      expect([role.name, role.xHeight > 0.5 && role.xHeight < 0.56]).toEqual([
+        role.name,
+        true,
+      ]);
+    }
+    const of = (name: string) =>
+      roles.find((role) => role.name === name)?.xHeight;
+    // Archivo's x at 400, and Geist Mono's, as Chromium's canvas metrics read them too.
+    expect(of("body")).toBe(0.526);
+    expect(of("meta")).toBe(0.532);
+  });
+});
+
 describe("optical insets", () => {
   const css = themeCss(tokens);
 
