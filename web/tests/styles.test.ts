@@ -78,6 +78,43 @@ test("site.css and lab.css are read declaration by declaration", () => {
   expect(declarationsOf(lab).length).toBeGreaterThan(100);
 });
 
+test("site.css gives wrapped headings, buttons and talk rows room between lines", () => {
+  // The accessibility framework's excellent bar: headings 1.1 to 1.3, body
+  // 1.5 to 1.75. A talk's title, evening and parts run to two or three lines
+  // and read as running text, so they take the body's 1.55 (body, here).
+  const rules = [
+    ...site.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+  ].map(([, selector = "", body = ""]) => ({
+    selectors: selector.split(",").map((part) => part.trim()),
+    lineHeight: declarationsOf(`{${body}`)
+      .find(({ property }) => property === "line-height")
+      ?.value.trim(),
+  }));
+  const lineHeightOf = (selector: string) =>
+    rules
+      .filter(
+        ({ selectors, lineHeight }) =>
+          selectors.includes(selector) && lineHeight !== undefined,
+      )
+      .map(({ lineHeight }) => Number(lineHeight));
+  expect(lineHeightOf("body")).toEqual([1.55]);
+  for (const heading of [
+    ".prose h2",
+    ".organizers .person-name",
+    ".person-page-name",
+  ]) {
+    for (const value of lineHeightOf(heading)) {
+      expect([heading, value >= 1.1 && value <= 1.3]).toEqual([heading, true]);
+    }
+  }
+  expect(lineHeightOf(".button").every((value) => value >= 1.2)).toBe(true);
+  for (const row of [".talk-title", ".talk-evening", ".talk-parts"]) {
+    for (const value of lineHeightOf(row)) {
+      expect([row, value >= 1.5 && value <= 1.75]).toEqual([row, true]);
+    }
+  }
+});
+
 describe.each(stylesheets)("%s", (_, css) => {
   const declarations = declarationsOf(css);
 
