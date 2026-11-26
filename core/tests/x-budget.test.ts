@@ -159,7 +159,7 @@ const lookUp = (ids: ReadonlyArray<string>) =>
 
 /** The day's spend, as the budget counts it. */
 const spent = XBudget.use((budget) => budget.today).pipe(
-  Effect.map(({ spent }) => spent),
+  Effect.map((today) => today.spent),
 );
 
 /** Ids `from` to `to`, as strings. */
@@ -534,7 +534,7 @@ describe("every caller of X", () => {
     x: ReturnType<typeof fakeX>,
     effect: Effect.Effect<A, E, R | XBudget>,
     layer: Layer.Layer<R, unknown, XBudget | HttpClient.HttpClient | SqlClient>,
-    budget: Layer.Layer<XBudget> = budgetOf(db, x),
+    budget: Layer.Layer<XBudget, unknown> = budgetOf(db, x),
   ) =>
     Effect.runPromiseExit(
       effect.pipe(

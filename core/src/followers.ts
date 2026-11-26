@@ -486,8 +486,9 @@ export const refreshFollowers = (options: RefreshOptions) =>
       XAccount | FollowerReadError | XBudgetRefused
     >();
     let prefetchOutOfTime = false;
-    // X's daily budget refused a read: nothing more is asked, and what is
-    // left waits, untried, for a later run.
+    // X's daily budget refused a read: nothing more is asked, what the batch
+    // already read is still stored, and the rest waits, untried, for a later
+    // run.
     let skipped: string | undefined;
     if (source.readByIds !== undefined && ids.length > 0) {
       const left =
@@ -515,16 +516,24 @@ export const refreshFollowers = (options: RefreshOptions) =>
     }
     for (const [index, row] of batch.entries()) {
       const handle = xHandleOf(row.twitterHandle) ?? "";
-      // The batch ran out of the run's time, or X's budget: this and the
-      // rest wait.
-      if (prefetchOutOfTime || skipped !== undefined) {
-        unread = batch.length - index;
+      // The batch ran out of the run's time: this and the rest wait.
+      if (prefetchOutOfTime) {
+        unread += batch.length - index;
         break;
       }
       const known =
         row.xUserId === null ? undefined : prefetched.get(row.xUserId);
+      // Once X's daily budget refused, only what the batch already read is
+      // stored: a profile that needs X asked again waits, untried.
+      if (
+        skipped !== undefined &&
+        (known === undefined || known instanceof XBudgetRefused)
+      ) {
+        unread++;
+        continue;
+      }
       // By id where both are known: the account, whatever its handle now.
-      // An id X's daily budget left unasked stops the refresh here.
+      // An id X's daily budget left unasked is refused here.
       const byId =
         known !== undefined
           ? known instanceof FollowerReadError ||
@@ -547,14 +556,14 @@ export const refreshFollowers = (options: RefreshOptions) =>
           : reading.pipe(Effect.timeoutOption(Math.max(0, left))),
       );
       if (read._tag === "Success" && Option.isNone(read.success)) {
-        unread = batch.length - index;
+        unread += batch.length - index;
         break;
       }
       // Refused before anything was sent: not a try, so it keeps its place.
       if (read._tag === "Failure" && read.failure._tag === "XBudgetRefused") {
         skipped = read.failure.reason;
-        unread = batch.length - index;
-        break;
+        unread++;
+        continue;
       }
       const at = DateTime.toDateUtc(yield* DateTime.now);
       if (!options.dryRun) {

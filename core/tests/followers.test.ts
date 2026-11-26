@@ -230,17 +230,17 @@ describe("FollowerSource.xApi", () => {
   test("keeps the accounts read before X's daily budget refuses a request, and leaves the rest unasked", async () => {
     const db = await migratedDatabase();
     databases.push(db);
-    const ids = Array.from({ length: 150 }, (_, index) => String(index + 1));
+    const many = Array.from({ length: 150 }, (_, index) => String(index + 1));
     const x = fakeXApi(
       Object.fromEntries(
-        ids.map((id) => [id, { username: `u${id}`, followers: 1 }]),
+        many.map((id) => [id, { username: `u${id}`, followers: 1 }]),
       ),
     );
     // $1.20 a day: the first 100 accounts may cost $1.00; 50 more, $0.50,
     // don't fit.
     const found = await Effect.runPromise(
       FollowerSource.use(
-        (source) => source.readByIds?.(ids) ?? Effect.die("no batch"),
+        (source) => source.readByIds?.(many) ?? Effect.die("no batch"),
       ).pipe(
         Effect.provide(
           FollowerSource.xApi.pipe(
@@ -703,6 +703,60 @@ describe("refreshFollowers", () => {
     expect(report.failed).toHaveLength(3);
     expect(report.refreshed).toEqual([]);
   }, 15_000);
+
+  test("stores what the batch read when X's daily budget refuses a profile read on its own, and leaves only that one untried", async () => {
+    const db = await seededDatabase();
+    databases.push(db);
+    await refresh(db, { ada: 120, linus: 9000, future: 3 });
+    await db.exec(
+      `UPDATE profiles SET x_followers_at = x_followers_at - interval '30 days' WHERE twitter_handle IS NOT NULL`,
+    );
+    // Ada's account isn't known by id, so she is read by handle, and first.
+    await db.exec(
+      `UPDATE profiles SET x_user_id = NULL, x_followers_tried_at = NULL WHERE name = 'Ada Lovelace'`,
+    );
+    const partly = Layer.succeed(
+      FollowerSource,
+      FollowerSource.of({
+        read: () =>
+          Effect.fail(
+            new XBudgetRefused({
+              reason: "X daily budget spent: $2.00 of $2.00",
+            }),
+          ),
+        readByIds: (known) =>
+          Effect.succeed(
+            new Map(
+              known.map((id) => [
+                id,
+                id === "13"
+                  ? { id, handle: "linus", followers: 9100 }
+                  : { id, handle: "future", followers: 4 },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const report = await Effect.runPromise(
+      refreshFollowers({
+        dryRun: false,
+        maxProfiles: 10,
+        staleAfter: "7 days",
+      }).pipe(Effect.provide(Layer.mergeAll(partly, sqlLayer(db), clockLayer))),
+    );
+    expect(report.skipped).toBe("X daily budget spent: $2.00 of $2.00");
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(1);
+    expect(await snapshots(db)).toEqual([
+      ["Ada Lovelace", 120],
+      ["Future Speaker", 4],
+      ["Linus", 9100],
+    ]);
+    const { rows } = await db.query(
+      `SELECT name FROM profiles WHERE name = 'Ada Lovelace' AND x_followers_tried_at IS NULL`,
+    );
+    expect(rows).toHaveLength(1);
+  });
 
   test("stops at X's daily budget: X isn't asked, what is left waits untried, and the report says why", async () => {
     const db = await seededDatabase();

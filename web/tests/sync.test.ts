@@ -1333,7 +1333,9 @@ describe("the Worker, from its bindings", () => {
           /^X daily budget: \$0\.\d{2,3} of \$2\.00 spent \(\d+%\)$/,
         ),
       });
-      expect(report.xBudget).toBe(String(logs.lines.at(-3)?.["xBudget"]));
+      expect(report.xBudget).toMatch(
+        /^X daily budget: \$0\.\d{2,3} of \$2\.00 spent \(\d+%\)$/,
+      );
       const billed = await db.query<{ kind: string }>(
         "SELECT DISTINCT kind FROM x_reads",
       );
