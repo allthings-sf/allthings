@@ -355,13 +355,13 @@ describe("the variants' parts", () => {
     );
     const cuts = [
       ...html.matchAll(
-        /<li><a href="\/([^"]+)"><span class="cut"><picture>(.*?)<\/picture><\/span><time class="cut-date at-type-meta" datetime="([^"]+)">([^<]+)<\/time><\/a><\/li>/g,
+        /<li><a href="\/([^"]+)"><span class="cut"><picture>(.*?)<\/picture><\/span><time class="cut-date at-type-meta" datetime="([^"]+)"><span>(\d{4}\.)<\/span><wbr\/><span>([^<]+)<\/span><\/time><\/a><\/li>/g,
       ),
-    ].map(([, slug, picture = "", datetime, date]) => ({
+    ].map(([, slug, picture = "", datetime, year = "", monthDay = ""]) => ({
       slug,
       lazy: picture.includes('loading="lazy"'),
       datetime,
-      date,
+      date: `${year}${monthDay}`,
     }));
     // 23 of the 34 have a photo here: every one, under the 24 it holds.
     const shown = evenings.filter((held) => held.photo !== null);

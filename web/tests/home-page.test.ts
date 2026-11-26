@@ -309,7 +309,7 @@ describe("the home page", () => {
       html.match(/<li><a href="\/2026-09-15-agent-setups">/g),
     ).toHaveLength(3);
     expect(html).toContain(
-      '<time class="cut-date at-type-meta" datetime="2026-09-16T00:30:00.000Z">2026.09.15</time>',
+      '<time class="cut-date at-type-meta" datetime="2026-09-16T00:30:00.000Z"><span>2026.</span><wbr/><span>09.15</span></time>',
     );
   });
 
