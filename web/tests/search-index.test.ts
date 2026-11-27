@@ -7,11 +7,12 @@ import {
   indexingOf,
   type Items,
 } from "../src/search/bindings.ts";
-import type { BudgetState } from "../src/search/budget.ts";
+import { type BudgetState, used, utcDay } from "../src/search/budget.ts";
 import { agentFrontMatter } from "../src/search/discovery.ts";
 import { cut, decode, pageDocument } from "../src/search/document.ts";
 import { indexPages, sendMs, withIndex } from "../src/search/ingest.ts";
 import {
+  countAheadMs,
   INGEST_BYTES_IN_WINDOW,
   type Indexed,
   leaseMs,
@@ -169,18 +170,21 @@ describe("what indexing may ingest", () => {
       limit: 100,
       until: at("2026-12-10") + leaseMs,
     });
-    expect(ingested).toEqual({ "2026-12-01": 50, "2026-12-10": 30 });
+    // Counted a day past the hold's end, so nothing it sends is counted early.
+    expect(ingested).toEqual({ "2026-12-01": 50, "2026-12-11": 30 });
   });
 
-  test("counts a run's bytes on the day its uploads can last be sent, so one crossing midnight counts on the day billed", () => {
-    const { ingested } = plan(
-      {},
-      {},
-      [page("a.md", "1", 10)],
-      false,
-      at("2026-12-10", "23:55:00"),
+  test("counts a run's bytes a day past its hold, so one crossing midnight, or delayed, counts on or after the day billed", () => {
+    const planned = at("2026-12-10", "23:55:00");
+    const { ingested } = plan({}, {}, [page("a.md", "1", 10)], false, planned);
+    expect(ingested).toEqual({ "2026-12-12": 10 });
+    // An upload sent as late as a day after the hold ends is still in a day
+    // the count holds, and the window keeps it for a whole billing period.
+    const sent = planned + leaseMs + countAheadMs;
+    expect(Object.keys(ingested).every((day) => day >= utcDay(sent))).toBe(
+      true,
     );
-    expect(ingested).toEqual({ "2026-12-11": 10 });
+    expect(used(ingested, sent + 30 * 24 * 60 * 60 * 1000)).toBe(10);
   });
 
   test("checks no page whose indexing Cloudflare has confirmed", () => {
@@ -234,7 +238,7 @@ describe("what indexing may ingest", () => {
       100,
     );
     expect(later.planned.upload).toEqual(["a.md"]);
-    expect(later.ingested).toEqual({ "2026-12-03": 1 });
+    expect(later.ingested).toEqual({ "2026-12-04": 1 });
   });
 
   test("the object keeps the bytes it lets through, and what was indexed", async () => {
@@ -418,6 +422,11 @@ const itemsIn = (refuse = false) => {
   const statuses = new Map<string, string>();
   let made = 0;
   const api: Items = {
+    list: async ({ search }) => ({
+      result: [...items]
+        .filter(([, item]) => item.key.includes(search))
+        .map(([id, item]) => ({ id, key: item.key })),
+    }),
     get: (id) => ({
       info: async () => {
         if (!items.has(id)) throw new Error(`item_not_found: ${id}`);
@@ -455,16 +464,20 @@ const indexingWith = (
   state: BudgetState,
   limit?: number,
 ): Indexing => {
-  const post = async (path: string, body: unknown) =>
-    (
-      await objectAnswer(
-        state,
-        new Request(`https://budget${path}`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        }),
-      )
-    ).json();
+  // As bindings.ts asks the object: past 200 is a failure.
+  const post = async (path: string, body: unknown): Promise<unknown> => {
+    const response = await objectAnswer(
+      state,
+      new Request(`https://budget${path}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    );
+    if (!response.ok) {
+      throw new Error(`the search budget answered ${response.status}`);
+    }
+    return response.json();
+  };
   return {
     items,
     plan: async (run, pages, complete) => {
@@ -487,6 +500,10 @@ const indexingWith = (
     },
   };
 };
+
+/** Whether the object's ledger holds `key`. */
+const inLedger = async (state: BudgetState, key: string) =>
+  Object.hasOwn((await state.storage.get<Indexed>("indexed")) ?? {}, key);
 
 describe("indexing the site's pages", () => {
   const documents = (entries: Record<string, string>) =>
@@ -734,6 +751,34 @@ describe("indexing the site's pages", () => {
     expect(keys()).toEqual([]);
     const next = await indexPages(pages, true, indexing);
     expect(next).toMatchObject({ uploaded: 2, late: 0 });
+  });
+
+  test("recovers a page a run uploaded and never recorded, its hold gone", async () => {
+    for (const refuse of [false, true]) {
+      const { api, keys } = itemsIn(refuse);
+      const state = memory();
+      const indexing = indexingWith(api, state);
+      // Run A uploads, then its hold ends before it records: refused.
+      await expect(
+        indexPages(documents({ "/new": "# new" }), true, {
+          ...indexing,
+          record: async (run, uploaded, removed, settled) => {
+            state.held.set("lease", { run: "b", until: Date.now() + leaseMs });
+            await indexing.record(run, uploaded, removed, settled);
+          },
+        }),
+      ).rejects.toThrow();
+      expect(keys()).toEqual(["new.md"]);
+      state.held.set("lease", { run: "b", until: 0 });
+      // The ledger never heard of A's item; the next runs set it straight.
+      let runs = 0;
+      while (runs < 3 && !(await inLedger(state, "new.md"))) {
+        await indexPages(documents({ "/new": "# new" }), true, indexing);
+        runs += 1;
+      }
+      expect(await inLedger(state, "new.md")).toBe(true);
+      expect(keys()).toEqual(["new.md"]);
+    }
   });
 
   test("does nothing while another prewarm is indexing", async () => {

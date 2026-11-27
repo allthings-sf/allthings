@@ -93,11 +93,21 @@ export interface Planned {
 export const leaseMs = 15 * 60 * 1000;
 
 /**
+ * How far past the hold's end a run's bytes are counted: a day. The run
+ * starts nothing once its hold ends, but a request already on its way, or
+ * Cloudflare's own queue, can land later; counting a day on means it's
+ * counted on or after the day it can be billed, and only keeps it in the
+ * window a day longer.
+ */
+export const countAheadMs = 24 * 60 * 60 * 1000;
+
+/**
  * Plans an indexing run at `at`: each page whose hash isn't the one indexed
  * is let through, in the order given, while the window has room for its
- * bytes, and counted on the day the run's hold ends ({@link leaseMs}), the
- * latest any of its uploads can be sent, so a run that crosses midnight is
- * counted on the day Cloudflare can bill it; the rest are refused. With `complete`
+ * bytes, and counted a day past the day the run's hold ends ({@link
+ * leaseMs}, {@link countAheadMs}), so a run that crosses midnight, or an
+ * upload Cloudflare indexes late, is counted on or after the day it can be
+ * billed; the rest are refused. With `complete`
  * (the sitemap was read and every page it lists came back), each page
  * indexed and not given is to be removed. The counts come back without
  * the days the window has left.
@@ -138,7 +148,7 @@ export function plan(
         .filter(([key]) => !given.has(key))
         .map(([key, { id }]) => ({ key, id }))
     : [];
-  const today = utcDay(at + leaseMs);
+  const today = utcDay(at + leaseMs + countAheadMs);
   const added = counted - used(kept, at, days);
   const previous = upload.flatMap((key) => {
     const id = indexed[key]?.id;

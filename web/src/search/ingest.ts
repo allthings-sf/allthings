@@ -1,5 +1,5 @@
 import type { PrewarmReport } from "../prewarm.ts";
-import { type Indexing, indexingOf } from "./bindings.ts";
+import { type Indexing, indexingOf, type Items } from "./bindings.ts";
 import { pageDocument } from "./document.ts";
 import { pageKey } from "./route.ts";
 
@@ -63,6 +63,38 @@ export const sendMs = 60_000;
  */
 export const gone = (error: unknown): boolean =>
   /not[_ ]found/i.test(error instanceof Error ? error.message : String(error));
+
+/** `promise`, or a failure once `ms` milliseconds have passed. */
+async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("the hold ended first")),
+          Math.max(0, ms),
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The id of the item Cloudflare holds under `key`: `known`, the one the
+ * ledger names, or else the one its list shows under that exact key.
+ */
+async function keyHeld(
+  items: Items,
+  key: string,
+  known: string | undefined,
+): Promise<string | undefined> {
+  if (known !== undefined) return known;
+  const { result } = await items.list({ search: key, per_page: 50 });
+  return result.find((item) => item.key === key)?.id;
+}
 
 const sha256 = async (text: string) =>
   [
@@ -135,8 +167,9 @@ export async function indexPages(
   // Nothing is sent once the run's hold is about to end: what's left is
   // the next run's, its bytes counted again (ledger.ts, `until`).
   const late: Array<string> = [];
+  const open = () => now() < planned.until - sendMs;
   const inTime = (key: string) => {
-    if (now() < planned.until - sendMs) return true;
+    if (open()) return true;
     late.push(key);
     return false;
   };
@@ -145,7 +178,12 @@ export async function indexPages(
     if (page === undefined || !inTime(key)) return;
     const before = previous.get(key);
     try {
-      const { id } = await items.upload(key, page.markdown);
+      // Waited for no later than the hold's end: past it, the upload counts
+      // as failed (its bytes were counted all the same).
+      const { id } = await within(
+        items.upload(key, page.markdown),
+        planned.until - now(),
+      );
       uploaded.push({ key, hash: page.hash, id });
       // Replaced under a new id: the old one is let go (already gone is gone).
       if (before !== undefined && before !== id) {
@@ -153,10 +191,17 @@ export async function indexPages(
       }
     } catch {
       failed.push(key);
-      if (before !== undefined) {
-        await items.delete(before).then(
-          () => removed.push({ key, id: before }),
-          () => undefined,
+      // Cloudflare holds one item a key, so a refused upload may be its
+      // refusal of a key it holds: the item the ledger knows, or one a run
+      // that lost its hold uploaded and never recorded. Whichever it is
+      // goes, so the next run uploads the page anew.
+      const held = await keyHeld(items, key, before).catch(() => undefined);
+      if (held !== undefined && open()) {
+        await items.delete(held).then(
+          () => removed.push({ key, id: held }),
+          (error: unknown) => {
+            if (gone(error)) removed.push({ key, id: held });
+          },
         );
       }
     }

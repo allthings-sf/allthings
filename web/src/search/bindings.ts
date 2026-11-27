@@ -49,6 +49,16 @@ export interface Items {
     content: string,
   ) => Promise<{ readonly id: string; readonly key: string }>;
   readonly delete: (itemId: string) => Promise<void>;
+  /** Items whose keys hold `search`: to find a key's item when its id isn't known. */
+  readonly list: (options: {
+    readonly search: string;
+    readonly per_page: number;
+  }) => Promise<{
+    readonly result: ReadonlyArray<{
+      readonly id: string;
+      readonly key: string;
+    }>;
+  }>;
   /** An item's handle: `info()` says how its indexing went. */
   readonly get: (itemId: string) => {
     readonly info: () => Promise<{ readonly status: string }>;
