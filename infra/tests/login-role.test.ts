@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { deploysOnlyFromMain, throughPipe } from "../scripts/login-role.ts";
 
 describe("an environment a production credential may go in", () => {
@@ -117,8 +118,9 @@ describe("storing a credential in 1Password", () => {
     await chmod(join(dir, "op"), 0o755);
     const log = join(dir, "log");
     await writeFile(log, "");
-    const script = new URL("../scripts/login-role.ts", import.meta.url)
-      .pathname;
+    const script = fileURLToPath(
+      new URL("../scripts/login-role.ts", import.meta.url),
+    );
     const child = Bun.spawn(
       [
         process.execPath,
