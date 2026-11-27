@@ -13,6 +13,7 @@ import {
   siteServing,
 } from "./src/media.ts";
 import { PREVIEW, makePreview } from "./src/preview.ts";
+import { makeSearch, withSearchProviders } from "./src/search.ts";
 import { REQUESTS_DATASET } from "../web/src/metrics.ts";
 import { makeSync, syncPlan } from "./src/sync.ts";
 import { MediaUpload, MediaUploadCheck } from "./src/upload-worker.ts";
@@ -28,8 +29,9 @@ import {
 export default Alchemy.Stack(
   "allthings",
   {
-    // Alchemy's Cloudflare providers, and the alerts' own (src/alerts.ts).
-    providers: withAlertProviders(Cloudflare.providers()),
+    // Alchemy's Cloudflare providers, and the alerts' and the search's own
+    // (src/alerts.ts, src/search.ts).
+    providers: withSearchProviders(withAlertProviders(Cloudflare.providers())),
     state: Cloudflare.state(),
   },
   Effect.gen(function* () {
@@ -57,6 +59,8 @@ export default Alchemy.Stack(
       serving === "allthings.dev" && zone !== undefined
         ? yield* webAnalytics(zone.id)
         : undefined;
+    // Search for agents, on allthings.dev alone (src/search.ts).
+    const search = serving === "allthings.dev" ? yield* makeSearch : undefined;
     const site =
       serving === "none"
         ? undefined
@@ -69,6 +73,7 @@ export default Alchemy.Stack(
             analytics?.siteToken.as<string>(),
             // Prod alone takes talk proposals (web/src/proposals.ts).
             true,
+            search,
           );
     const webUrl = site?.url.as<string>();
     // Every deploy proves the variants bucket takes writes (src/web.ts).

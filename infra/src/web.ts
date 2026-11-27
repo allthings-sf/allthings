@@ -6,12 +6,14 @@ import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import { variantsCheckPath } from "../../core/src/refresh-path.ts";
 import { compatibility } from "../../web/src/compatibility.ts";
+import { perMinute as searchesPerMinute } from "../../web/src/search/bindings.ts";
 import { readerCaching } from "../../web/src/reader-caching.ts";
 import {
   REQUESTS_DATASET,
   type RequestsDataset,
 } from "../../web/src/metrics.ts";
 import { Intaker, Reader } from "./reader.ts";
+import type { makeSearch } from "./search.ts";
 import { requiredSecret } from "./sync.ts";
 
 /**
@@ -49,6 +51,17 @@ export const IntakeDatabase = Cloudflare.Hyperdrive.Connection("Intake", {
  * `namespaceId` names the limit's counters in the account.
  */
 export const proposalsLimit = { namespaceId: 1001, perMinute: 5 } as const;
+
+/**
+ * The search's rate limit (web/src/search/route.ts), by address, on prod
+ * alone: `perMinute` a minute in each Cloudflare location, counted before
+ * a search is counted against the budget, so one client can't spend it in
+ * a burst. Its counters are apart from the proposals'.
+ */
+export const searchLimit = {
+  namespaceId: 1002,
+  perMinute: searchesPerMinute,
+} as const;
 
 /**
  * The page store's namespace: each stage has its own, named after it and
@@ -107,6 +120,13 @@ export const SITE_ORIGIN = `https://${SITE_HOST}`;
  * originals on the media origin; it has no resource of its own, and
  * transformations are billed to the account. `VARIANTS` keeps each one
  * made ({@link Variants}), so it is made once, not once per data center.
+ *
+ * `search`, on prod alone, answers `/.well-known/search` (search.ts):
+ * `SEARCH` is the namespace that holds the site's index and
+ * `SEARCH_INSTANCE` the index's name there; `SEARCH_BUDGET` is the Durable
+ * Object that counts every search before the index is asked
+ * (web/src/search/budget.ts), whose class the Worker's module exports;
+ * `SEARCH_LIMIT` is each address's rate ({@link searchLimit}).
  */
 export const makeWeb = (
   domain?: Cloudflare.WorkerDomainConfig,
@@ -115,6 +135,8 @@ export const makeWeb = (
   analyticsToken?: Output.Output<string>,
   /** Whether this stage takes talk proposals: prod alone ({@link IntakeDatabase}). */
   intake = false,
+  /** Prod's search (search.ts's `makeSearch`). */
+  search?: Effect.Success<typeof makeSearch>,
 ) =>
   Effect.flatMap(Effect.all([Pages, Variants]), ([pages, variants]) =>
     Cloudflare.Worker("Web", {
@@ -155,6 +177,18 @@ export const makeWeb = (
         }),
         // Prod keeps proposals, as proposal_intake (web/src/proposals.ts).
         ...(intake ? { INTAKE: IntakeDatabase } : {}),
+        // Prod searches its own pages for agents (web/src/search/).
+        ...(search === undefined
+          ? {}
+          : {
+              SEARCH: search.namespace,
+              SEARCH_INSTANCE: search.instance,
+              SEARCH_BUDGET: Cloudflare.DurableObject("SearchBudget"),
+              SEARCH_LIMIT: Cloudflare.RateLimit("SEARCH_LIMIT", {
+                namespaceId: searchLimit.namespaceId,
+                simple: { limit: searchLimit.perMinute, period: 60 },
+              }),
+            }),
       },
       ...(domain === undefined ? {} : { domain }),
     }),

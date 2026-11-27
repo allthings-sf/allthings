@@ -19,6 +19,8 @@ import {
   variantsCheckPath,
   variantsCheckRequest,
 } from "./refresh.ts";
+import type { BudgetState } from "./search/budget.ts";
+import { searchPath } from "./search/path.ts";
 import { withoutTrailingSlash } from "./trailing-slash.ts";
 import { siteTokenOf, withBeacon } from "./web-analytics.ts";
 import {
@@ -83,6 +85,26 @@ const pagesOf = (
     ? (pages as PageNamespace)
     : undefined;
 };
+
+/**
+ * The search's count, a Durable Object on prod (infra/src/web.ts binds it
+ * as `SEARCH_BUDGET`). Its class must be the entry's, which every cold
+ * start parses, so it is only this: each request goes to search/budget.ts,
+ * loaded on the first.
+ */
+export class SearchBudget {
+  readonly #state: BudgetState;
+
+  constructor(state: BudgetState) {
+    this.#state = state;
+  }
+
+  fetch(request: Request): Promise<Response> {
+    return import("./search/budget.ts").then(({ answer }) =>
+      answer(this.#state, request),
+    );
+  }
+}
 
 /**
  * The allthings Worker. Bindings are fixed for an isolate's lifetime, so the
@@ -160,6 +182,13 @@ export default {
       const noStore = () => Promise.reject(new Error("no store"));
       handle = (incoming, incomingContext) => {
         const { pathname } = new URL(incoming.url);
+        // Prod alone searches (search/route.ts), which loads on the first
+        // search; elsewhere the path is a page like any other.
+        if (pathname === searchPath) {
+          return import("./search/route.ts").then(({ searchFrom }) =>
+            searchFrom(env, incoming, () => site(incoming, incomingContext)),
+          );
+        }
         if (pathname === refreshPath) {
           return refreshRequest(
             incoming,
