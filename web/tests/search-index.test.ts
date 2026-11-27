@@ -163,10 +163,34 @@ describe("what indexing may ingest", () => {
       refused: ["c.md"],
       unchanged: 1,
       remove: [],
+      // a.md was uploaded as it is, but its indexing isn't confirmed yet.
+      check: [{ key: "a.md", id: "item-a" }],
       used: 80,
       limit: 100,
     });
     expect(ingested).toEqual({ "2026-12-01": 50, "2026-12-10": 30 });
+  });
+
+  test("counts a run's bytes on the day its uploads can last be sent, so one crossing midnight counts on the day billed", () => {
+    const { ingested } = plan(
+      {},
+      {},
+      [page("a.md", "1", 10)],
+      false,
+      at("2026-12-10", "23:55:00"),
+    );
+    expect(ingested).toEqual({ "2026-12-11": 10 });
+  });
+
+  test("checks no page whose indexing Cloudflare has confirmed", () => {
+    const { planned } = plan(
+      {},
+      { "a.md": { hash: "1", id: "item-a", settled: true } },
+      [page("a.md", "1", 10)],
+      false,
+      at("2026-12-10"),
+    );
+    expect(planned.check).toEqual([]);
   });
 
   test("names the item a changed page was indexed as, to replace", () => {
@@ -379,8 +403,16 @@ describe("what indexing may ingest", () => {
  */
 const itemsIn = (refuse = false) => {
   const items = new Map<string, { key: string; markdown: string }>();
+  /** How each item's indexing went, by id: completed unless set. */
+  const statuses = new Map<string, string>();
   let made = 0;
   const api: Items = {
+    get: (id) => ({
+      info: async () => {
+        if (!items.has(id)) throw new Error(`no item ${id}`);
+        return { status: statuses.get(id) ?? "completed" };
+      },
+    }),
     upload: async (key, markdown) => {
       const held = [...items].find(([, item]) => item.key === key);
       if (held !== undefined) {
@@ -399,7 +431,10 @@ const itemsIn = (refuse = false) => {
   return {
     api,
     items,
+    statuses,
     keys: () => [...items.values()].map(({ key }) => key).toSorted(),
+    idOf: (key: string) =>
+      [...items].find(([, item]) => item.key === key)?.[0] ?? "",
   };
 };
 
@@ -436,8 +471,8 @@ const indexingWith = (
             refused: [...planned.refused, ...planned.upload.slice(limit)],
           };
     },
-    record: async (run, uploaded, removed) => {
-      await post(recordPath, { run, uploaded, removed });
+    record: async (run, uploaded, removed, settled) => {
+      await post(recordPath, { run, uploaded, removed, settled });
     },
   };
 };
@@ -542,6 +577,59 @@ describe("indexing the site's pages", () => {
       new TextEncoder().encode("# home").byteLength +
         2 * new TextEncoder().encode("# home, changed").byteLength,
     );
+  });
+
+  test("confirms on the next run that Cloudflare indexed each upload, then checks it no more", async () => {
+    const { api } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(documents({ "/": "# home" }), true, indexing);
+    const next = await indexPages(documents({ "/": "# home" }), true, indexing);
+    expect(next).toMatchObject({ uploaded: 0, unchanged: 1, settled: 1 });
+    const after = await indexPages(
+      documents({ "/": "# home" }),
+      true,
+      indexing,
+    );
+    expect(after).toMatchObject({ unchanged: 1, settled: 0 });
+  });
+
+  test("uploads a page again, counted again, when Cloudflare failed to index it", async () => {
+    const { api, statuses, keys, idOf } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(documents({ "/": "# home" }), true, indexing);
+    statuses.set(idOf("index.md"), "error");
+    const found = await indexPages(
+      documents({ "/": "# home" }),
+      true,
+      indexing,
+    );
+    expect(found).toMatchObject({ unindexed: 1, removed: 0, uploaded: 0 });
+    expect(keys()).toEqual([]);
+    const again = await indexPages(
+      documents({ "/": "# home" }),
+      true,
+      indexing,
+    );
+    expect(again).toMatchObject({ uploaded: 1 });
+    expect(keys()).toEqual(["index.md"]);
+    expect(again.used).toBe(2 * new TextEncoder().encode("# home").byteLength);
+  });
+
+  test("asks again next run about a page still queued", async () => {
+    const { api, statuses, idOf } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(documents({ "/": "# home" }), true, indexing);
+    statuses.set(idOf("index.md"), "queued");
+    expect(
+      await indexPages(documents({ "/": "# home" }), true, indexing),
+    ).toMatchObject({ settled: 0, unindexed: 0, uploaded: 0 });
+    statuses.delete(idOf("index.md"));
+    expect(
+      await indexPages(documents({ "/": "# home" }), true, indexing),
+    ).toMatchObject({ settled: 1 });
   });
 
   test("does nothing while another prewarm is indexing", async () => {

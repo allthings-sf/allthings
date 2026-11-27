@@ -45,6 +45,11 @@ export interface IndexedPage {
   readonly hash: string;
   /** The item's id in the index, to remove it by. */
   readonly id: string;
+  /**
+   * Cloudflare has said it indexed the item. An upload only queues it, so
+   * until a later run reads its status, it isn't taken as indexed for good.
+   */
+  readonly settled?: true;
 }
 
 /** Every page indexed, by key. */
@@ -65,6 +70,8 @@ export interface Planned {
   readonly unchanged: number;
   /** Pages indexed that the site no longer lists. */
   readonly remove: ReadonlyArray<{ readonly key: string; readonly id: string }>;
+  /** Pages uploaded as they are, whose indexing hasn't been confirmed yet. */
+  readonly check: ReadonlyArray<{ readonly key: string; readonly id: string }>;
   /** Bytes counted in the window, these included. */
   readonly used: number;
   readonly limit: number;
@@ -73,9 +80,18 @@ export interface Planned {
 }
 
 /**
+ * How long one run holds the index, in milliseconds: past the longest
+ * prewarm a deploy waits for (10 minutes), so a run that never records
+ * lets go of it on its own. Its uploads are all sent by then.
+ */
+export const leaseMs = 15 * 60 * 1000;
+
+/**
  * Plans an indexing run at `at`: each page whose hash isn't the one indexed
  * is let through, in the order given, while the window has room for its
- * bytes, and counted on `at`'s day; the rest are refused. With `complete`
+ * bytes, and counted on the day the run's hold ends ({@link leaseMs}), the
+ * latest any of its uploads can be sent, so a run that crosses midnight is
+ * counted on the day Cloudflare can bill it; the rest are refused. With `complete`
  * (the sitemap was read and every page it lists came back), each page
  * indexed and not given is to be removed. The counts come back without
  * the days the window has left.
@@ -96,10 +112,13 @@ export function plan(
   let counted = used(kept, at, days);
   const upload: Array<string> = [];
   const refused: Array<string> = [];
+  const check: Array<{ key: string; id: string }> = [];
   let unchanged = 0;
   for (const page of pages) {
-    if (indexed[page.key]?.hash === page.hash) {
+    const before = indexed[page.key];
+    if (before?.hash === page.hash) {
       unchanged += 1;
+      if (before.settled !== true) check.push({ key: page.key, id: before.id });
     } else if (counted + page.bytes <= limit) {
       counted += page.bytes;
       upload.push(page.key);
@@ -113,7 +132,7 @@ export function plan(
         .filter(([key]) => !given.has(key))
         .map(([key, { id }]) => ({ key, id }))
     : [];
-  const today = utcDay(at);
+  const today = utcDay(at + leaseMs);
   const added = counted - used(kept, at, days);
   const previous = upload.flatMap((key) => {
     const id = indexed[key]?.id;
@@ -126,6 +145,7 @@ export function plan(
       refused,
       unchanged,
       remove,
+      check,
       used: counted,
       limit,
     },
@@ -142,13 +162,6 @@ export const recordPath = "/record";
 
 /** The most pages one plan takes: far past the site's. */
 export const pagesLimit = 2_000;
-
-/**
- * How long one run holds the index, in milliseconds: past the longest
- * prewarm a deploy waits for (10 minutes), so a run that never records
- * lets go of it on its own.
- */
-export const leaseMs = 15 * 60 * 1000;
 
 const ingestedKey = "ingested";
 const indexedKey = "indexed";
@@ -225,6 +238,7 @@ export async function ledgerAnswer(
         refused: [],
         unchanged: 0,
         remove: [],
+        check: [],
         used: used(ingested, at),
         limit,
         busy: true,
@@ -237,18 +251,21 @@ export async function ledgerAnswer(
     await state.storage.put(leaseKey, { run, until: at + leaseMs });
     return Response.json(result.planned);
   }
-  const { uploaded, removed } = body as {
+  const { uploaded, removed, settled } = body as {
     uploaded?: unknown;
     removed?: unknown;
+    settled?: unknown;
   };
+  const items = (value: unknown, withHash: boolean) =>
+    Array.isArray(value) &&
+    value.every((page: unknown) => isItem(page, withHash));
   if (
-    !Array.isArray(uploaded) ||
-    !uploaded.every((page: unknown) => isItem(page, true)) ||
-    !Array.isArray(removed) ||
-    !removed.every((page: unknown) => isItem(page, false))
+    !items(uploaded, true) ||
+    !items(removed, false) ||
+    !items(settled ?? [], false)
   ) {
     return refusal(
-      "a record takes { run, uploaded: [{ key, hash, id }], removed: [{ key, id }] }",
+      "a record takes { run, uploaded: [{ key, hash, id }], removed: [{ key, id }], settled: [{ key, id }] }",
     );
   }
   const lease = await state.storage.get<Lease>(leaseKey);
@@ -262,6 +279,14 @@ export async function ledgerAnswer(
     IndexedPage & { readonly key: string }
   >) {
     indexed[key] = { hash, id };
+  }
+  // Indexed for good, by Cloudflare's word.
+  for (const { key, id } of (settled ?? []) as ReadonlyArray<{
+    readonly key: string;
+    readonly id: string;
+  }>) {
+    const page = indexed[key];
+    if (page?.id === id) indexed[key] = { ...page, settled: true };
   }
   // Only the item the run removed: one uploaded since stays recorded.
   for (const { key, id } of removed as ReadonlyArray<{

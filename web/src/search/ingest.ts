@@ -29,7 +29,14 @@ export interface IndexReport {
   readonly refused: number;
   /** Pages the sitemap no longer lists, removed. */
   readonly removed: number;
-  /** Pages whose upload or removal failed, by key: tried again next time. */
+  /** Pages uploaded before that Cloudflare has now said it indexed. */
+  readonly settled: number;
+  /**
+   * Pages uploaded before that Cloudflare failed to index or skipped:
+   * removed, so the next run uploads them again, counted again.
+   */
+  readonly unindexed: number;
+  /** Pages whose upload, check or removal failed, by key: tried again next time. */
   readonly failed: ReadonlyArray<string>;
   /** Bytes ingested in the window, this run's included, and its limit. */
   readonly used: number;
@@ -72,6 +79,10 @@ async function each<T>(
  * `complete` says the sitemap was read and every page it lists came back
  * as a document, so a page indexed before and missing now has left the
  * site.
+ *
+ * An upload only queues a page, so the next run reads each new item's
+ * status: indexed, it's settled; failed or skipped, it's removed, and the
+ * run after uploads it again, counted again.
  *
  * A changed page's upload takes the place of the item it was indexed as.
  * Cloudflare holds one item a key, so an upload it refuses may be its
@@ -132,12 +143,32 @@ export async function indexPages(
       failed.push(key);
     }
   });
-  if (planned.busy !== true) await record(run, uploaded, removed);
+  // An upload only queues a page: its item says, later, how indexing went.
+  // A page still queued or running is asked again next run.
+  const settled: Array<{ key: string; id: string }> = [];
+  let unindexed = 0;
+  await each(planned.check, async ({ key, id }) => {
+    try {
+      const { status } = await items.get(id).info();
+      if (status === "completed") {
+        settled.push({ key, id });
+      } else if (status === "error" || status === "skipped") {
+        await items.delete(id);
+        removed.push({ key, id });
+        unindexed += 1;
+      }
+    } catch {
+      failed.push(key);
+    }
+  });
+  if (planned.busy !== true) await record(run, uploaded, removed, settled);
   return {
     uploaded: uploaded.length,
     unchanged: planned.unchanged,
     refused: planned.refused.length,
-    removed: removed.length,
+    removed: removed.length - unindexed,
+    settled: settled.length,
+    unindexed,
     failed,
     used: planned.used,
     limit: planned.limit,

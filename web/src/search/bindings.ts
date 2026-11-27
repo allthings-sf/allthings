@@ -49,6 +49,10 @@ export interface Items {
     content: string,
   ) => Promise<{ readonly id: string; readonly key: string }>;
   readonly delete: (itemId: string) => Promise<void>;
+  /** An item's handle: `info()` says how its indexing went. */
+  readonly get: (itemId: string) => {
+    readonly info: () => Promise<{ readonly status: string }>;
+  };
 }
 
 /** What the Worker uses of an AI Search namespace binding. */
@@ -136,7 +140,10 @@ export interface Indexing {
     pages: ReadonlyArray<PlannedPage>,
     complete: boolean,
   ) => Promise<Planned>;
-  /** Tells the object what the run uploaded and removed, and lets the index go. */
+  /**
+   * Tells the object what the run uploaded, removed and found indexed for
+   * good, and lets the index go.
+   */
   readonly record: (
     run: string,
     uploaded: ReadonlyArray<{
@@ -145,6 +152,7 @@ export interface Indexing {
       readonly id: string;
     }>,
     removed: ReadonlyArray<{ readonly key: string; readonly id: string }>,
+    settled: ReadonlyArray<{ readonly key: string; readonly id: string }>,
   ) => Promise<void>;
 }
 
@@ -158,8 +166,8 @@ export function indexingOf(
     items: bound.index.items,
     plan: (run, pages, complete) =>
       bound.ask(planPath, { run, pages, complete }),
-    record: async (run, uploaded, removed) => {
-      await bound.ask(recordPath, { run, uploaded, removed });
+    record: async (run, uploaded, removed, settled) => {
+      await bound.ask(recordPath, { run, uploaded, removed, settled });
     },
   };
 }
