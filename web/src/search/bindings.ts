@@ -130,19 +130,21 @@ function boundOf(env: Readonly<Record<string, unknown>>) {
 /** What indexing needs of the Worker's bindings (ingest.ts). */
 export interface Indexing {
   readonly items: Items;
-  /** The object's plan for these pages (ledger.ts). */
+  /** The object's plan for these pages, for the run named `run` (ledger.ts). */
   readonly plan: (
+    run: string,
     pages: ReadonlyArray<PlannedPage>,
     complete: boolean,
   ) => Promise<Planned>;
-  /** Tells the object what was uploaded and removed. */
+  /** Tells the object what the run uploaded and removed, and lets the index go. */
   readonly record: (
+    run: string,
     uploaded: ReadonlyArray<{
       readonly key: string;
       readonly hash: string;
       readonly id: string;
     }>,
-    removed: ReadonlyArray<string>,
+    removed: ReadonlyArray<{ readonly key: string; readonly id: string }>,
   ) => Promise<void>;
 }
 
@@ -154,9 +156,10 @@ export function indexingOf(
   if (bound === undefined) return undefined;
   return {
     items: bound.index.items,
-    plan: (pages, complete) => bound.ask(planPath, { pages, complete }),
-    record: async (uploaded, removed) => {
-      await bound.ask(recordPath, { uploaded, removed });
+    plan: (run, pages, complete) =>
+      bound.ask(planPath, { run, pages, complete }),
+    record: async (run, uploaded, removed) => {
+      await bound.ask(recordPath, { run, uploaded, removed });
     },
   };
 }

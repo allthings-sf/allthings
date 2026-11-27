@@ -1,5 +1,5 @@
 import type { PrewarmReport } from "../prewarm.ts";
-import { type Indexing, indexingOf, type Items } from "./bindings.ts";
+import { type Indexing, indexingOf } from "./bindings.ts";
 import { pageDocument } from "./document.ts";
 import { pageKey } from "./route.ts";
 
@@ -34,6 +34,8 @@ export interface IndexReport {
   /** Bytes ingested in the window, this run's included, and its limit. */
   readonly used: number;
   readonly limit: number;
+  /** Another prewarm was indexing, so this one did nothing. */
+  readonly busy?: true;
 }
 
 /** Uploads at once. */
@@ -66,36 +68,16 @@ async function each<T>(
 }
 
 /**
- * Uploads `markdown` under `key`, in place of the item the key was indexed
- * as before (`previous`), if it was. Whether Cloudflare replaces a key's
- * item or keeps both, the page ends with one: an upload Cloudflare refuses
- * removes the old item and is tried once more, and one that comes back as
- * a new item removes the old one after it (already gone is gone).
- */
-async function upload(
-  items: Items,
-  key: string,
-  markdown: string,
-  previous: string | undefined,
-): Promise<string> {
-  let id: string;
-  try {
-    id = (await items.upload(key, markdown)).id;
-  } catch (error) {
-    if (previous === undefined) throw error;
-    await items.delete(previous);
-    return (await items.upload(key, markdown)).id;
-  }
-  if (previous !== undefined && previous !== id) {
-    await items.delete(previous).catch(() => undefined);
-  }
-  return id;
-}
-
-/**
  * Indexes `documents` (each page's Markdown, by path) through `indexing`.
- * `complete` says the sitemap was read and every page it lists came back,
- * so a page indexed before and missing now has left the site.
+ * `complete` says the sitemap was read and every page it lists came back
+ * as a document, so a page indexed before and missing now has left the
+ * site.
+ *
+ * A changed page's upload takes the place of the item it was indexed as.
+ * Cloudflare holds one item a key, so an upload it refuses may be its
+ * refusal of a key it holds: then the old item is removed and the page
+ * recorded as gone, and the next run, planned and counted again, uploads
+ * it anew. Nothing is sent twice uncounted.
  */
 export async function indexPages(
   documents: ReadonlyMap<string, string>,
@@ -110,34 +92,47 @@ export async function indexPages(
       bytes: new TextEncoder().encode(markdown).byteLength,
     })),
   );
+  const run = crypto.randomUUID();
   const planned = await plan(
+    run,
     pages.map(({ key, hash, bytes }) => ({ key, hash, bytes })),
     complete,
   );
   const byKey = new Map(pages.map((page) => [page.key, page]));
   const uploaded: Array<{ key: string; hash: string; id: string }> = [];
-  const removed: Array<string> = [];
+  const removed: Array<{ key: string; id: string }> = [];
   const failed: Array<string> = [];
   const previous = new Map(planned.previous.map(({ key, id }) => [key, id]));
   await each(planned.upload, async (key) => {
     const page = byKey.get(key);
     if (page === undefined) return;
+    const before = previous.get(key);
     try {
-      const id = await upload(items, key, page.markdown, previous.get(key));
+      const { id } = await items.upload(key, page.markdown);
       uploaded.push({ key, hash: page.hash, id });
+      // Replaced under a new id: the old one is let go (already gone is gone).
+      if (before !== undefined && before !== id) {
+        await items.delete(before).catch(() => undefined);
+      }
     } catch {
       failed.push(key);
+      if (before !== undefined) {
+        await items.delete(before).then(
+          () => removed.push({ key, id: before }),
+          () => undefined,
+        );
+      }
     }
   });
   await each(planned.remove, async ({ key, id }) => {
     try {
       await items.delete(id);
-      removed.push(key);
+      removed.push({ key, id });
     } catch {
       failed.push(key);
     }
   });
-  await record(uploaded, removed);
+  if (planned.busy !== true) await record(run, uploaded, removed);
   return {
     uploaded: uploaded.length,
     unchanged: planned.unchanged,
@@ -146,6 +141,7 @@ export async function indexPages(
     failed,
     used: planned.used,
     limit: planned.limit,
+    ...(planned.busy === true ? { busy: true as const } : {}),
   };
 }
 
@@ -164,17 +160,25 @@ export async function withIndex<Report extends PrewarmReport>(
   warm: (
     onPage: ((path: string, html: string) => void) | undefined,
   ) => Promise<Report>,
+  // Tests make documents their own way; the Worker makes them as document.ts does.
+  make: typeof pageDocument = pageDocument,
 ): Promise<IndexedPrewarm<Report>> {
   const indexing = indexingOf(env);
   if (indexing === undefined) return warm(undefined);
   const origin = typeof env["ORIGIN"] === "string" ? env["ORIGIN"] : "";
   // Each page is made Markdown as it arrives, so no page's HTML is kept.
+  // One that couldn't be made is missing for a reason that isn't the
+  // site's, so the run removes nothing.
   const made = new Map<string, Promise<string | undefined>>();
+  const unmade = { any: false };
   const report = await warm((path, html) => {
     if (path === "/sitemap.xml") return;
     made.set(
       path,
-      pageDocument(html, `${origin}${path}`).catch(() => undefined),
+      make(html, `${origin}${path}`).catch(() => {
+        unmade.any = true;
+        return undefined;
+      }),
     );
   });
   const documents = new Map<string, string>();
@@ -187,7 +191,8 @@ export async function withIndex<Report extends PrewarmReport>(
   const complete =
     report.sitemapRead &&
     report.failed.length === 0 &&
-    report.unreachable === 0;
+    report.unreachable === 0 &&
+    !unmade.any;
   try {
     return {
       ...report,

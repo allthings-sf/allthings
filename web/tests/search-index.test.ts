@@ -14,6 +14,8 @@ import { indexPages, withIndex } from "../src/search/ingest.ts";
 import {
   INGEST_BYTES_IN_WINDOW,
   type Indexed,
+  leaseMs,
+  ledgerAnswer,
   plan,
   planPath,
   recordPath,
@@ -99,6 +101,15 @@ describe("a page as the search indexes it", () => {
         ),
       ).toBe(false);
     }
+  });
+
+  test("reads past a void element it leaves out, as an <img aria-hidden>", async () => {
+    expect(
+      await pageDocument(
+        '<main><img aria-hidden="true" alt=""><br hidden><p>Visible</p></main>',
+        "https://allthings.dev/x",
+      ),
+    ).toBe("https://allthings.dev/x\n\nVisible\n");
   });
 
   test("is nothing for a page with no main", async () => {
@@ -212,15 +223,24 @@ describe("what indexing may ingest", () => {
         }),
       );
     const first = await (
-      await post(planPath, { pages: [page("a.md", "1", 10)], complete: true })
+      await post(planPath, {
+        run: "r1",
+        pages: [page("a.md", "1", 10)],
+        complete: true,
+      })
     ).json();
     expect(first).toMatchObject({ upload: ["a.md"], used: 10 });
     await post(recordPath, {
+      run: "r1",
       uploaded: [{ key: "a.md", hash: "1", id: "item-a" }],
       removed: [],
     });
     const again = await (
-      await post(planPath, { pages: [page("a.md", "1", 10)], complete: true })
+      await post(planPath, {
+        run: "r2",
+        pages: [page("a.md", "1", 10)],
+        complete: true,
+      })
     ).json();
     expect(again).toMatchObject({ upload: [], unchanged: 1, used: 10 });
     expect(state.held.get("indexed")).toEqual({
@@ -233,14 +253,27 @@ describe("what indexing may ingest", () => {
     const statuses = await Promise.all(
       [
         [planPath, "not json"],
+        [planPath, JSON.stringify({ pages: [], complete: true })],
         [
           planPath,
-          JSON.stringify({ pages: [{ key: "a.md" }], complete: true }),
+          JSON.stringify({
+            run: "r",
+            pages: [{ key: "a.md" }],
+            complete: true,
+          }),
         ],
-        [planPath, JSON.stringify({ pages: [], complete: "yes" })],
+        [planPath, JSON.stringify({ run: "r", pages: [], complete: "yes" })],
         [
           recordPath,
-          JSON.stringify({ uploaded: [{ key: "a.md" }], removed: [] }),
+          JSON.stringify({
+            run: "r",
+            uploaded: [{ key: "a.md" }],
+            removed: [],
+          }),
+        ],
+        [
+          recordPath,
+          JSON.stringify({ run: "r", uploaded: [], removed: ["a.md"] }),
         ],
       ].map(
         async ([path, body]) =>
@@ -252,17 +285,108 @@ describe("what indexing may ingest", () => {
           ).status,
       ),
     );
-    expect(statuses).toEqual([400, 400, 400, 400]);
+    expect(statuses).toEqual([400, 400, 400, 400, 400, 400]);
     expect(state.held.size).toBe(0);
+  });
+
+  const post = (state: BudgetState, path: string, body: unknown) =>
+    objectAnswer(
+      state,
+      new Request(`https://budget${path}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    );
+
+  test("the object lets one run index at a time: another's plan is busy until the first records", async () => {
+    const state = memory();
+    const pages = [page("a.md", "1", 10)];
+    expect(
+      await (
+        await post(state, planPath, { run: "r1", pages, complete: true })
+      ).json(),
+    ).toMatchObject({ upload: ["a.md"] });
+    expect(
+      await (
+        await post(state, planPath, { run: "r2", pages, complete: true })
+      ).json(),
+    ).toMatchObject({ busy: true, upload: [], remove: [] });
+    // A record from a run that doesn't hold the index is refused.
+    expect(
+      (await post(state, recordPath, { run: "r2", uploaded: [], removed: [] }))
+        .status,
+    ).toBe(409);
+    await post(state, recordPath, {
+      run: "r1",
+      uploaded: [{ key: "a.md", hash: "1", id: "item-a" }],
+      removed: [],
+    });
+    expect(
+      await (
+        await post(state, planPath, { run: "r2", pages, complete: true })
+      ).json(),
+    ).toMatchObject({ unchanged: 1 });
+  });
+
+  test("the object lets a run's hold go once it's past its time", async () => {
+    let clock = Date.parse("2026-12-10T12:00:00Z");
+    const state = memory();
+    const planFor = (run: string) =>
+      ledgerAnswer(
+        state,
+        new Request(`https://budget${planPath}`, {
+          method: "POST",
+          body: JSON.stringify({ run, pages: [], complete: false }),
+        }),
+        () => clock,
+      ).then((response) => response.json());
+    await planFor("r1");
+    expect(await planFor("r2")).toMatchObject({ busy: true });
+    clock += leaseMs + 1;
+    expect(await planFor("r2")).not.toHaveProperty("busy");
+  });
+
+  test("the object forgets a removed page only if its item is the one removed", async () => {
+    const state = memory();
+    await post(state, planPath, { run: "r1", pages: [], complete: false });
+    await post(state, recordPath, {
+      run: "r1",
+      uploaded: [
+        { key: "a.md", hash: "1", id: "item-new" },
+        { key: "b.md", hash: "2", id: "item-b" },
+      ],
+      removed: [],
+    });
+    await post(state, planPath, { run: "r2", pages: [], complete: false });
+    await post(state, recordPath, {
+      run: "r2",
+      uploaded: [],
+      removed: [
+        { key: "a.md", id: "item-old" },
+        { key: "b.md", id: "item-b" },
+      ],
+    });
+    expect(state.held.get("indexed")).toEqual({
+      "a.md": { hash: "1", id: "item-new" },
+    });
   });
 });
 
-/** An index's items, kept in memory: each upload a new item, as Cloudflare may make. */
-const itemsIn = () => {
+/**
+ * An index's items, kept in memory, one a key as Cloudflare keeps them: an
+ * upload of a key it holds replaces its item under a new id, or, with
+ * `refuse`, is refused.
+ */
+const itemsIn = (refuse = false) => {
   const items = new Map<string, { key: string; markdown: string }>();
   let made = 0;
   const api: Items = {
     upload: async (key, markdown) => {
+      const held = [...items].find(([, item]) => item.key === key);
+      if (held !== undefined) {
+        if (refuse) throw new Error(`${key} exists`);
+        items.delete(held[0]);
+      }
       made += 1;
       const id = `item-${made}`;
       items.set(id, { key, markdown });
@@ -297,10 +421,12 @@ const indexingWith = (
     ).json();
   return {
     items,
-    plan: async (pages, complete) => {
-      const planned = (await post(planPath, { pages, complete })) as Awaited<
-        ReturnType<Indexing["plan"]>
-      >;
+    plan: async (run, pages, complete) => {
+      const planned = (await post(planPath, {
+        run,
+        pages,
+        complete,
+      })) as Awaited<ReturnType<Indexing["plan"]>>;
       // A low limit stands in for a window that's nearly full.
       return limit === undefined
         ? planned
@@ -310,8 +436,8 @@ const indexingWith = (
             refused: [...planned.refused, ...planned.upload.slice(limit)],
           };
     },
-    record: async (uploaded, removed) => {
-      await post(recordPath, { uploaded, removed });
+    record: async (run, uploaded, removed) => {
+      await post(recordPath, { run, uploaded, removed });
     },
   };
 };
@@ -388,6 +514,53 @@ describe("indexing the site's pages", () => {
       indexingWith(api, state),
     );
     expect(later).toMatchObject({ uploaded: 1, unchanged: 1 });
+  });
+
+  test("lets a changed page's old item go when the upload is refused, and uploads it anew next run, counted again", async () => {
+    const { api, items, keys } = itemsIn(true);
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(documents({ "/": "# home" }), true, indexing);
+    const refused = await indexPages(
+      documents({ "/": "# home, changed" }),
+      true,
+      indexing,
+    );
+    expect(refused).toMatchObject({ uploaded: 0, failed: ["index.md"] });
+    expect(keys()).toEqual([]);
+    const anew = await indexPages(
+      documents({ "/": "# home, changed" }),
+      true,
+      indexing,
+    );
+    expect(anew).toMatchObject({ uploaded: 1, unchanged: 0 });
+    expect([...items.values()]).toEqual([
+      { key: "index.md", markdown: "# home, changed" },
+    ]);
+    // Each upload was counted: three of the home page's sizes.
+    expect(anew.used).toBe(
+      new TextEncoder().encode("# home").byteLength +
+        2 * new TextEncoder().encode("# home, changed").byteLength,
+    );
+  });
+
+  test("does nothing while another prewarm is indexing", async () => {
+    const { api, keys } = itemsIn();
+    const state = memory();
+    await ledgerAnswer(
+      state,
+      new Request(`https://budget${planPath}`, {
+        method: "POST",
+        body: JSON.stringify({ run: "other", pages: [], complete: false }),
+      }),
+    );
+    const run = await indexPages(
+      documents({ "/": "# home" }),
+      true,
+      indexingWith(api, state),
+    );
+    expect(run).toMatchObject({ busy: true, uploaded: 0 });
+    expect(keys()).toEqual([]);
   });
 
   test("tries a page whose upload failed again next run, and doesn't record it", async () => {
@@ -475,6 +648,44 @@ describe("a prewarm that indexes", () => {
     expect(
       [...items.values()].find(({ key }) => key === "about.md")?.markdown,
     ).toContain("https://allthings.dev/about");
+  });
+
+  test("removes nothing when a page couldn't be made into a document", async () => {
+    const { api, keys } = itemsIn();
+    const state = memory();
+    const env = (object: BudgetState) => ({
+      SEARCH: {
+        get: () => ({ search: async () => ({ chunks: [] }), items: api }),
+      },
+      SEARCH_INSTANCE: "pages",
+      SEARCH_BUDGET: {
+        idFromName: () => "site",
+        get: () => ({
+          fetch: (url: string, init: RequestInit) =>
+            objectAnswer(object, new Request(url, init)),
+        }),
+      },
+    });
+    await withIndex(env(state), async (onPage) => {
+      onPage?.("/", html("home"));
+      onPage?.("/about", html("about"));
+      return report;
+    });
+    expect(keys()).toEqual(["about.md", "index.md"]);
+    const result = await withIndex(
+      env(state),
+      async (onPage) => {
+        onPage?.("/", html("home"));
+        onPage?.("/about", html("about"));
+        return report;
+      },
+      async (page, url) => {
+        if (url.endsWith("/about")) throw new Error("couldn't read it");
+        return pageDocument(page, url);
+      },
+    );
+    expect(result.search).toMatchObject({ removed: 0 });
+    expect(keys()).toEqual(["about.md", "index.md"]);
   });
 
   test("never fails the prewarm when indexing does", async () => {

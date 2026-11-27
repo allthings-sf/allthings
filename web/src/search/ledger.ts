@@ -68,6 +68,8 @@ export interface Planned {
   /** Bytes counted in the window, these included. */
   readonly used: number;
   readonly limit: number;
+  /** Another run holds the index, so this one does nothing. */
+  readonly busy?: true;
 }
 
 /**
@@ -141,8 +143,22 @@ export const recordPath = "/record";
 /** The most pages one plan takes: far past the site's. */
 export const pagesLimit = 2_000;
 
+/**
+ * How long one run holds the index, in milliseconds: past the longest
+ * prewarm a deploy waits for (10 minutes), so a run that never records
+ * lets go of it on its own.
+ */
+export const leaseMs = 15 * 60 * 1000;
+
 const ingestedKey = "ingested";
 const indexedKey = "indexed";
+const leaseKey = "lease";
+
+/** The run that holds the index, and until when. */
+interface Lease {
+  readonly run: string;
+  readonly until: number;
+}
 
 const isPage = (value: unknown): value is PlannedPage =>
   typeof value === "object" &&
@@ -152,14 +168,25 @@ const isPage = (value: unknown): value is PlannedPage =>
   Number.isSafeInteger((value as PlannedPage).bytes) &&
   (value as PlannedPage).bytes >= 0;
 
-const refusal = (problem: string) =>
-  Response.json({ error: problem }, { status: 400 });
+/** Whether `value` names a page and an item: `{ key, id }`, and `hash` if `withHash`. */
+const isItem = (value: unknown, withHash: boolean): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as { key?: unknown }).key === "string" &&
+  typeof (value as { id?: unknown }).id === "string" &&
+  (!withHash || typeof (value as { hash?: unknown }).hash === "string");
+
+const refusal = (problem: string, status = 400) =>
+  Response.json({ error: problem }, { status });
 
 /**
- * The object's answer to {@link planPath} (`{ pages, complete }` → a
- * {@link Planned}) and {@link recordPath} (`{ uploaded, removed }`). Each
- * reads, decides and writes with nothing awaited between but the storage
- * itself, as budget.ts's count does.
+ * The object's answer to {@link planPath} (`{ run, pages, complete }` → a
+ * {@link Planned}) and {@link recordPath} (`{ run, uploaded, removed }`).
+ * One run holds the index from its plan to its record, so two prewarms at
+ * once (the hourly sync's and a deploy's) never plan the same pages or
+ * record over each other: a plan while another run holds it is `busy`, and
+ * plans nothing. Each request reads, decides and writes with nothing
+ * awaited between but the storage itself, as budget.ts's count does.
  */
 export async function ledgerAnswer(
   state: BudgetState,
@@ -172,6 +199,10 @@ export async function ledgerAnswer(
   if (typeof body !== "object" || body === null) {
     return refusal("the body isn't a JSON object");
   }
+  const { run } = body as { run?: unknown };
+  if (typeof run !== "string" || run === "") {
+    return refusal("a plan or a record names its run");
+  }
   if (path === planPath) {
     const { pages, complete } = body as { pages?: unknown; complete?: unknown };
     if (
@@ -181,13 +212,29 @@ export async function ledgerAnswer(
       typeof complete !== "boolean"
     ) {
       return refusal(
-        "a plan takes { pages: [{ key, hash, bytes }], complete }",
+        "a plan takes { run, pages: [{ key, hash, bytes }], complete }",
       );
     }
+    const at = now();
+    const lease = await state.storage.get<Lease>(leaseKey);
     const ingested = (await state.storage.get<DayCounts>(ingestedKey)) ?? {};
+    if (lease !== undefined && lease.run !== run && lease.until > at) {
+      const busy: Planned = {
+        upload: [],
+        previous: [],
+        refused: [],
+        unchanged: 0,
+        remove: [],
+        used: used(ingested, at),
+        limit,
+        busy: true,
+      };
+      return Response.json(busy);
+    }
     const indexed = (await state.storage.get<Indexed>(indexedKey)) ?? {};
-    const result = plan(ingested, indexed, pages, complete, now(), limit);
+    const result = plan(ingested, indexed, pages, complete, at, limit);
     await state.storage.put(ingestedKey, result.ingested);
+    await state.storage.put(leaseKey, { run, until: at + leaseMs });
     return Response.json(result.planned);
   }
   const { uploaded, removed } = body as {
@@ -196,20 +243,17 @@ export async function ledgerAnswer(
   };
   if (
     !Array.isArray(uploaded) ||
-    !uploaded.every(
-      (page: unknown) =>
-        typeof page === "object" &&
-        page !== null &&
-        typeof (page as { key?: unknown }).key === "string" &&
-        typeof (page as { hash?: unknown }).hash === "string" &&
-        typeof (page as { id?: unknown }).id === "string",
-    ) ||
+    !uploaded.every((page: unknown) => isItem(page, true)) ||
     !Array.isArray(removed) ||
-    !removed.every((key: unknown) => typeof key === "string")
+    !removed.every((page: unknown) => isItem(page, false))
   ) {
     return refusal(
-      "a record takes { uploaded: [{ key, hash, id }], removed: [key] }",
+      "a record takes { run, uploaded: [{ key, hash, id }], removed: [{ key, id }] }",
     );
+  }
+  const lease = await state.storage.get<Lease>(leaseKey);
+  if (lease?.run !== run) {
+    return refusal("another run holds the index, or none does", 409);
   }
   const indexed: Record<string, IndexedPage> = {
     ...(await state.storage.get<Indexed>(indexedKey)),
@@ -219,7 +263,14 @@ export async function ledgerAnswer(
   >) {
     indexed[key] = { hash, id };
   }
-  for (const key of removed as ReadonlyArray<string>) delete indexed[key];
+  // Only the item the run removed: one uploaded since stays recorded.
+  for (const { key, id } of removed as ReadonlyArray<{
+    readonly key: string;
+    readonly id: string;
+  }>) {
+    if (indexed[key]?.id === id) delete indexed[key];
+  }
   await state.storage.put(indexedKey, indexed);
+  await state.storage.put(leaseKey, { run, until: 0 });
   return Response.json({ indexed: Object.keys(indexed).length });
 }

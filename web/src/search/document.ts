@@ -101,8 +101,15 @@ export async function pageDocument(
   let skipped = 0;
   let found = false;
   const out: Array<string> = [];
+  // An element counted from its start to its end. A void element (an
+  // <img aria-hidden>, say) has no end, and nothing in it to leave out, so
+  // it isn't counted: the runtime refuses an end-tag handler on one.
   const depth = (on: () => void, off: () => void) => ({
-    element(element: { onEndTag(handler: () => void): void }) {
+    element(element: {
+      readonly canHaveContent: boolean;
+      onEndTag(handler: () => void): void;
+    }) {
+      if (!element.canHaveContent) return;
       on();
       element.onEndTag(off);
     },
@@ -159,7 +166,7 @@ export async function pageDocument(
     // beside a role: "Michael Arnaldi" "Founder & CEO", not one word.
     .on(inline.map((tag) => `main ${tag}`).join(", "), {
       element(element) {
-        if (skipped > 0) return;
+        if (skipped > 0 || !element.canHaveContent) return;
         out.push(" ");
         element.onEndTag(() => {
           out.push(" ");
