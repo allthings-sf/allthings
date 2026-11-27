@@ -1,5 +1,6 @@
 import { roleColor, tokens } from "allthings-brand/src/tokens.ts";
 import { xHandle } from "../links.ts";
+import { agentDiscovery } from "../search/discovery.ts";
 import { serializeJsonLd, type StructuredData } from "./structured-data.ts";
 import type { Theme } from "./theme.ts";
 
@@ -111,6 +112,23 @@ function ThemeColor({ theme }: { readonly theme: Theme | undefined }) {
   );
 }
 
+/**
+ * Where agents search the site (search/discovery.ts): the `agent:` tags
+ * Cloudflare's guide names. A page kept out of search engines
+ * (`noindex`) doesn't carry them, as it isn't indexed either.
+ */
+function AgentSearch({ origin }: { readonly origin: string }) {
+  const agent = agentDiscovery(origin);
+  return (
+    <>
+      <meta name="agent:instructions" content={agent.instructions} />
+      <meta name="agent:endpoint" content={agent.endpoint} />
+      <meta name="agent:method" content={agent.method} />
+      <meta name="agent:documentation" content={agent.documentation} />
+    </>
+  );
+}
+
 /** JSON-LD, serialized so that nothing in it can end the element. */
 function JsonLd({ data }: { readonly data: StructuredData }) {
   const safeJson = serializeJsonLd(data);
@@ -127,7 +145,8 @@ export interface MetadataProps {
 
 /**
  * The page's title, description, canonical URL, feed, link preview
- * (Open Graph, which X reads too), browser colors and structured data.
+ * (Open Graph, which X reads too), where agents search the site, browser
+ * colors and structured data.
  */
 export function Metadata({ meta, origin, theme }: MetadataProps) {
   const canonical = `${origin}${meta.path}`;
@@ -165,6 +184,7 @@ export function Metadata({ meta, origin, theme }: MetadataProps) {
       <meta name="twitter:site" content={`@${xHandle}`} />
       <meta name="twitter:image" content={image} />
       <meta name="twitter:image:alt" content={meta.image.alt} />
+      {meta.noindex === true ? "" : <AgentSearch origin={origin} />}
       <ThemeColor theme={theme} />
       {(meta.structuredData ?? []).map((data) => (
         <JsonLd data={data} />
