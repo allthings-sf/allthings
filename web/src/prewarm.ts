@@ -90,8 +90,14 @@ export interface PrewarmOptions {
   readonly now: () => number;
   /** Waits `ms` milliseconds. */
   readonly sleep: (ms: number) => Promise<void>;
-  /** Hands over each page that answered 2xx, as its HTML: what the search indexes (search/ingest.ts). */
-  readonly onPage?: ((path: string, body: string) => void) | undefined;
+  /**
+   * Hands over each page the sitemap lists, as its HTML when it answered
+   * 2xx and undefined when it didn't: what the search indexes
+   * (search/ingest.ts). A page asked for once more is handed over again.
+   */
+  readonly onPage?:
+    | ((path: string, body: string | undefined) => void)
+    | undefined;
 }
 
 /** Whether prewarming read no sitemap, and so warmed nothing. */
@@ -177,7 +183,7 @@ export async function prewarm({
         if (path === undefined) continue;
         const { outcome, body } = await visit(path);
         outcomes.set(path, outcome);
-        if (body !== undefined) onPage?.(path, body);
+        onPage?.(path, body);
       }
     }),
   );
@@ -187,7 +193,7 @@ export async function prewarm({
     if (outcomes.get(path) === "failed") {
       const { outcome, body } = await visit(path);
       outcomes.set(path, outcome);
-      if (body !== undefined) onPage?.(path, body);
+      onPage?.(path, body);
     }
   }
   const all = [...outcomes.entries()];

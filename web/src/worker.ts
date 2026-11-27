@@ -215,7 +215,16 @@ export default {
               ? noStore
               : () => writers.prewarm(incomingContext),
             // `?dry-run` answers the plan, and does nothing (cache.ts).
-            () => prewarmPlan,
+            // On prod it also says what indexing would do, from pages the
+            // app renders without the store keeping them (search/ingest.ts).
+            () =>
+              import("./search/ingest.ts").then(({ planWithIndex }) =>
+                planWithIndex(env, prewarmPlan, (path) =>
+                  app(new Request(`https://allthings.dev${path}`), {
+                    waitUntil: () => {},
+                  }),
+                ),
+              ),
           );
         }
         if (pathname === variantsCheckPath) {

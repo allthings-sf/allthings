@@ -113,7 +113,11 @@ export async function prewarmRequest(
   const refusal = await refused(request, token);
   if (refusal !== undefined) return refusal;
   if (plan !== undefined && new URL(request.url).searchParams.has("dry-run")) {
-    return answer(200, plan());
+    try {
+      return answer(200, await plan());
+    } catch {
+      return answer(503, { error: "the plan couldn't be made" });
+    }
   }
   try {
     const report = await warm();

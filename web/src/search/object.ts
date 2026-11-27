@@ -6,13 +6,15 @@ import {
   type IndexReport,
   indexSite,
   type Page,
+  planIndex,
+  type Run,
 } from "./indexer.ts";
 
 /**
  * The search's Durable Object (worker.ts's `SearchBudget`): its answer to
  * each request. `POST /take` takes a search from the budget (budget.ts);
  * `POST /index` indexes the site's pages (indexer.ts) and answers what it
- * did. The class loads this module on its first request, so a cold start
+ * did; `POST /index?dry-run` answers what it would do, and does none of it. The class loads this module on its first request, so a cold start
  * parses none of it.
  */
 
@@ -70,20 +72,34 @@ export async function objectAnswer(
     return answer(state, request);
   }
   const body: unknown = await request.json().catch(() => undefined);
-  const { pages, complete } =
+  const { pages, listed, bare, complete } =
     typeof body === "object" && body !== null
-      ? (body as { pages?: unknown; complete?: unknown })
+      ? (body as Partial<Record<keyof Run, unknown>>)
       : {};
+  const keys = (value: unknown): value is ReadonlyArray<string> =>
+    Array.isArray(value) &&
+    value.length <= pagesLimit &&
+    value.every((key: unknown) => typeof key === "string");
   if (
     !Array.isArray(pages) ||
     pages.length > pagesLimit ||
     !pages.every(isPage) ||
+    !keys(listed) ||
+    !keys(bare) ||
     typeof complete !== "boolean"
   ) {
     return Response.json(
-      { error: "an index takes { pages: [{ key, markdown }], complete }" },
+      {
+        error:
+          "an index takes { pages: [{ key, markdown }], listed: [key], bare: [key], complete }",
+      },
       { status: 400 },
     );
+  }
+  const run: Run = { pages, listed, bare, complete };
+  // A plan reads, and writes nothing: it needs no lock.
+  if (new URL(request.url).searchParams.has("dry-run")) {
+    return Response.json(await planIndex(state, run));
   }
   const items = itemsOf(env);
   if (items === undefined) {
@@ -94,7 +110,7 @@ export async function objectAnswer(
   if (lock.running) return Response.json(busy(INGEST_BYTES_IN_WINDOW));
   lock.running = true;
   try {
-    return Response.json(await indexSite(state, items, pages, complete));
+    return Response.json(await indexSite(state, items, run));
   } finally {
     lock.running = false;
   }

@@ -1,5 +1,5 @@
 import { type Taken, takePath } from "./budget.ts";
-import type { IndexReport, Page } from "./indexer.ts";
+import type { IndexPlan, IndexReport, Run } from "./indexer.ts";
 
 /**
  * The search's bindings (route.ts), as infra/src/web.ts gives them to prod
@@ -48,6 +48,7 @@ export interface Items {
   readonly list: (options: {
     readonly search: string;
     readonly per_page: number;
+    readonly page: number;
   }) => Promise<{
     readonly result: ReadonlyArray<{
       readonly id: string;
@@ -123,11 +124,10 @@ export function itemsOf(
 
 /** What the prewarm needs to have the site's pages indexed (ingest.ts). */
 export interface Indexing {
-  /** Has the object index `pages`: what it did. */
-  readonly index: (
-    pages: ReadonlyArray<Page>,
-    complete: boolean,
-  ) => Promise<IndexReport>;
+  /** Has the object index `run`'s pages: what it did. */
+  readonly index: (run: Run) => Promise<IndexReport>;
+  /** What the object would do with `run`, doing none of it (a dry run). */
+  readonly plan: (run: Run) => Promise<IndexPlan>;
 }
 
 /** Indexing, if the Worker has the index and the object (prod alone). */
@@ -139,20 +139,22 @@ export function indexingOf(
     return undefined;
   }
   const counter = budget as BudgetNamespace;
+  const ask = async <T>(run: Run, dryRun: boolean): Promise<T> => {
+    const response = await counter
+      .get(counter.idFromName(budgetName))
+      .fetch(`https://budget${indexPath}${dryRun ? "?dry-run" : ""}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(run),
+      });
+    if (!response.ok) {
+      throw new Error(`the search budget answered ${response.status}`);
+    }
+    return (await response.json()) as T;
+  };
   return {
-    index: async (pages, complete) => {
-      const response = await counter
-        .get(counter.idFromName(budgetName))
-        .fetch(`https://budget${indexPath}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ pages, complete }),
-        });
-      if (!response.ok) {
-        throw new Error(`the search budget answered ${response.status}`);
-      }
-      return (await response.json()) as IndexReport;
-    },
+    index: (run) => ask<IndexReport>(run, false),
+    plan: (run) => ask<IndexPlan>(run, true),
   };
 }
 
