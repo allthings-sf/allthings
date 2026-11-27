@@ -10,7 +10,7 @@ import {
 import type { BudgetState } from "../src/search/budget.ts";
 import { agentFrontMatter } from "../src/search/discovery.ts";
 import { cut, decode, pageDocument } from "../src/search/document.ts";
-import { indexPages, withIndex } from "../src/search/ingest.ts";
+import { indexPages, sendMs, withIndex } from "../src/search/ingest.ts";
 import {
   INGEST_BYTES_IN_WINDOW,
   type Indexed,
@@ -167,6 +167,7 @@ describe("what indexing may ingest", () => {
       check: [{ key: "a.md", id: "item-a" }],
       used: 80,
       limit: 100,
+      until: at("2026-12-10") + leaseMs,
     });
     expect(ingested).toEqual({ "2026-12-01": 50, "2026-12-10": 30 });
   });
@@ -367,6 +368,16 @@ describe("what indexing may ingest", () => {
     await planFor("r1");
     expect(await planFor("r2")).toMatchObject({ busy: true });
     clock += leaseMs + 1;
+    // A record that comes after its run's hold ended is refused.
+    const late = await ledgerAnswer(
+      state,
+      new Request(`https://budget${recordPath}`, {
+        method: "POST",
+        body: JSON.stringify({ run: "r1", uploaded: [], removed: [] }),
+      }),
+      () => clock,
+    );
+    expect(late.status).toBe(409);
     expect(await planFor("r2")).not.toHaveProperty("busy");
   });
 
@@ -705,6 +716,24 @@ describe("indexing the site's pages", () => {
     });
     expect(run).toMatchObject({ removed: 0, unindexed: 0 });
     expect([...run.failed].toSorted()).toEqual(["gone.md", "index.md"]);
+  });
+
+  test("sends nothing once its hold is about to end, leaving it to the next run", async () => {
+    const { api, keys } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    const pages = documents({ "/": "# home", "/about": "# about" });
+    // A minute before the hold ends (the plan holds it from now), nothing more is sent.
+    const ending = await indexPages(
+      pages,
+      true,
+      indexing,
+      () => Date.now() + leaseMs - sendMs,
+    );
+    expect(ending).toMatchObject({ uploaded: 0, late: 2 });
+    expect(keys()).toEqual([]);
+    const next = await indexPages(pages, true, indexing);
+    expect(next).toMatchObject({ uploaded: 2, late: 0 });
   });
 
   test("does nothing while another prewarm is indexing", async () => {

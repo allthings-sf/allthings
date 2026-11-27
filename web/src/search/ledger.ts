@@ -75,6 +75,12 @@ export interface Planned {
   /** Bytes counted in the window, these included. */
   readonly used: number;
   readonly limit: number;
+  /**
+   * When the run's hold on the index ends, in milliseconds since the epoch:
+   * it sends nothing from then on, so everything it sends is sent on or
+   * before the day its bytes are counted.
+   */
+  readonly until: number;
   /** Another run holds the index, so this one does nothing. */
   readonly busy?: true;
 }
@@ -148,6 +154,7 @@ export function plan(
       check,
       used: counted,
       limit,
+      until: at + leaseMs,
     },
     ingested:
       added > 0 ? { ...kept, [today]: (kept[today] ?? 0) + added } : kept,
@@ -241,6 +248,7 @@ export async function ledgerAnswer(
         check: [],
         used: used(ingested, at),
         limit,
+        until: at,
         busy: true,
       };
       return Response.json(busy);
@@ -269,8 +277,11 @@ export async function ledgerAnswer(
     );
   }
   const lease = await state.storage.get<Lease>(leaseKey);
-  if (lease?.run !== run) {
-    return refusal("another run holds the index, or none does", 409);
+  if (lease?.run !== run || lease.until <= now()) {
+    return refusal(
+      "the run doesn't hold the index: another does, or its hold ended",
+      409,
+    );
   }
   const indexed: Record<string, IndexedPage> = {
     ...(await state.storage.get<Indexed>(indexedKey)),

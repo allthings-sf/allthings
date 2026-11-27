@@ -36,6 +36,8 @@ export interface IndexReport {
    * removed, so the next run uploads them again, counted again.
    */
   readonly unindexed: number;
+  /** Pages left to the next run because this one's hold was ending. */
+  readonly late: number;
   /** Pages whose upload, check or removal failed, by key: tried again next time. */
   readonly failed: ReadonlyArray<string>;
   /** Bytes ingested in the window, this run's included, and its limit. */
@@ -47,6 +49,12 @@ export interface IndexReport {
 
 /** Uploads at once. */
 export const concurrency = 4;
+
+/**
+ * How long before the run's hold ends it sends nothing more, in
+ * milliseconds: past the longest one request to the index takes.
+ */
+export const sendMs = 60_000;
 
 /**
  * Whether `error` is Cloudflare saying the item isn't there
@@ -102,6 +110,8 @@ export async function indexPages(
   documents: ReadonlyMap<string, string>,
   complete: boolean,
   { items, plan, record }: Indexing,
+  // Tests give a clock; the Worker reads the time.
+  now: () => number = Date.now,
 ): Promise<IndexReport> {
   const pages = await Promise.all(
     [...documents].map(async ([path, markdown]) => ({
@@ -122,9 +132,17 @@ export async function indexPages(
   const removed: Array<{ key: string; id: string }> = [];
   const failed: Array<string> = [];
   const previous = new Map(planned.previous.map(({ key, id }) => [key, id]));
+  // Nothing is sent once the run's hold is about to end: what's left is
+  // the next run's, its bytes counted again (ledger.ts, `until`).
+  const late: Array<string> = [];
+  const inTime = (key: string) => {
+    if (now() < planned.until - sendMs) return true;
+    late.push(key);
+    return false;
+  };
   await each(planned.upload, async (key) => {
     const page = byKey.get(key);
-    if (page === undefined) return;
+    if (page === undefined || !inTime(key)) return;
     const before = previous.get(key);
     try {
       const { id } = await items.upload(key, page.markdown);
@@ -146,6 +164,7 @@ export async function indexPages(
   // A removal whose item is already gone (an earlier run removed it, and
   // its record was lost) is done.
   await each(planned.remove, async ({ key, id }) => {
+    if (!inTime(key)) return;
     try {
       await items.delete(id);
       removed.push({ key, id });
@@ -159,6 +178,7 @@ export async function indexPages(
   const settled: Array<{ key: string; id: string }> = [];
   let unindexed = 0;
   await each(planned.check, async ({ key, id }) => {
+    if (!inTime(key)) return;
     try {
       const { status } = await items.get(id).info();
       if (status === "completed") {
@@ -189,6 +209,7 @@ export async function indexPages(
     removed: removed.length - unindexed,
     settled: settled.length,
     unindexed,
+    late: late.length,
     failed,
     used: planned.used,
     limit: planned.limit,
