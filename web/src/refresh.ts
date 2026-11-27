@@ -107,13 +107,16 @@ export async function prewarmRequest(
   request: Request,
   token: string | undefined,
   warm: () => Promise<PrewarmReport>,
-  /** What `?dry-run` answers instead, with the same token: the plan, nothing done. */
+  /**
+   * What `?dry-run` answers instead, with the same token: the plan, nothing
+   * done. It may be a promise of the plan, for a part loaded only then.
+   */
   plan?: () => unknown,
 ): Promise<Response> {
   const refusal = await refused(request, token);
   if (refusal !== undefined) return refusal;
   if (plan !== undefined && new URL(request.url).searchParams.has("dry-run")) {
-    return answer(200, plan());
+    return answer(200, await plan());
   }
   try {
     const report = await warm();

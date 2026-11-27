@@ -545,9 +545,15 @@ describe("the page store", () => {
       headers: { authorization: `Bearer ${refreshToken}` },
     });
     expect(dry.status).toBe(200);
-    const plan = (await dry.json()) as { edgePurge: string; paths?: number };
+    const plan = (await dry.json()) as {
+      edgePurge: string;
+      paths?: number;
+      thenIndex?: string;
+    };
     expect(plan.edgePurge).toBe("would purge");
     expect(plan.paths).toBeUndefined();
+    // Indexing's part, which the Worker loads only for a dry run.
+    expect(plan.thenIndex).toStartWith("on prod, after the purge:");
     expect(report.kept + report.built).toBeGreaterThan(5);
     // A page it built is kept: the next visitor gets it from the store.
     const { response } = await get(Cached, "/events");

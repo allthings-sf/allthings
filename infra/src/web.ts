@@ -125,7 +125,8 @@ export const SITE_ORIGIN = `https://${SITE_HOST}`;
  * `SEARCH` is the namespace that holds the site's index and
  * `SEARCH_INSTANCE` the index's name there; `SEARCH_BUDGET` is the Durable
  * Object that counts every search before the index is asked
- * (web/src/search/budget.ts), whose class the Worker's module exports;
+ * (web/src/search/budget.ts) and indexes the site's pages
+ * (web/src/search/indexer.ts), whose class the Worker's module exports;
  * `SEARCH_LIMIT` is each address's rate ({@link searchLimit}).
  */
 export const makeWeb = (

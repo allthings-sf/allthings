@@ -119,6 +119,42 @@ describe("prewarm", () => {
     expect(slept).toEqual([]);
   });
 
+  test("hands over each page that answered, with its body, for the search to index", async () => {
+    const site = fakeSite((path) => (path === "/events" ? "hit" : "miss"));
+    const handed: Array<[string, string | undefined]> = [];
+    await prewarm({
+      build: "0123456789abcdef",
+      serve: site.serve,
+      pointer: async () => undefined,
+      now: () => 1_000_000,
+      sleep: async () => {},
+      onPage: (path, body) => handed.push([path, body]),
+    });
+    expect(handed.toSorted(([a], [b]) => a.localeCompare(b))).toEqual(
+      ["/", "/events", "/events?a=1&b=2", "/people/ada-lovelace"]
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((path) => [path, "<p>page</p>"]),
+    );
+  });
+
+  test("hands over a page that failed with no body, so the search keeps what it has of it", async () => {
+    const site = fakeSite(() => "miss", 503);
+    const handed: Array<[string, string | undefined]> = [];
+    await prewarm({
+      build: "0123456789abcdef",
+      serve: site.serve,
+      pointer: async () => undefined,
+      now: () => 1_000_000,
+      sleep: async () => {},
+      onPage: (path, body) => handed.push([path, body]),
+    });
+    // Asked for twice (once more, alone, after failing), each time without a body.
+    expect(new Set(handed.map(([path]) => path))).toEqual(
+      new Set(["/", "/events", "/events?a=1&b=2", "/people/ada-lovelace"]),
+    );
+    expect(handed.every(([, body]) => body === undefined)).toBe(true);
+  });
+
   test("counts a page whose write failed as failed, and one never kept as passed", async () => {
     const site = fakeSite((path) =>
       path === "/sitemap.xml"
