@@ -89,7 +89,7 @@ const pagesOf = (
 /**
  * The search's count, a Durable Object on prod (infra/src/web.ts binds it
  * as `SEARCH_BUDGET`). Its class must be the entry's, which every cold
- * start parses, so it is only this: each request goes to search/budget.ts,
+ * start parses, so it is only this: each request goes to search/object.ts,
  * loaded on the first.
  */
 export class SearchBudget {
@@ -100,8 +100,8 @@ export class SearchBudget {
   }
 
   fetch(request: Request): Promise<Response> {
-    return import("./search/budget.ts").then(({ answer }) =>
-      answer(this.#state, request),
+    return import("./search/object.ts").then(({ objectAnswer }) =>
+      objectAnswer(this.#state, request),
     );
   }
 }
@@ -168,15 +168,22 @@ export default {
               // Once the store holds the current pages, Workers Cache drops the
               // answers that show the data (cache.ts), so visitors get them now
               // rather than within the edge lifetime. The report says how it went.
+              // On prod the pages it reads are indexed for search too
+              // (search/ingest.ts, loaded only when a prewarm runs).
               prewarm: withEdgePurge(() =>
-                prewarm({
-                  build: buildId,
-                  serve: site,
-                  pointer: () => readSitePointer(pages),
-                  now: Date.now,
-                  sleep: (ms) =>
-                    new Promise((resolve) => setTimeout(resolve, ms)),
-                }),
+                import("./search/ingest.ts").then(({ withIndex }) =>
+                  withIndex(env, (onPage) =>
+                    prewarm({
+                      build: buildId,
+                      serve: site,
+                      pointer: () => readSitePointer(pages),
+                      now: Date.now,
+                      sleep: (ms) =>
+                        new Promise((resolve) => setTimeout(resolve, ms)),
+                      onPage,
+                    }),
+                  ),
+                ),
               ),
             };
       const noStore = () => Promise.reject(new Error("no store"));

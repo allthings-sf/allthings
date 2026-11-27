@@ -20,8 +20,9 @@
  * when it is taken, before the index is asked, so one that then fails
  * still counts: the count can only be above what Cloudflare bills.
  *
- * The object loads this module on its first request (worker.ts), and the
- * route on its first search, so a cold start parses none of it.
+ * The object loads this module on its first request (worker.ts, object.ts),
+ * and the route on its first search, so a cold start parses none of it.
+ * What indexing may ingest is kept beside it (ledger.ts).
  */
 
 /** The most searches answered in any {@link WINDOW_DAYS} days: under the 1,000 included. */
@@ -135,9 +136,8 @@ const countsKey = "queries";
 
 /**
  * The site's one search budget, a Durable Object (infra/src/web.ts binds
- * it as `SEARCH_BUDGET` on prod): the answer to each of its requests. Its
- * class is worker.ts's `SearchBudget`, which loads this module on its first
- * request. `POST /take` takes a search and answers {@link Taken} as JSON,
+ * it as `SEARCH_BUDGET` on prod): its answer to a search's request, as
+ * object.ts routes it. `POST /take` takes a search and answers {@link Taken} as JSON,
  * 200 either way. Requests run one at a time, and nothing is awaited
  * between reading the counts and writing them but the storage itself,
  * which holds other requests back meanwhile, so each one sees the last

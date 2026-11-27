@@ -1,4 +1,10 @@
 import { type Taken, takePath } from "./budget.ts";
+import {
+  type Planned,
+  type PlannedPage,
+  planPath,
+  recordPath,
+} from "./ledger.ts";
 
 /**
  * The search's bindings (route.ts), as infra/src/web.ts gives them to prod
@@ -36,9 +42,18 @@ export interface SearchIndex {
   }) => Promise<{ readonly chunks: ReadonlyArray<Passage> }>;
 }
 
+/** What the indexer uses of an instance's Items API (its built-in storage). */
+export interface Items {
+  readonly upload: (
+    name: string,
+    content: string,
+  ) => Promise<{ readonly id: string; readonly key: string }>;
+  readonly delete: (itemId: string) => Promise<void>;
+}
+
 /** What the Worker uses of an AI Search namespace binding. */
 interface SearchNamespace {
-  readonly get: (instance: string) => SearchIndex;
+  readonly get: (instance: string) => SearchIndex & { readonly items: Items };
 }
 
 /** What the Worker uses of a Rate Limiting binding. */
@@ -78,37 +93,86 @@ export interface Search {
   readonly allow: (client: string) => Promise<boolean>;
 }
 
-/** The search, if the Worker has every binding it needs. */
-export function searchOf(
-  env: Readonly<Record<string, unknown>>,
-): Search | undefined {
+/** The index and the object, if the Worker has the bindings for both. */
+function boundOf(env: Readonly<Record<string, unknown>>) {
   const namespace = env["SEARCH"];
   const instance = env["SEARCH_INSTANCE"];
   const budget = env["SEARCH_BUDGET"];
-  const limit = env["SEARCH_LIMIT"];
   if (
     !has(namespace, "get") ||
     typeof instance !== "string" ||
     instance === "" ||
-    !has(budget, "idFromName", "get") ||
-    !has(limit, "limit")
+    !has(budget, "idFromName", "get")
   ) {
     return undefined;
   }
   const counter = budget as BudgetNamespace;
+  /** The object's answer to a POST to `path` with `body`; a failure past 200. */
+  const ask = async <T>(path: string, body?: unknown): Promise<T> => {
+    const response = await counter.get(counter.idFromName(budgetName)).fetch(
+      `https://budget${path}`,
+      body === undefined
+        ? { method: "POST" }
+        : {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          },
+    );
+    if (!response.ok) {
+      throw new Error(`the search budget answered ${response.status}`);
+    }
+    return (await response.json()) as T;
+  };
+  return { index: (namespace as SearchNamespace).get(instance), ask };
+}
+
+/** What indexing needs of the Worker's bindings (ingest.ts). */
+export interface Indexing {
+  readonly items: Items;
+  /** The object's plan for these pages (ledger.ts). */
+  readonly plan: (
+    pages: ReadonlyArray<PlannedPage>,
+    complete: boolean,
+  ) => Promise<Planned>;
+  /** Tells the object what was uploaded and removed. */
+  readonly record: (
+    uploaded: ReadonlyArray<{
+      readonly key: string;
+      readonly hash: string;
+      readonly id: string;
+    }>,
+    removed: ReadonlyArray<string>,
+  ) => Promise<void>;
+}
+
+/** Indexing, if the Worker has the index and the object (prod alone). */
+export function indexingOf(
+  env: Readonly<Record<string, unknown>>,
+): Indexing | undefined {
+  const bound = boundOf(env);
+  if (bound === undefined) return undefined;
+  return {
+    items: bound.index.items,
+    plan: (pages, complete) => bound.ask(planPath, { pages, complete }),
+    record: async (uploaded, removed) => {
+      await bound.ask(recordPath, { uploaded, removed });
+    },
+  };
+}
+
+/** The search, if the Worker has every binding it needs. */
+export function searchOf(
+  env: Readonly<Record<string, unknown>>,
+): Search | undefined {
+  const bound = boundOf(env);
+  const limit = env["SEARCH_LIMIT"];
+  if (bound === undefined || !has(limit, "limit")) return undefined;
   const limiter = limit as RateLimiter;
   return {
-    index: (namespace as SearchNamespace).get(instance),
+    index: bound.index,
     allow: async (client) =>
       (await limiter.limit({ key: `search:${client}` })).success,
-    take: async () => {
-      const response = await counter
-        .get(counter.idFromName(budgetName))
-        .fetch(`https://budget${takePath}`, { method: "POST" });
-      if (!response.ok) {
-        throw new Error(`the search budget answered ${response.status}`);
-      }
-      return (await response.json()) as Taken;
-    },
+    take: () => bound.ask<Taken>(takePath),
   };
 }

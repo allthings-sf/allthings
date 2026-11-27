@@ -90,6 +90,8 @@ export interface PrewarmOptions {
   readonly now: () => number;
   /** Waits `ms` milliseconds. */
   readonly sleep: (ms: number) => Promise<void>;
+  /** Hands over each page that answered 2xx, as its HTML: what the search indexes (search/ingest.ts). */
+  readonly onPage?: ((path: string, body: string) => void) | undefined;
 }
 
 /** Whether prewarming read no sitemap, and so warmed nothing. */
@@ -103,6 +105,7 @@ export async function prewarm({
   pointer,
   now,
   sleep,
+  onPage,
 }: PrewarmOptions): Promise<PrewarmReport> {
   const known = await pointer();
   const at = now();
@@ -172,7 +175,9 @@ export async function prewarm({
         const path = paths[next];
         next += 1;
         if (path === undefined) continue;
-        outcomes.set(path, (await visit(path)).outcome);
+        const { outcome, body } = await visit(path);
+        outcomes.set(path, outcome);
+        if (body !== undefined) onPage?.(path, body);
       }
     }),
   );
@@ -180,7 +185,9 @@ export async function prewarm({
   // is asked for once more, alone; its last outcome is the one counted.
   for (const path of paths) {
     if (outcomes.get(path) === "failed") {
-      outcomes.set(path, (await visit(path)).outcome);
+      const { outcome, body } = await visit(path);
+      outcomes.set(path, outcome);
+      if (body !== undefined) onPage?.(path, body);
     }
   }
   const all = [...outcomes.entries()];

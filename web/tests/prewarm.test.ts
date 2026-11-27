@@ -119,6 +119,38 @@ describe("prewarm", () => {
     expect(slept).toEqual([]);
   });
 
+  test("hands over each page that answered, with its body, for the search to index", async () => {
+    const site = fakeSite((path) => (path === "/events" ? "hit" : "miss"));
+    const handed: Array<[string, string]> = [];
+    await prewarm({
+      build: "0123456789abcdef",
+      serve: site.serve,
+      pointer: async () => undefined,
+      now: () => 1_000_000,
+      sleep: async () => {},
+      onPage: (path, body) => handed.push([path, body]),
+    });
+    expect(handed.toSorted(([a], [b]) => a.localeCompare(b))).toEqual(
+      ["/", "/events", "/events?a=1&b=2", "/people/ada-lovelace"]
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((path) => [path, "<p>page</p>"]),
+    );
+  });
+
+  test("hands over no page that failed", async () => {
+    const site = fakeSite(() => "miss", 503);
+    const handed: Array<string> = [];
+    await prewarm({
+      build: "0123456789abcdef",
+      serve: site.serve,
+      pointer: async () => undefined,
+      now: () => 1_000_000,
+      sleep: async () => {},
+      onPage: (path) => handed.push(path),
+    });
+    expect(handed).toEqual([]);
+  });
+
   test("counts a page whose write failed as failed, and one never kept as passed", async () => {
     const site = fakeSite((path) =>
       path === "/sitemap.xml"
