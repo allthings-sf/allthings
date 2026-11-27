@@ -24,8 +24,8 @@ import {
   eveningSignals,
   findCandidates,
   xBrowserSearches,
-  xCostPerPost,
 } from "../src/posts/candidates.ts";
+import { spendLine, XBudget } from "../src/x-budget.ts";
 import {
   pendingJson,
   pendingLines,
@@ -101,15 +101,21 @@ const layer = Layer.mergeAll(PostSources.layer, EventPostWriter.layer).pipe(
   Layer.provide(Database.scriptLayer),
 );
 
-/** What a search needs: the post tools, the searches, and the database itself. */
-const candidatesLayer = Layer.mergeAll(
-  PostSources.layer,
-  EventPostWriter.layer,
-  CandidateSearches.layer,
-).pipe(
-  Layer.provideMerge(FetchHttpClient.layer),
-  Layer.provideMerge(Database.scriptLayer),
-);
+/**
+ * What a search needs: the post tools, the searches, X's daily budget they
+ * share with the sync Worker, and the database itself. A dry run's budget
+ * never asks X, which bills each read, and writes nothing.
+ */
+const candidatesLayer = (dryRun: boolean) =>
+  Layer.mergeAll(
+    PostSources.layer,
+    EventPostWriter.layer,
+    CandidateSearches.layer,
+  ).pipe(
+    Layer.provideMerge(dryRun ? XBudget.dryRun : XBudget.layer),
+    Layer.provideMerge(FetchHttpClient.layer),
+    Layer.provideMerge(Database.scriptLayer),
+  );
 
 const optionalText = (name: string, description: string) =>
   Flag.String(name).pipe(Flag.withDescription(description), Flag.optional);
@@ -326,8 +332,8 @@ const find = Command.make(
           ? { maxRequests: maxRequests.value }
           : {}),
       });
-      // X bills each post its search returns; what this run kept, priced: a
-      // floor, since X also bills posts the finder drops (no author handle).
+      // X bills each post its search returns, and the day's budget counts
+      // them all, the finder's dropped ones too (no author handle).
       const xPosts = reports.reduce(
         (sum, report) =>
           sum +
@@ -349,11 +355,12 @@ const find = Command.make(
               .join("\n"),
       );
       if (!json) {
+        const spend = yield* Effect.result((yield* XBudget).today);
         yield* Console.log(
-          `X: ${xPosts} posts kept, so at least $${(xPosts * xCostPerPost).toFixed(2)} at pay-per-use.`,
+          `X: ${xPosts} posts kept. ${spend._tag === "Success" ? spendLine(spend.success) : spend.failure.reason}.`,
         );
       }
-    }).pipe(Effect.provide(candidatesLayer)),
+    }).pipe(Effect.provide(candidatesLayer(dryRun))),
 ).pipe(
   Command.withDescription(
     "Search Bluesky (and X, with X_BEARER_TOKEN) for posts about evenings; add those that score enough as pending. Recent evenings by default.",
@@ -435,7 +442,7 @@ const sweepCommand = Command.make(
         }
         yield* Effect.sleep(Duration.minutes(every.value));
       }
-    }).pipe(Effect.provide(candidatesLayer)),
+    }).pipe(Effect.provide(candidatesLayer(dryRun))),
 ).pipe(
   Command.withDescription(
     "Search for posts about one evening, before it starts too; add those that score enough as pending; say what is new and what waits for review.",
@@ -475,7 +482,7 @@ const xSearches = Command.make(
               `Put the posts' URLs in a file, one a line, then: bun run posts add ${signals.slug} --from <file>`,
             ].join("\n"),
       );
-    }).pipe(Effect.provide(candidatesLayer)),
+    }).pipe(Effect.provide(candidatesLayer(true))),
 ).pipe(
   Command.withDescription(
     "The searches to run on x.com in a browser for posts about one evening.",

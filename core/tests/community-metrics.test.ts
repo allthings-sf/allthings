@@ -34,6 +34,8 @@ import {
   sqlLayer,
   studioRun,
 } from "./support/database.ts";
+import { xBudgetUncounted } from "./support/x-budget.ts";
+import { XBudgetRefused } from "../src/x-budget.ts";
 
 let db: PGlite;
 beforeAll(async () => {
@@ -116,6 +118,7 @@ const live = (
   config: Readonly<Record<string, string>> = {},
 ) =>
   CommunitySources.live.pipe(
+    Layer.provide(xBudgetUncounted.pipe(Layer.provide(internet.layer))),
     Layer.provide(
       Layer.mergeAll(
         internet.layer,
@@ -247,12 +250,12 @@ describe("the community's sources", () => {
 });
 
 /**
- * A snapshot at `at`, each source answering as `answers` says, in the
- * shared database or `database`.
+ * A snapshot at `at`, each source answering as `answers` says ("spent":
+ * refused by X's daily budget), in the shared database or `database`.
  */
 const snapshotAt = (
   at: string,
-  answers: Partial<Record<Source, Metrics | "gap" | "fail">>,
+  answers: Partial<Record<Source, Metrics | "gap" | "fail" | "spent">>,
   dryRun = false,
   database?: PGlite,
   only?: ReadonlyArray<Source>,
@@ -265,6 +268,13 @@ const snapshotAt = (
         read: (source) => {
           asked.push(source);
           const answer = answers[source] ?? { count: 1 };
+          if (answer === "spent") {
+            return Effect.fail(
+              new XBudgetRefused({
+                reason: "X daily budget spent: $2.00 of $2.00",
+              }),
+            );
+          }
           return answer === "gap"
             ? Effect.fail(
                 new CommunityReadError({
@@ -693,6 +703,37 @@ describe("X, read in the day's first hour only", () => {
         expect(
           needsAction(await at("2027-03-05T05:00:00Z", "gap")),
         ).toBeUndefined();
+      } finally {
+        await fresh.close();
+      }
+    },
+  );
+});
+
+describe("X, its daily budget spent", () => {
+  test.skipIf(studioRun)(
+    "is skipped with why, in its first-hour run too: never a gap, nor a failure",
+    async () => {
+      const fresh = await migratedDatabase();
+      try {
+        const run = await snapshotAt(
+          "2027-04-01T00:00:05Z",
+          { x: "spent" },
+          false,
+          fresh,
+        );
+        expect(run.asked).toContain("x");
+        expect(run.skipped).toEqual({
+          x: "X daily budget spent: $2.00 of $2.00",
+        });
+        expect(run.stored).not.toContain("x");
+        expect(run.gaps).toEqual({});
+        expect(run.failed).toEqual({});
+        expect(needsAction(run)).toBeUndefined();
+        const { rows } = await fresh.query(
+          `SELECT source FROM community_gaps WHERE source = 'x'`,
+        );
+        expect(rows).toEqual([]);
       } finally {
         await fresh.close();
       }

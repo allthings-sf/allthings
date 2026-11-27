@@ -16,6 +16,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { DataSourceError } from "./errors.ts";
 import { orDataSourceError } from "./sql.ts";
+import { XBudget, XBudgetRefused } from "./x-budget.ts";
 
 /**
  * How many follow each person on X, kept as a snapshot on their profile
@@ -25,8 +26,9 @@ import { orDataSourceError } from "./sql.ts";
  *
  * The counts come from X's own API with the app's bearer token
  * (X_BEARER_TOKEN), which reads up to 100 accounts a request by user id
- * and is billed per user it returns ($0.010 on pay-per-use), or, without
- * the token, the keyless FixTweet API (api.fxtwitter.com). A refresh reads the profiles
+ * and is billed per user it returns, within X's daily budget
+ * (src/x-budget.ts), or, without the token, the keyless FixTweet API
+ * (api.fxtwitter.com). A refresh reads the profiles
  * whose snapshot is missing or oldest first, a bounded number per run, so
  * the sync Worker's schedule and the CLI (`bun run followers`) can both
  * run it; a handle X doesn't know, or a failed read, leaves the stored
@@ -92,25 +94,32 @@ export interface XAccount {
   readonly followers: number;
 }
 
+/**
+ * What a source answers with, or why not; `XBudgetRefused` when X's daily
+ * budget is spent, which ends the refresh's reads for now.
+ */
 export interface FollowerSourceShape {
   /** The account that has `handle` on X now. */
-  readonly read: (handle: string) => Effect.Effect<XAccount, FollowerReadError>;
+  readonly read: (
+    handle: string,
+  ) => Effect.Effect<XAccount, FollowerReadError | XBudgetRefused>;
   /**
    * The account with user id `id`, whatever its handle is now, where the
    * source can look one up by id.
    */
   readonly readById?: (
     id: string,
-  ) => Effect.Effect<XAccount, FollowerReadError>;
+  ) => Effect.Effect<XAccount, FollowerReadError | XBudgetRefused>;
   /**
    * The accounts with these user ids, in as few requests as the source
-   * allows: each id's account, or why it can't be read.
+   * allows: each id's account, or why it can't be read. Ids X's daily
+   * budget left unasked are refused, and those read before them kept.
    */
   readonly readByIds?: (
     ids: ReadonlyArray<string>,
   ) => Effect.Effect<
-    ReadonlyMap<string, XAccount | FollowerReadError>,
-    FollowerReadError
+    ReadonlyMap<string, XAccount | FollowerReadError | XBudgetRefused>,
+    FollowerReadError | XBudgetRefused
   >;
 }
 
@@ -230,21 +239,25 @@ export class FollowerSource extends Context.Service<
    * Follower counts from X's own API with the app's bearer token
    * (X_BEARER_TOKEN): by handle, by user id, and by up to 100 ids a
    * request, so a renamed account is found by its id. X bills each user a
-   * lookup returns ($0.010 on pay-per-use). Needs an `HttpClient`.
+   * lookup returns, so every request goes through X's daily budget
+   * (src/x-budget.ts), and a refusal is never tried again. Needs the
+   * `XBudget`.
    */
   static readonly xApi = Layer.effect(
     FollowerSource,
     Effect.gen(function* () {
       const token = yield* Config.Redacted("X_BEARER_TOKEN");
-      const client = yield* HttpClient.HttpClient;
+      const xBudget = yield* XBudget;
+      /** One lookup of at most `users` accounts. */
       const get = <A>(
         what: string,
         url: string,
         params: Record<string, string>,
+        users: number,
         decode: (body: unknown) => Effect.Effect<A, unknown>,
       ) =>
         Effect.gen(function* () {
-          const response = yield* client.execute(
+          const response = yield* xBudget.execute(
             HttpClientRequest.get(url).pipe(
               HttpClientRequest.bearerToken(Redacted.value(token)),
               HttpClientRequest.setUrlParams({
@@ -253,6 +266,7 @@ export class FollowerSource extends Context.Service<
               }),
               HttpClientRequest.acceptJson,
             ),
+            { users },
           );
           if (response.status !== 200) {
             return yield* new FollowerReadError({
@@ -295,7 +309,8 @@ export class FollowerSource extends Context.Service<
           Effect.retry({
             schedule: Schedule.exponential(Duration.seconds(1)),
             times: 2,
-            while: (error) => error.retryable,
+            while: (error) =>
+              error._tag === "FollowerReadError" && error.retryable,
           }),
         );
       const read = (handle: string) =>
@@ -303,6 +318,7 @@ export class FollowerSource extends Context.Service<
           handle,
           `https://api.x.com/2/users/by/username/${encodeURIComponent(handle)}`,
           {},
+          1,
           Schema.decodeUnknownEffect(XApiOne),
         ).pipe(Effect.map(({ data }) => accountOf(data)));
       const readById = (id: string) =>
@@ -310,19 +326,30 @@ export class FollowerSource extends Context.Service<
           id,
           `https://api.x.com/2/users/${encodeURIComponent(id)}`,
           {},
+          1,
           Schema.decodeUnknownEffect(XApiOne),
         ).pipe(Effect.map(({ data }) => accountOf(data)));
       const readByIds = (ids: ReadonlyArray<string>) =>
         Effect.gen(function* () {
-          const found = new Map<string, XAccount | FollowerReadError>();
+          const found = new Map<
+            string,
+            XAccount | FollowerReadError | XBudgetRefused
+          >();
           for (let start = 0; start < ids.length; start += idsPerRequest) {
             const chunk = ids.slice(start, start + idsPerRequest);
             const answer = yield* get(
               `${chunk.length} ids`,
               "https://api.x.com/2/users",
               { ids: chunk.join(",") },
+              chunk.length,
               Schema.decodeUnknownEffect(XApiMany),
-            );
+            ).pipe(Effect.catchTag("XBudgetRefused", Effect.succeed));
+            // X's daily budget refused this chunk: it and the rest are left
+            // unasked, and what the chunks before it read is kept.
+            if (answer instanceof XBudgetRefused) {
+              for (const id of ids.slice(start)) found.set(id, answer);
+              break;
+            }
             for (const user of answer.data ?? []) {
               found.set(user.id, accountOf(user));
             }
@@ -347,14 +374,18 @@ export class FollowerSource extends Context.Service<
 
   /**
    * X's own API where the app has its bearer token (X_BEARER_TOKEN), else
-   * FixTweet. Needs an `HttpClient`.
+   * FixTweet. Needs an `HttpClient`, and the `XBudget` for X's.
    */
   static readonly fromConfig = Layer.unwrap(
     Effect.gen(function* () {
       const token = yield* Config.option(Config.Redacted("X_BEARER_TOKEN"));
-      return Option.isSome(token)
-        ? FollowerSource.xApi
-        : FollowerSource.fxtwitter;
+      // Either source, with what either needs.
+      const source: Layer.Layer<
+        FollowerSource,
+        Config.ConfigError,
+        HttpClient.HttpClient | XBudget
+      > = Option.isSome(token) ? FollowerSource.xApi : FollowerSource.fxtwitter;
+      return source;
     }),
   );
 }
@@ -383,8 +414,13 @@ export interface RefreshReport {
   readonly lost: ReadonlyArray<string>;
   /** Profiles whose count could not be read, with why. */
   readonly failed: ReadonlyArray<string>;
-  /** Stale profiles left for a later run, by `maxProfiles` or `until`. */
+  /**
+   * Stale profiles left for a later run, by `maxProfiles`, `until` or X's
+   * daily budget.
+   */
   readonly remaining: number;
+  /** Why reading stopped before the batch was read: X's daily budget refused. */
+  readonly skipped?: string;
 }
 
 const Due = Schema.Struct({
@@ -445,8 +481,15 @@ export const refreshFollowers = (options: RefreshOptions) =>
     const ids = batch.flatMap((row) =>
       row.xUserId === null ? [] : [row.xUserId],
     );
-    const prefetched = new Map<string, XAccount | FollowerReadError>();
+    const prefetched = new Map<
+      string,
+      XAccount | FollowerReadError | XBudgetRefused
+    >();
     let prefetchOutOfTime = false;
+    // X's daily budget refused a read: nothing more is asked, what the batch
+    // already read is still stored, and the rest waits, untried, for a later
+    // run.
+    let skipped: string | undefined;
     if (source.readByIds !== undefined && ids.length > 0) {
       const left =
         options.until === undefined
@@ -460,7 +503,9 @@ export const refreshFollowers = (options: RefreshOptions) =>
           : batchRead.pipe(Effect.timeoutOption(Math.max(0, left))),
       );
       if (read._tag === "Failure") {
-        for (const id of ids) prefetched.set(id, read.failure);
+        const failure = read.failure;
+        if (failure._tag === "XBudgetRefused") skipped = failure.reason;
+        else for (const id of ids) prefetched.set(id, failure);
       } else if (Option.isNone(read.success)) {
         prefetchOutOfTime = true;
       } else {
@@ -473,15 +518,26 @@ export const refreshFollowers = (options: RefreshOptions) =>
       const handle = xHandleOf(row.twitterHandle) ?? "";
       // The batch ran out of the run's time: this and the rest wait.
       if (prefetchOutOfTime) {
-        unread = batch.length - index;
+        unread += batch.length - index;
         break;
       }
       const known =
         row.xUserId === null ? undefined : prefetched.get(row.xUserId);
+      // Once X's daily budget refused, only what the batch already read is
+      // stored: a profile that needs X asked again waits, untried.
+      if (
+        skipped !== undefined &&
+        (known === undefined || known instanceof XBudgetRefused)
+      ) {
+        unread++;
+        continue;
+      }
       // By id where both are known: the account, whatever its handle now.
+      // An id X's daily budget left unasked is refused here.
       const byId =
         known !== undefined
-          ? known instanceof FollowerReadError
+          ? known instanceof FollowerReadError ||
+            known instanceof XBudgetRefused
             ? Effect.fail(known)
             : Effect.succeed(known)
           : row.xUserId !== null && source.readById !== undefined
@@ -500,8 +556,14 @@ export const refreshFollowers = (options: RefreshOptions) =>
           : reading.pipe(Effect.timeoutOption(Math.max(0, left))),
       );
       if (read._tag === "Success" && Option.isNone(read.success)) {
-        unread = batch.length - index;
+        unread += batch.length - index;
         break;
+      }
+      // Refused before anything was sent: not a try, so it keeps its place.
+      if (read._tag === "Failure" && read.failure._tag === "XBudgetRefused") {
+        skipped = read.failure.reason;
+        unread++;
+        continue;
       }
       const at = DateTime.toDateUtc(yield* DateTime.now);
       if (!options.dryRun) {
@@ -605,5 +667,6 @@ export const refreshFollowers = (options: RefreshOptions) =>
       lost,
       failed,
       remaining: due.length - batch.length + unread,
+      ...(skipped === undefined ? {} : { skipped }),
     } satisfies RefreshReport;
   });

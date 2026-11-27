@@ -300,6 +300,49 @@ DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run tal
   --speaker ada-lovelace --speaker grace-hopper:moderator --approve <token>
 ```
 
+## X's daily budget
+
+X's API is pay-per-use: from prepaid credits, it bills each post an answer
+returns ($0.005) and each user ($0.010), once a UTC day each
+([pricing](https://docs.x.com/x-api/getting-started/pricing)). Every read
+this repository makes of X goes through one budget a day
+(`src/x-budget.ts`): the sync Worker's post search, follower counts and
+community snapshot, and the same from `bun run posts find`, `bun run
+followers` and `bun run community-snapshot`, and `bun run people posts`,
+all in the database, so the Worker and the CLI spend one budget
+(`migrations/0043_x_reads.ts`):
+
+- Before each request, the most its answer can bill is held for the day
+  (`x_holds`), under a lock, if the day's spend and every other hold leave
+  room for it in `X_DAILY_BUDGET_USD`, $2.00. Otherwise X isn't asked, and
+  the step says why (`X daily budget spent: $1.80 of $2.00`) until 00:00
+  UTC, when the day starts over. Two callers at once never both take the
+  last of it. A request held in the minute before midnight is held, and its
+  reads recorded, on both days, since X may bill it on either.
+- After each answer, its posts and users are recorded in `x_reads`, once a
+  day each, as X bills them, and the hold is let go. A request unanswered,
+  cut short, or whose answer can't be read or recorded keeps its hold,
+  counted at its most for the rest of the day. A spend that can't be read
+  refuses the request.
+- A dry run asks X nothing, since X bills each read, and writes nothing:
+  `followers --dry-run`, `posts find --dry-run`, `people posts --dry-run`
+  (which still reads what `--cache` holds), and the sync's own.
+
+Each sync run's summary says the day's spend so far: `X daily budget: $0.42
+of $2.00 spent (21%)`. It is an estimate. It errs high where it can (an
+author X returns with a post counts as a user read, which X's pricing
+doesn't settle), but X calls its once-a-day billing of a resource "a soft
+guarantee", so on a day that fails, X's bill can run past it.
+
+The budget is a reviewed constant: raising it is a pull request, and it is
+held from $0.50 up to, not including, $5, so it is never nothing and never
+unbounded. A command that reads X needs a connection that may hold and
+record against it: site_sync's, or the studio's. Once migration 0043 has
+reached production ("Running them", below), run `infra/scripts/studio.ts
+--dry-run`, then `--apply`, as the owner, before `posts find` or `people
+posts` next runs: until then the studio can't read the day's spend, and X
+is refused. site_sync gets its grant with the migration.
+
 ## Speaker order: X followers
 
 Speaker lists are ordered by how many follow each person on X, most first.
@@ -310,8 +353,8 @@ speakers: whoever took part latest first).
 
 Each profile keeps a snapshot, `x_followers` with `x_followers_at`, read from
 public data: X's own API with the app's bearer token (`X_BEARER_TOKEN`), by
-user id, up to 100 accounts a request, $0.010 each on pay-per-use, or the
-keyless FixTweet API without it. The sync
+user id, up to 100 accounts a request, $0.010 each within X's daily budget
+(above), or the keyless FixTweet API without it. The sync
 Worker refreshes the missing and oldest snapshots on its schedule, a bounded number per run, reading for
 at most its window (30 s); a handle X doesn't know, or a failed read,
 leaves the snapshot as it was, and the least recently tried go first
@@ -332,8 +375,8 @@ account: its id, its count and a lost handle. The post search knows X
 authors by id too.
 
 ```sh
-DATABASE_URL=… bun run followers --dry-run   # read the counts, write nothing
-DATABASE_URL=… bun run followers             # store them
+DATABASE_URL=… bun run followers --dry-run   # write nothing, and ask X nothing (it bills each read)
+DATABASE_URL=… bun run followers             # read the counts and store them
 DATABASE_URL=… bun run followers --stale-days 0 --max 1000   # re-read everyone
 ```
 
@@ -865,7 +908,7 @@ the night itself), and the ones that score at least 5 are added as
 `pending`. Nothing is approved here: an organizer approves or hides each.
 
 ```sh
-DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts find --dry-run   # the last week's evenings, scored, nothing written
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts find --dry-run   # the last week's evenings, scored, nothing written (X isn't asked: it bills each read)
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts find --past   # every evening so far
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts pending   # what waits for review
 DATABASE_URL=$(op read "op://allthings/allthings studio/credential") bun run posts approve <post url>   # show it on its evening's page
@@ -1349,18 +1392,20 @@ followers` first. The ranking only orders the list; an agent picks up to
 
 Both read X's own API with the app's bearer token, read only, which bills
 each post it returns ($0.005, once a UTC day per post) and each account
-it looks up ($0.010): `--find` reads at most `--read` (100, and at least 5,
+it looks up ($0.010), within X's daily budget, which they count and
+record in the database, so both take the studio's connection: `--find`
+reads at most `--read` (100, and at least 5,
 the fewest X answers a page) posts a person, after looking the account up
 once where the profile has no X user id yet; `--refresh` reads one per post
 the file holds, up to 100 a request, and drops a post X now gives as
 another account's. `--cache <dir>` keeps every answer that reads as one
 for the rest of its UTC day, so a rerun is free; a dry run reads it but
-keeps nothing new. `--find` reads the profiles' handles from the
-database, where site_reader's connection is enough:
+keeps nothing new, and an answer it holds is never asked of X again, nor
+counted. `--find` reads the profiles' handles from the database too:
 
 ```sh
-DATABASE_URL=$(op read "op://allthings/allthings site_reader/credential") X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --find --only "Ada Lovelace" --cache /tmp/x-cache
-X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --refresh --dry-run
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --find --only "Ada Lovelace" --cache /tmp/x-cache
+DATABASE_URL=$(op read "op://allthings/allthings studio/credential") X_BEARER_TOKEN=$(op read "op://allthings/allthings X app/Bearer Token") bun run people posts --refresh --dry-run
 ```
 
 ### A photo from a file

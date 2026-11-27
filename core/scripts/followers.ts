@@ -4,16 +4,21 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import * as Database from "../src/database.ts";
 import { FollowerSource, refreshFollowers } from "../src/followers.ts";
+import { XBudget } from "../src/x-budget.ts";
 
 /**
  * Refreshes X follower counts (src/followers.ts) in the Postgres at
  * DATABASE_URL, from X's own API with X_BEARER_TOKEN (by user id, in
  * batches), else the FixTweet API: the profiles whose snapshot is
  * missing or older than --stale-days, oldest first, at most --max. The sync
- * Worker does the same on its schedule; this is for now.
+ * Worker does the same on its schedule; this is for now. X's reads go
+ * through X's daily budget (src/x-budget.ts), which they record in the
+ * database, so DATABASE_URL is site_sync's.
  *
- *   bun run followers --dry-run   read the counts and print them; write nothing
- *   bun run followers             the same, stored
+ *   bun run followers --dry-run   write nothing, and ask X nothing (it bills
+ *                                 each read); without X's token, print
+ *                                 FixTweet's counts
+ *   bun run followers             read the counts and store them
  *
  * DATABASE_URL comes from the environment only; .env files are not read.
  */
@@ -22,7 +27,9 @@ const command = Command.make(
   "followers",
   {
     dryRun: Flag.Boolean("dry-run").pipe(
-      Flag.withDescription("Read the counts and print them; write nothing."),
+      Flag.withDescription(
+        "Write nothing, and ask X nothing, since it bills each read; without X's token, print FixTweet's counts.",
+      ),
       Flag.withDefault(false),
     ),
     max: Flag.Int("max").pipe(
@@ -57,14 +64,20 @@ const command = Command.make(
           ...report.renamed.map((line) => `renamed: ${line}`),
           ...report.lost.map((line) => `lost: ${line}`),
           ...report.failed.map((line) => `failed: ${line}`),
+          ...(report.skipped === undefined
+            ? []
+            : [`stopped: ${report.skipped}`]),
           `${report.refreshed.length} read, ${report.renamed.length} renamed, ${report.lost.length} handles lost, ${report.failed.length} failed, ${report.remaining} left for later${dryRun ? " (dry run: nothing written)" : ""}.`,
         ].join("\n"),
       );
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(
-          FollowerSource.fromConfig.pipe(Layer.provide(FetchHttpClient.layer)),
-          Database.scriptLayer,
+        // X's reads go through the daily budget the sync Worker spends too;
+        // a dry run asks X nothing, since it bills each read.
+        FollowerSource.fromConfig.pipe(
+          Layer.provide(dryRun ? XBudget.dryRun : XBudget.layer),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provideMerge(Database.scriptLayer),
         ),
       ),
     ),

@@ -799,6 +799,22 @@ constraint public.community_gaps community_gaps_source_check CHECK ((source = AN
 constraint public.community_gaps community_gaps_tries_check CHECK ((tries >= 1))
 index public.community_gaps CREATE UNIQUE INDEX community_gaps_day_source_pk ON public.community_gaps USING btree (day, source)
 relation public.community_gaps kind=r persistence=p rls=f force_rls=f replica_identity=d options=
+column public.x_holds #001 id uuid not null default gen_random_uuid()
+column public.x_holds #002 day date not null
+column public.x_holds #003 mills integer not null
+column public.x_holds #004 settled boolean not null default false
+constraint public.x_holds x_holds_id_pk PRIMARY KEY (id)
+constraint public.x_holds x_holds_mills_check CHECK ((mills >= 0))
+index public.x_holds CREATE UNIQUE INDEX x_holds_id_pk ON public.x_holds USING btree (id)
+relation public.x_holds kind=r persistence=p rls=f force_rls=f replica_identity=d options=
+column public.x_reads #001 day date not null
+column public.x_reads #002 kind text not null
+column public.x_reads #003 id text not null
+constraint public.x_reads x_reads_day_kind_id_pk PRIMARY KEY (day, kind, id)
+constraint public.x_reads x_reads_id_check CHECK ((id ~ '^[0-9]{1,20}$'::text))
+constraint public.x_reads x_reads_kind_check CHECK ((kind = ANY (ARRAY['post'::text, 'user'::text])))
+index public.x_reads CREATE UNIQUE INDEX x_reads_day_kind_id_pk ON public.x_reads USING btree (day, kind, id)
+relation public.x_reads kind=r persistence=p rls=f force_rls=f replica_identity=d options=
 column planning.proposals #001 id uuid not null default gen_random_uuid()
 column planning.proposals #002 title text not null
 column planning.proposals #003 abstract text not null

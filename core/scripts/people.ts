@@ -19,6 +19,7 @@ import {
   findCandidates,
   refreshPosts,
 } from "../src/x-posts-refresh.ts";
+import { XBudget } from "../src/x-budget.ts";
 import { XPostsSource } from "../src/x-posts-source.ts";
 import { encode, placeholder } from "./encode.ts";
 import { mediaOrigin, uploadMedia } from "./media.ts";
@@ -55,16 +56,19 @@ import { shellWord } from "./shell.ts";
  * --posts-days (30) or more days ago: what `posts --refresh` is for.
  *
  * posts reads X with X_BEARER_TOKEN (1Password's "allthings X app",
- * "Bearer Token"; read only). --find prints, as JSON, each person's own
+ * "Bearer Token"; read only), within X's daily budget (src/x-budget.ts),
+ * which it counts and records in DATABASE_URL: the studio's connection.
+ * --find prints, as JSON, each person's own
  * posts of the last --days days, ranked by how they were taken up, for
  * an agent to pick up to three that stand out for building software and
- * write them into the file as `xPosts`; it writes nothing, and reads the
- * profiles' X handles from DATABASE_URL (site_reader's is enough).
+ * write them into the file as `xPosts`; it writes nothing else, and reads
+ * the profiles' X handles from DATABASE_URL.
  * --refresh reads the counts of every post the file holds again (only
  * those read --days or more days ago), drops each one X no longer serves,
  * and writes the file; --dry-run prints what would change. --cache <dir>
  * keeps X's answers for the rest of their UTC day, so a rerun reads (and
- * is billed for) nothing twice.
+ * is billed for) nothing twice. With --dry-run, either asks X nothing the
+ * cache doesn't hold, and writes nothing: --find lists who would be read.
  *
  * photo sets a profile's photo from a local file (src/profile-photo.ts).
  * <profile> is its id, its slug (as /people/<slug> has it) or its exact
@@ -77,8 +81,9 @@ import { shellWord } from "./shell.ts";
  * photo it replaces loses its images row only when nothing else uses it;
  * its object stays in the bucket.
  *
- * DATABASE_URL (the studio's connection string for `photo`, profile_editor's
- * for applying the file: core's README, "Filling in profiles"), MEDIA_UPLOAD_URL
+ * DATABASE_URL (the studio's connection string for `photo` and `posts`,
+ * profile_editor's for applying the file: core's README, "Filling in
+ * profiles"), MEDIA_UPLOAD_URL
  * and MEDIA_UPLOAD_TOKEN (the upload Worker, for --approve) come from the
  * environment only; .env files are not read.
  */
@@ -327,7 +332,7 @@ const posts = Command.make(
     ),
     dryRun: Flag.Boolean("dry-run").pipe(
       Flag.withDescription(
-        "--refresh: print what would change; write nothing.",
+        "Ask X nothing --cache doesn't hold (X bills each read), and write nothing: --find lists who would be read, --refresh prints what would change.",
       ),
       Flag.withDefault(false),
     ),
@@ -350,10 +355,16 @@ const posts = Command.make(
             directory,
             day: today,
             // A dry run keeps nothing, not even in the cache.
-            readOnly: refresh && dryRun,
+            readOnly: dryRun,
           }),
         }),
-      ).pipe(Layer.provide(FetchHttpClient.layer));
+      ).pipe(
+        // X's daily budget, which the sync Worker spends too, kept in the
+        // database: the studio's connection may count and record it. A dry
+        // run's asks X nothing the cache doesn't hold, and writes nothing.
+        Layer.provide(dryRun ? XBudget.dryRun : XBudget.layer),
+        Layer.provide(Layer.merge(FetchHttpClient.layer, Database.scriptLayer)),
+      );
       if (find) {
         if (top < 1 || read < 5) {
           return yield* Effect.fail(

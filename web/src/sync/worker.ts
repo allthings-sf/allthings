@@ -17,6 +17,7 @@ import { ShortSlugs } from "allthings-core/src/slugs.ts";
 import { LumaDrafts } from "allthings-core/src/luma/drafts.ts";
 import { LumaVenueVisibility } from "allthings-core/src/luma/venue-visibility.ts";
 import { LumaVenues } from "allthings-core/src/luma/venues.ts";
+import { XBudget } from "allthings-core/src/x-budget.ts";
 import {
   ConfigProvider,
   Effect,
@@ -59,8 +60,9 @@ import { prewarmPath, refreshPath } from "../refresh.ts";
  *   with `MEDIA_UPLOAD_TOKEN` (secret), both then required.
  * - `LUMA_API_KEY` (secret): Luma's API, for hidden venues, drafts,
  *   descriptions and covers.
- * - `X_BEARER_TOKEN` (secret): X's API, for follower counts and the post
- *   search.
+ * - `X_BEARER_TOKEN` (secret): X's API, for follower counts, the post
+ *   search and the community's count, within X's daily budget (core's
+ *   src/x-budget.ts), which the database keeps.
  *
  * And its switches, optional:
  * - `SYNC_MODE`: "write", or "dry-run" (and anything else) to write nothing.
@@ -268,6 +270,9 @@ export const syncLayer = (
     CommunitySources.live,
   ).pipe(
     Layer.provide(Layer.mergeAll(Luma.layer, LumaApi.layer, CoverSource.layer)),
+    // X's daily budget (core's src/x-budget.ts), which every X request in
+    // the run goes through, and the run's summary reports.
+    Layer.provideMerge(XBudget.layer),
     // Merged, not only provided: the follower refresh and the post search
     // read and write through the run's SqlClient and HttpClient themselves.
     Layer.provideMerge(

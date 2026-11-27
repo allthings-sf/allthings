@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ConfigProvider, Effect, Layer } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { XPostsSource } from "../src/x-posts-source.ts";
+import { xBudgetUncounted } from "./support/x-budget.ts";
 
 /** X's API as the source reads it, against a fake X: its day cache. Nothing here reaches X. */
 
@@ -40,6 +41,7 @@ const withX = (
   pages: Array<URL> = [],
 ) =>
   XPostsSource.xApi({ directory, day: "2026-10-03", readOnly }).pipe(
+    Layer.provide(xBudgetUncounted),
     Layer.provide(
       Layer.succeed(
         HttpClient.HttpClient,
@@ -154,6 +156,7 @@ describe("XPostsSource.xApi", () => {
     directories.push(directory);
     let requests = 0;
     const looping = XPostsSource.xApi({ directory, day: "2026-10-03" }).pipe(
+      Layer.provide(xBudgetUncounted),
       Layer.provide(
         Layer.succeed(
           HttpClient.HttpClient,

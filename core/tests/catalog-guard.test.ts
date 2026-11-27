@@ -139,6 +139,7 @@ const ownTime: Readonly<Record<string, string>> = {
   "core/src/social/announce-x.ts": "announcing on X",
   "core/src/social/announce.ts": "announcing",
   "core/src/social/sent-posts.ts": "recording what was posted",
+  "core/src/x-budget.ts": "X's daily budget, by the UTC day X bills on",
   "web/src/images/kept.ts": "timing image variants read from the bucket",
   "web/src/metrics.ts": "timing each request's data point",
   "web/src/images/route.ts": "timing image variants",

@@ -19,7 +19,8 @@ import {
   CommunitySources,
   snapshotCommunity,
 } from "../src/community-metrics.ts";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { XBudget } from "../src/x-budget.ts";
 import { ImageIngest } from "../src/ingest/ingest.ts";
 import { CandidateSearches, findCandidates } from "../src/posts/candidates.ts";
 import { PostSources } from "../src/posts/sources.ts";
@@ -510,6 +511,55 @@ describe("site_sync", () => {
         "SELECT sum(luma_guest_count), sum(luma_checked_in_count) FROM events",
       ),
     ).toBeUndefined();
+  });
+
+  test("holds each X request against the day's budget, records its answer's reads, once, and may do nothing else with them", async () => {
+    const x = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json({ data: [{ id: "5", username: "ada" }] }),
+          ),
+        ),
+      ),
+    );
+    /** One lookup of an account through the budget, then the day's spend. */
+    const lookUp = () =>
+      Effect.runPromise(
+        XBudget.use((budget) =>
+          budget
+            .execute(HttpClientRequest.get("https://api.x.com/2/users/5"), {
+              users: 1,
+            })
+            .pipe(Effect.andThen(budget.today)),
+        ).pipe(
+          Effect.provide(
+            XBudget.layer.pipe(Layer.provide(Layer.mergeAll(x, sqlLayer(db)))),
+          ),
+          Effect.provide(clockAt(DateTime.makeUnsafe("2026-10-05T09:00:00Z"))),
+        ),
+      );
+    expect((await lookUp()).spent).toBe(10);
+    // The same account again that day: X bills it once, and so does the count.
+    expect((await lookUp()).spent).toBe(10);
+    expect(await refusal("SELECT id FROM x_reads")).toContain(
+      "permission denied",
+    );
+    expect(await refusal("UPDATE x_reads SET day = '2026-10-04'")).toContain(
+      "permission denied",
+    );
+    expect(await refusal("DELETE FROM x_reads")).toContain("permission denied");
+    // Each lookup's hold, settled once its answer was recorded.
+    const holds = await db.query<{ settled: boolean }>(
+      "SELECT settled FROM x_holds",
+    );
+    expect(holds.rows).toEqual([{ settled: true }, { settled: true }]);
+    expect(await refusal("UPDATE x_holds SET mills = 0")).toContain(
+      "permission denied",
+    );
+    expect(await refusal("DELETE FROM x_holds")).toContain("permission denied");
   });
 
   test("searches past evenings for posts, and reports what it would add", async () => {

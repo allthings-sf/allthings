@@ -16,6 +16,7 @@ import type * as Statement from "effect/sql/Statement";
 import { hostOrder } from "../catalog.ts";
 import { displayName, topicOf } from "../lockup.ts";
 import { orDataSourceError } from "../sql.ts";
+import { XBudget } from "../x-budget.ts";
 import { addPost } from "./add.ts";
 
 /**
@@ -32,8 +33,10 @@ import { addPost } from "./add.ts";
  *   from 1Password's "allthings X app" in the `allthings` vault). Without
  *   it, X is skipped. Recent search reaches seven days back;
  *   `X_SEARCH=archive` uses full-archive search, which pay-per-use access
- *   has. X bills each post a search returns ($0.005 on pay-per-use, once a
- *   UTC day), so `X_MAX_RESULTS` (25 unless set) bounds each request.
+ *   has. X bills each post a search returns, and each author with it, once
+ *   a UTC day, so `X_MAX_RESULTS` (25 unless set) bounds each request, and
+ *   every request goes through X's daily budget (src/x-budget.ts): once it
+ *   is spent, X is skipped with why until the day ends.
  */
 
 /** Everything about an evening a post could point at. */
@@ -643,12 +646,10 @@ export function xBrowserSearches(
 
 /**
  * Posts an X search request returns unless `X_MAX_RESULTS` says otherwise:
- * X bills each one, so a run's cost is at most its requests times this.
+ * X bills each one, and its author, so a request bills at most this many
+ * of each (src/x-budget.ts).
  */
 export const xDefaultMaxResults = 25;
-
-/** What X charges per post a search returns, on pay-per-use (docs.x.com, 2026-10). */
-export const xCostPerPost = 0.005;
 
 /**
  * X's v2 search with the app's bearer token, when `X_BEARER_TOKEN` is
@@ -664,7 +665,7 @@ export const makeXSearch = Effect.gen(function* () {
     const maxResults = yield* Config.Int("X_MAX_RESULTS").pipe(
       Config.withDefault(xDefaultMaxResults),
     );
-    const client = yield* HttpClient.HttpClient;
+    const xBudget = yield* XBudget;
     if (Option.isNone(token)) {
       return {
         platform: "x",
@@ -693,11 +694,15 @@ export const makeXSearch = Effect.gen(function* () {
         lastRequestAt = yield* Clock.currentTimeMillis;
         return yield* request;
       });
+    // Each post a request returns is billed, and its author: at most this
+    // many of each.
+    const perRequest = Math.min(archive ? 500 : 100, Math.max(10, maxResults));
     /**
      * One request, tried again after a 429 while `budget` allows: every
      * attempt counts against its request limit, and none starts, nor waits,
      * past its deadline. An attempt that gets no answer in 15 s is a failed
-     * query, never the whole search's end. None when the budget is spent.
+     * query, never the whole search's end. None when the budget is spent,
+     * and X's daily budget's refusal when it refuses: then nothing was sent.
      */
     const send = (
       request: HttpClientRequest.HttpClientRequest,
@@ -710,14 +715,20 @@ export const makeXSearch = Effect.gen(function* () {
       Effect.gen(function* () {
         for (let attempt = 0; budget.spent < budget.limit; attempt++) {
           if ((yield* Clock.currentTimeMillis) >= budget.deadline) return null;
-          budget.spent++;
           const response = yield* paced(
-            client.execute(request).pipe(
-              Effect.timeout(Duration.seconds(15)),
-              Effect.map((answer) => ({ answer, status: answer.status })),
-              Effect.orElseSucceed(() => ({ answer: null, status: 0 })),
-            ),
+            xBudget
+              .execute(request, { posts: perRequest, users: perRequest })
+              .pipe(
+                Effect.timeout(Duration.seconds(15)),
+                Effect.map((answer) => ({ answer, status: answer.status })),
+                Effect.catchTag("XBudgetRefused", (refused) =>
+                  Effect.succeed({ refused }),
+                ),
+                Effect.orElseSucceed(() => ({ answer: null, status: 0 })),
+              ),
           );
+          if ("refused" in response) return response;
+          budget.spent++;
           if (response.status !== 429 || attempt >= 2) return response;
           const reset = Number(response.answer?.headers["x-rate-limit-reset"]);
           const now = yield* Clock.currentTimeMillis;
@@ -760,6 +771,9 @@ export const makeXSearch = Effect.gen(function* () {
           };
           // One refused query (a 429, say) keeps what the others found.
           const failures: Array<string> = [];
+          // Why X's daily budget refused a query, if it did; the rest are
+          // never sent.
+          let refused: string | undefined;
           for (const query of queries) {
             const sent = yield* send(
               HttpClientRequest.get(endpoint).pipe(
@@ -768,9 +782,7 @@ export const makeXSearch = Effect.gen(function* () {
                   query,
                   start_time: iso(earliest),
                   end_time: iso(latest),
-                  max_results: String(
-                    Math.min(archive ? 500 : 100, Math.max(10, maxResults)),
-                  ),
+                  max_results: String(perRequest),
                   "tweet.fields": "created_at,author_id,entities",
                   expansions: "author_id",
                   "user.fields": "username",
@@ -783,6 +795,11 @@ export const makeXSearch = Effect.gen(function* () {
               failures.push("no requests or time left for this query");
               continue;
             }
+            // X's daily budget is spent: X is asked nothing more.
+            if ("refused" in sent) {
+              refused = sent.refused.reason;
+              break;
+            }
             if (sent.answer === null) {
               failures.push("no answer in 15 s");
               continue;
@@ -793,8 +810,9 @@ export const makeXSearch = Effect.gen(function* () {
               continue;
             }
             // An answer that isn't a search result is one failed query; what
-            // the others found stays.
-            // The body too has 15 s: X may send its headers, then stall.
+            // the others found stays. The budget read the body within the
+            // request's 15 s (X may send its headers, then stall); decoding
+            // keeps a bound of its own.
             const answer = yield* Effect.result(
               response.json.pipe(
                 Effect.flatMap(Schema.decodeUnknownEffect(XSearchAnswer)),
@@ -812,6 +830,14 @@ export const makeXSearch = Effect.gen(function* () {
             for (const post of fromXSearch(answer.success)) {
               found.set(post.url, post);
             }
+          }
+          // Refused before X found anything: the evening says why.
+          if (refused !== undefined && found.size === 0) {
+            return yield* new CandidateSearchError({
+              platform: "x",
+              reason: refused,
+              requests: budget.spent,
+            });
           }
           if (failures.length === queries.length) {
             return yield* new CandidateSearchError({
@@ -831,7 +857,10 @@ export class CandidateSearches extends Context.Service<
   CandidateSearches,
   ReadonlyArray<CandidateSearchShape>
 >()("allthings/CandidateSearches") {
-  /** Needs an `HttpClient`; reads `X_BEARER_TOKEN` and `X_SEARCH` from config. */
+  /**
+   * Needs an `HttpClient`, and the `XBudget` X's requests go through; reads
+   * `X_BEARER_TOKEN` and `X_SEARCH` from config.
+   */
   static readonly layer = Layer.effect(
     CandidateSearches,
     Effect.all([makeBlueskySearch, makeXSearch]),

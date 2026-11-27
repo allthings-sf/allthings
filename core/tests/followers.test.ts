@@ -17,8 +17,15 @@ import {
   refreshFollowers,
   xHandleOf,
 } from "../src/followers.ts";
-import { clockLayer, seededDatabase, sqlLayer } from "./support/database.ts";
+import {
+  clockLayer,
+  migratedDatabase,
+  seededDatabase,
+  sqlLayer,
+} from "./support/database.ts";
 import { configFrom, fakeLumaBy, type Reply, settle } from "./support/luma.ts";
+import { xBudgetUncounted } from "./support/x-budget.ts";
+import { XBudget, XBudgetRefused } from "../src/x-budget.ts";
 
 /**
  * X follower counts: the order speaker lists take from them, the FixTweet
@@ -193,6 +200,7 @@ const fakeXApi = (
 /** FollowerSource.xApi over `http`, with a bearer token. */
 const xApiSource = (http: Layer.Layer<HttpClient.HttpClient>) =>
   FollowerSource.xApi.pipe(
+    Layer.provide(xBudgetUncounted),
     Layer.provide(http),
     Layer.provide(
       Layer.succeed(
@@ -217,6 +225,50 @@ describe("FollowerSource.xApi", () => {
     });
     expect(found.get("12")).toBeInstanceOf(FollowerReadError);
     expect(x.requests).toEqual([{ path: "/2/users", ids: "11,12" }]);
+  });
+
+  test("keeps the accounts read before X's daily budget refuses a request, and leaves the rest unasked", async () => {
+    const db = await migratedDatabase();
+    databases.push(db);
+    const many = Array.from({ length: 150 }, (_, index) => String(index + 1));
+    const x = fakeXApi(
+      Object.fromEntries(
+        many.map((id) => [id, { username: `u${id}`, followers: 1 }]),
+      ),
+    );
+    // $1.20 a day: the first 100 accounts may cost $1.00; 50 more, $0.50,
+    // don't fit.
+    const found = await Effect.runPromise(
+      FollowerSource.use(
+        (source) => source.readByIds?.(many) ?? Effect.die("no batch"),
+      ).pipe(
+        Effect.provide(
+          FollowerSource.xApi.pipe(
+            Layer.provide(XBudget.make(1.2)),
+            Layer.provide(Layer.mergeAll(x.layer, sqlLayer(db))),
+            Layer.provide(
+              Layer.succeed(
+                ConfigProvider.ConfigProvider,
+                ConfigProvider.fromEnv({ env: { X_BEARER_TOKEN: "test" } }),
+              ),
+            ),
+          ),
+        ),
+        Effect.provide(clockLayer),
+      ),
+    );
+    expect(x.requests).toHaveLength(1);
+    expect(found.get("100")).toEqual({
+      id: "100",
+      handle: "u100",
+      followers: 1,
+    });
+    const refused = [...found.values()].filter(
+      (read) => read instanceof XBudgetRefused,
+    );
+    expect(refused).toHaveLength(50);
+    expect(found.get("101")).toBeInstanceOf(XBudgetRefused);
+    expect(found.size).toBe(150);
   });
 });
 
@@ -651,6 +703,110 @@ describe("refreshFollowers", () => {
     expect(report.failed).toHaveLength(3);
     expect(report.refreshed).toEqual([]);
   }, 15_000);
+
+  test("stores what the batch read when X's daily budget refuses a profile read on its own, and leaves only that one untried", async () => {
+    const db = await seededDatabase();
+    databases.push(db);
+    await refresh(db, { ada: 120, linus: 9000, future: 3 });
+    await db.exec(
+      `UPDATE profiles SET x_followers_at = x_followers_at - interval '30 days' WHERE twitter_handle IS NOT NULL`,
+    );
+    // Ada's account isn't known by id, so she is read by handle, and first.
+    await db.exec(
+      `UPDATE profiles SET x_user_id = NULL, x_followers_tried_at = NULL WHERE name = 'Ada Lovelace'`,
+    );
+    const partly = Layer.succeed(
+      FollowerSource,
+      FollowerSource.of({
+        read: () =>
+          Effect.fail(
+            new XBudgetRefused({
+              reason: "X daily budget spent: $2.00 of $2.00",
+            }),
+          ),
+        readByIds: (known) =>
+          Effect.succeed(
+            new Map(
+              known.map((id) => [
+                id,
+                id === "13"
+                  ? { id, handle: "linus", followers: 9100 }
+                  : { id, handle: "future", followers: 4 },
+              ]),
+            ),
+          ),
+      }),
+    );
+    const report = await Effect.runPromise(
+      refreshFollowers({
+        dryRun: false,
+        maxProfiles: 10,
+        staleAfter: "7 days",
+      }).pipe(Effect.provide(Layer.mergeAll(partly, sqlLayer(db), clockLayer))),
+    );
+    expect(report.skipped).toBe("X daily budget spent: $2.00 of $2.00");
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(1);
+    expect(await snapshots(db)).toEqual([
+      ["Ada Lovelace", 120],
+      ["Future Speaker", 4],
+      ["Linus", 9100],
+    ]);
+    const { rows } = await db.query(
+      `SELECT name FROM profiles WHERE name = 'Ada Lovelace' AND x_followers_tried_at IS NULL`,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  test("stops at X's daily budget: X isn't asked, what is left waits untried, and the report says why", async () => {
+    const db = await seededDatabase();
+    databases.push(db);
+    await refresh(db, { ada: 120, linus: 9000, future: 3 });
+    await db.exec(
+      `UPDATE profiles SET x_followers_at = x_followers_at - interval '30 days', x_followers_tried_at = NULL WHERE twitter_handle IS NOT NULL`,
+    );
+    // $0.49 of the day's $0.50 spent: the three accounts could cost $0.03.
+    await db.exec(
+      `INSERT INTO x_reads (day, kind, id) SELECT '2026-10-03', 'user', g::text FROM generate_series(1, 49) g`,
+    );
+    const x = fakeXApi({ "11": { username: "ada", followers: 130 } });
+    const sql = sqlLayer(db);
+    const report = await Effect.runPromise(
+      refreshFollowers({
+        dryRun: false,
+        maxProfiles: 10,
+        staleAfter: "7 days",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            FollowerSource.xApi.pipe(
+              Layer.provide(XBudget.make(0.5)),
+              Layer.provide(Layer.mergeAll(x.layer, sql)),
+              Layer.provide(
+                Layer.succeed(
+                  ConfigProvider.ConfigProvider,
+                  ConfigProvider.fromEnv({ env: { X_BEARER_TOKEN: "test" } }),
+                ),
+              ),
+            ),
+            sql,
+            clockLayer,
+          ),
+        ),
+      ),
+    );
+    expect(x.requests).toEqual([]);
+    expect(report.skipped).toBe(
+      "X daily budget spent: $0.49 of $0.50, too little for a read of up to $0.03",
+    );
+    expect(report.refreshed).toEqual([]);
+    expect(report.failed).toEqual([]);
+    expect(report.remaining).toBe(3);
+    const { rows } = await db.query(
+      `SELECT name FROM profiles WHERE x_followers_tried_at IS NOT NULL`,
+    );
+    expect(rows).toEqual([]);
+  });
 
   test("a dry run reads and reports, and writes nothing", async () => {
     const db = await seededDatabase();

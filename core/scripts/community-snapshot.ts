@@ -10,6 +10,7 @@ import {
   sources,
 } from "../src/community-metrics.ts";
 import * as Database from "../src/database.ts";
+import { XBudget } from "../src/x-budget.ts";
 
 /**
  * Takes today's community snapshot (src/community-metrics.ts) of the
@@ -61,6 +62,8 @@ const command = Command.make(
     }).pipe(
       Effect.provide(
         CommunitySources.live.pipe(
+          // X, if named, within the daily budget the sync Worker spends.
+          Layer.provide(XBudget.layer),
           Layer.provideMerge(
             Layer.mergeAll(FetchHttpClient.layer, Database.scriptLayer),
           ),
