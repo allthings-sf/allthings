@@ -185,6 +185,10 @@ export const testStack = <const Name extends string>(
  * the lazily loaded src/metrics.ts after it is sent, which no smaller hook
  * does. It went to 9,200 on 2026-11-13, when a cold start stopped
  * parsing the build manifest for its hash (src/build-id.ts): about 9,060
- * then.
+ * then. It went to 9,500 on 2026-11-27 for the search (src/search/): the
+ * Durable Object class that counts searches, which the runtime takes only
+ * from the entry, and the path check that loads the route on the first
+ * search. The class is the least it can be, handing each request to the
+ * budget it loads on its first: about 9,380 then.
  */
-export const bundleBudgets = { startup: 9_200, lazy: 120_000 } as const;
+export const bundleBudgets = { startup: 9_500, lazy: 120_000 } as const;
