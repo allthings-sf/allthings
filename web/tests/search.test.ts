@@ -146,9 +146,9 @@ describe("the search budget", () => {
 
   test("is the Worker's Durable Object class, which hands each request to the budget", async () => {
     const state = memory();
-    const first = await takeFrom(new SearchBudget(state));
+    const first = await takeFrom(new SearchBudget(state, {}));
     expect(first).toMatchObject({ ok: true, used: 1, limit: 900 });
-    expect((await takeFrom(new SearchBudget(state))).used).toBe(2);
+    expect((await takeFrom(new SearchBudget(state, {}))).used).toBe(2);
   });
 
   test("the object answers only its one path", async () => {

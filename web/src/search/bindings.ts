@@ -1,4 +1,5 @@
 import { type Taken, takePath } from "./budget.ts";
+import type { IndexReport, Page } from "./indexer.ts";
 
 /**
  * The search's bindings (route.ts), as infra/src/web.ts gives them to prod
@@ -36,9 +37,32 @@ export interface SearchIndex {
   }) => Promise<{ readonly chunks: ReadonlyArray<Passage> }>;
 }
 
+/** What the object uses of an instance's Items API (its built-in storage). */
+export interface Items {
+  readonly upload: (
+    name: string,
+    content: string,
+  ) => Promise<{ readonly id: string; readonly key: string }>;
+  readonly delete: (itemId: string) => Promise<void>;
+  /** Items whose keys hold `search`: to find a key's item when its id isn't known. */
+  readonly list: (options: {
+    readonly search: string;
+    readonly per_page: number;
+  }) => Promise<{
+    readonly result: ReadonlyArray<{
+      readonly id: string;
+      readonly key: string;
+    }>;
+  }>;
+  /** An item's handle: `info()` says how its indexing went. */
+  readonly get: (itemId: string) => {
+    readonly info: () => Promise<{ readonly status: string }>;
+  };
+}
+
 /** What the Worker uses of an AI Search namespace binding. */
 interface SearchNamespace {
-  readonly get: (instance: string) => SearchIndex;
+  readonly get: (instance: string) => SearchIndex & { readonly items: Items };
 }
 
 /** What the Worker uses of a Rate Limiting binding. */
@@ -66,7 +90,7 @@ const has = (value: unknown, ...methods: ReadonlyArray<string>) =>
       typeof (value as Record<string, unknown>)[method] === "function",
   );
 
-/** The name of the one object that counts every search. */
+/** The name of the one object that counts every search and indexes the site. */
 export const budgetName = "site";
 
 /** What the route needs of the Worker's bindings. */
@@ -76,6 +100,60 @@ export interface Search {
   readonly take: () => Promise<Taken>;
   /** Whether the address `client` may search now: false past its rate, a failure when it can't be read. */
   readonly allow: (client: string) => Promise<boolean>;
+}
+
+/** Where the indexer hands the object the pages to index (object.ts). */
+export const indexPath = "/index";
+
+/** The index's items, for the object that indexes them (prod alone). */
+export function itemsOf(
+  env: Readonly<Record<string, unknown>>,
+): Items | undefined {
+  const namespace = env["SEARCH"];
+  const instance = env["SEARCH_INSTANCE"];
+  if (
+    !has(namespace, "get") ||
+    typeof instance !== "string" ||
+    instance === ""
+  ) {
+    return undefined;
+  }
+  return (namespace as SearchNamespace).get(instance).items;
+}
+
+/** What the prewarm needs to have the site's pages indexed (ingest.ts). */
+export interface Indexing {
+  /** Has the object index `pages`: what it did. */
+  readonly index: (
+    pages: ReadonlyArray<Page>,
+    complete: boolean,
+  ) => Promise<IndexReport>;
+}
+
+/** Indexing, if the Worker has the index and the object (prod alone). */
+export function indexingOf(
+  env: Readonly<Record<string, unknown>>,
+): Indexing | undefined {
+  const budget = env["SEARCH_BUDGET"];
+  if (itemsOf(env) === undefined || !has(budget, "idFromName", "get")) {
+    return undefined;
+  }
+  const counter = budget as BudgetNamespace;
+  return {
+    index: async (pages, complete) => {
+      const response = await counter
+        .get(counter.idFromName(budgetName))
+        .fetch(`https://budget${indexPath}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pages, complete }),
+        });
+      if (!response.ok) {
+        throw new Error(`the search budget answered ${response.status}`);
+      }
+      return (await response.json()) as IndexReport;
+    },
+  };
 }
 
 /** The search, if the Worker has every binding it needs. */

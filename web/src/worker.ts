@@ -87,21 +87,25 @@ const pagesOf = (
 };
 
 /**
- * The search's count, a Durable Object on prod (infra/src/web.ts binds it
- * as `SEARCH_BUDGET`). Its class must be the entry's, which every cold
- * start parses, so it is only this: each request goes to search/budget.ts,
- * loaded on the first.
+ * The search's Durable Object on prod (infra/src/web.ts binds it as
+ * `SEARCH_BUDGET`): it counts searches and indexes the site. Its class
+ * must be the entry's, which every cold start parses, so it is only this:
+ * each request goes to search/object.ts, loaded on the first, with the
+ * object's one lock.
  */
 export class SearchBudget {
   readonly #state: BudgetState;
+  readonly #env: Readonly<Record<string, unknown>>;
+  readonly #lock = { running: false };
 
-  constructor(state: BudgetState) {
+  constructor(state: BudgetState, env: Readonly<Record<string, unknown>>) {
     this.#state = state;
+    this.#env = env;
   }
 
   fetch(request: Request): Promise<Response> {
-    return import("./search/budget.ts").then(({ answer }) =>
-      answer(this.#state, request),
+    return import("./search/object.ts").then(({ objectAnswer }) =>
+      objectAnswer(this.#state, this.#env, request, this.#lock),
     );
   }
 }
@@ -168,15 +172,22 @@ export default {
               // Once the store holds the current pages, Workers Cache drops the
               // answers that show the data (cache.ts), so visitors get them now
               // rather than within the edge lifetime. The report says how it went.
+              // On prod the pages it reads are indexed for search too
+              // (search/ingest.ts, loaded only when a prewarm runs).
               prewarm: withEdgePurge(() =>
-                prewarm({
-                  build: buildId,
-                  serve: site,
-                  pointer: () => readSitePointer(pages),
-                  now: Date.now,
-                  sleep: (ms) =>
-                    new Promise((resolve) => setTimeout(resolve, ms)),
-                }),
+                import("./search/ingest.ts").then(({ withIndex }) =>
+                  withIndex(env, (onPage) =>
+                    prewarm({
+                      build: buildId,
+                      serve: site,
+                      pointer: () => readSitePointer(pages),
+                      now: Date.now,
+                      sleep: (ms) =>
+                        new Promise((resolve) => setTimeout(resolve, ms)),
+                      onPage,
+                    }),
+                  ),
+                ),
               ),
             };
       const noStore = () => Promise.reject(new Error("no store"));
