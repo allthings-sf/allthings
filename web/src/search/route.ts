@@ -8,7 +8,8 @@ import {
   searchOf,
   searchPath,
 } from "./bindings.ts";
-import { WINDOW_DAYS } from "./budget.ts";
+import { QUERIES_IN_WINDOW, WINDOW_DAYS } from "./budget.ts";
+import { agentFrontMatter, searchGuide } from "./discovery.ts";
 
 /**
  * Search for agents: `/.well-known/search`, as Cloudflare's guide describes
@@ -19,15 +20,18 @@ import { WINDOW_DAYS } from "./budget.ts";
  * search is first taken from the budget (budget.ts): past it the answer is
  * 503, and the index isn't asked.
  *
- * - `GET /.well-known/search?q=…` searches for `q`.
+ * - `GET /.well-known/search?q=…` searches for `q`; with no `q` at all, it
+ *   describes itself ({@link description}), which is what the pages'
+ *   `agent:documentation` names, and counts nothing.
  * - `QUERY /.well-known/search` searches for its body: UTF-8 text
  *   (`Content-Type: text/plain`), or JSON with a `q` field
  *   (`application/json`).
  *
  * The answer is Markdown, as Cloudflare's endpoint answers: the passages
  * the index retrieved, each under its page's address and its score, never
- * a generated answer. A search with nothing to search for is refused
- * before it is counted, and so is one past its address's rate
+ * a generated answer, after the `agent:` front matter (discovery.ts). A
+ * search with nothing to search for is refused before it is counted, and
+ * so is one past its address's rate
  * ({@link perMinute} a minute), so no one client can spend the budget in a
  * burst.
  */
@@ -92,6 +96,20 @@ const usage = (status: number, problem: string, headers = {}) =>
     `${problem}\n\nSearch allthings.dev with \`GET ${searchPath}?q=<words>\`, or \`QUERY ${searchPath}\` with the words as a \`text/plain\` body or as \`{"q": "<words>"}\` in \`application/json\`.\n`,
     headers,
   );
+
+/** How the endpoint describes itself, asked with no `q`. */
+export const description = (origin: string): string =>
+  `# Search allthings.dev
+
+Search allthings.dev's pages (its evenings, talks, people and guides) with keywords or a question, instead of crawling them. The answer is Markdown: the passages that match, each under its page's address with its score, best first. It never generates an answer.
+
+- \`GET ${origin}${searchPath}?q=<words>\`
+- \`QUERY ${origin}${searchPath}\` with the words as a \`text/plain\` body, or as \`{"q": "<words>"}\` in \`application/json\`
+
+A search may be at most ${queryLimit} characters. One address may search ${perMinute} times a minute (429 past it), and the site answers at most ${QUERIES_IN_WINDOW} searches in any ${WINDOW_DAYS} UTC days (503 past them, with \`Retry-After\`). Every page is also listed at ${origin}/sitemap.xml.
+
+This is the endpoint Cloudflare's guide describes: ${searchGuide}
+`;
 
 /** The search a request asks for, or the refusal that says why it can't be read. */
 async function queryOf(request: Request): Promise<string | Response> {
@@ -159,6 +177,11 @@ export async function searchRequest(
       allow: "GET, QUERY",
     });
   }
+  if (request.method === "GET" && !new URL(request.url).searchParams.has("q")) {
+    return markdown(200, agentFrontMatter(origin) + description(origin), {
+      "cache-control": CacheControl.page,
+    });
+  }
   const read = await queryOf(request);
   if (read instanceof Response) return read;
   // One line, as the heading shows it: a search is words, not a document.
@@ -206,12 +229,16 @@ export async function searchRequest(
       "# Search failed\n\nThe index didn't answer. Try again in a minute.\n",
     );
   }
-  return markdown(200, resultsMarkdown(query, passages, origin), {
-    // A search is public data: the same words get the same passages until
-    // the pages change, so Workers Cache (cache.ts) may answer a repeat
-    // without counting it again.
-    "cache-control": CacheControl.publicData,
-  });
+  return markdown(
+    200,
+    agentFrontMatter(origin) + resultsMarkdown(query, passages, origin),
+    {
+      // A search is public data: the same words get the same passages until
+      // the pages change, so Workers Cache (cache.ts) may answer a repeat
+      // without counting it again.
+      "cache-control": CacheControl.publicData,
+    },
+  );
 }
 
 /**

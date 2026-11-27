@@ -20,6 +20,7 @@ import { rssXml } from "../src/seo/rss.ts";
 import { sitemapXml } from "../src/seo/sitemap.ts";
 import { escapeXml } from "../src/seo/xml.ts";
 import { ogCards } from "../src/og/cards.ts";
+import { agentInstructions } from "../src/search/discovery.ts";
 import { htmlProblems } from "./support/pages.ts";
 
 /**
@@ -530,6 +531,11 @@ describe("page metadata", () => {
           '<meta name="twitter:site" content="@allthingswebdev"/>',
           `<meta name="twitter:image" content="${origin}${card.src}"/>`,
           `<meta name="twitter:image:alt" content="${card.alt}"/>`,
+          // Where agents search the site (src/search/discovery.ts).
+          `<meta name="agent:instructions" content="${agentInstructions}"/>`,
+          `<meta name="agent:endpoint" content="${origin}/.well-known/search?q={query}"/>`,
+          '<meta name="agent:method" content="GET"/>',
+          `<meta name="agent:documentation" content="${origin}/.well-known/search"/>`,
           `<meta name="theme-color" content="${roleColor(tokens, "paper", "ground").hex}" media="(prefers-color-scheme: light)"/>`,
           `<meta name="theme-color" content="${roleColor(tokens, "night", "ground").hex}" media="(prefers-color-scheme: dark)"/>`,
         ]),
