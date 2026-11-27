@@ -409,7 +409,7 @@ const itemsIn = (refuse = false) => {
   const api: Items = {
     get: (id) => ({
       info: async () => {
-        if (!items.has(id)) throw new Error(`no item ${id}`);
+        if (!items.has(id)) throw new Error(`item_not_found: ${id}`);
         return { status: statuses.get(id) ?? "completed" };
       },
     }),
@@ -425,7 +425,7 @@ const itemsIn = (refuse = false) => {
       return { id, key };
     },
     delete: async (id) => {
-      if (!items.delete(id)) throw new Error(`no item ${id}`);
+      if (!items.delete(id)) throw new Error(`item_not_found: ${id}`);
     },
   };
   return {
@@ -630,6 +630,81 @@ describe("indexing the site's pages", () => {
     expect(
       await indexPages(documents({ "/": "# home" }), true, indexing),
     ).toMatchObject({ settled: 1 });
+  });
+
+  test("finishes a removal whose record was lost: the item already gone is removed", async () => {
+    const { api, keys } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(
+      documents({ "/": "# home", "/gone": "# gone" }),
+      true,
+      indexing,
+    );
+    // The item goes, then the record never lands: the ledger still holds it.
+    await expect(
+      indexPages(documents({ "/": "# home" }), true, {
+        ...indexing,
+        record: async () => {
+          throw new Error("the object is unreachable");
+        },
+      }),
+    ).rejects.toThrow("the object is unreachable");
+    expect(keys()).toEqual(["index.md"]);
+    // Once the lost run's hold has passed, the next run finds the item gone.
+    state.held.set("lease", { run: "lost", until: 0 });
+    const run = await indexPages(documents({ "/": "# home" }), true, indexing);
+    expect(run).toMatchObject({ removed: 1, failed: [] });
+    expect(state.held.get("indexed")).not.toHaveProperty(["gone.md"]);
+  });
+
+  test("uploads a page again when its item has gone from the index", async () => {
+    const { api, idOf, keys } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(documents({ "/": "# home" }), true, indexing);
+    await api.delete(idOf("index.md"));
+    const found = await indexPages(
+      documents({ "/": "# home" }),
+      true,
+      indexing,
+    );
+    expect(found).toMatchObject({ unindexed: 1, failed: [] });
+    const again = await indexPages(
+      documents({ "/": "# home" }),
+      true,
+      indexing,
+    );
+    expect(again).toMatchObject({ uploaded: 1 });
+    expect(keys()).toEqual(["index.md"]);
+  });
+
+  test("tries again a removal or a check that failed for another reason", async () => {
+    const { api } = itemsIn();
+    const state = memory();
+    const indexing = indexingWith(api, state);
+    await indexPages(
+      documents({ "/": "# home", "/gone": "# gone" }),
+      true,
+      indexing,
+    );
+    const down = {
+      ...api,
+      delete: async () => {
+        throw new Error("timeout");
+      },
+      get: () => ({
+        info: async () => {
+          throw new Error("timeout");
+        },
+      }),
+    };
+    const run = await indexPages(documents({ "/": "# home" }), true, {
+      ...indexing,
+      items: down,
+    });
+    expect(run).toMatchObject({ removed: 0, unindexed: 0 });
+    expect([...run.failed].toSorted()).toEqual(["gone.md", "index.md"]);
   });
 
   test("does nothing while another prewarm is indexing", async () => {

@@ -48,6 +48,14 @@ export interface IndexReport {
 /** Uploads at once. */
 export const concurrency = 4;
 
+/**
+ * Whether `error` is Cloudflare saying the item isn't there
+ * (`item_not_found`): one already gone, which is what a removal wants.
+ * Anything else (a timeout, a refusal) may pass, and is tried again.
+ */
+export const gone = (error: unknown): boolean =>
+  /not[_ ]found/i.test(error instanceof Error ? error.message : String(error));
+
 const sha256 = async (text: string) =>
   [
     ...new Uint8Array(
@@ -135,12 +143,15 @@ export async function indexPages(
       }
     }
   });
+  // A removal whose item is already gone (an earlier run removed it, and
+  // its record was lost) is done.
   await each(planned.remove, async ({ key, id }) => {
     try {
       await items.delete(id);
       removed.push({ key, id });
-    } catch {
-      failed.push(key);
+    } catch (error) {
+      if (gone(error)) removed.push({ key, id });
+      else failed.push(key);
     }
   });
   // An upload only queues a page: its item says, later, how indexing went.
@@ -153,12 +164,21 @@ export async function indexPages(
       if (status === "completed") {
         settled.push({ key, id });
       } else if (status === "error" || status === "skipped") {
-        await items.delete(id);
+        await items.delete(id).catch((error: unknown) => {
+          if (!gone(error)) throw error;
+        });
         removed.push({ key, id });
         unindexed += 1;
       }
-    } catch {
-      failed.push(key);
+    } catch (error) {
+      // An item that's gone isn't indexed: the page is uploaded again next
+      // run. Any other failure is asked again.
+      if (gone(error)) {
+        removed.push({ key, id });
+        unindexed += 1;
+      } else {
+        failed.push(key);
+      }
     }
   });
   if (planned.busy !== true) await record(run, uploaded, removed, settled);
