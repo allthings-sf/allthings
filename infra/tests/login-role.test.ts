@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  deploysOnlyFromMain,
-  storeItem,
-  throughPipe,
-} from "../scripts/login-role.ts";
+import { deploysOnlyFromMain, throughPipe } from "../scripts/login-role.ts";
 
 describe("an environment a production credential may go in", () => {
   const mainOnly = {
@@ -95,44 +99,59 @@ esac
 `;
 
 describe("storing a credential in 1Password", () => {
-  const path = process.env["PATH"];
   const dirs: Array<string> = [];
   afterEach(async () => {
-    process.env["PATH"] = path;
-    delete process.env["FAKE_OP_LOG"];
-    delete process.env["FAKE_OP_FAIL"];
     await Promise.all(
       dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
     );
   });
-  /** Puts the fake op first on PATH; its log's path. */
-  const withFakeOp = async () => {
+  /**
+   * `storeItem` in a Bun of its own, with the fake op first on its PATH (a
+   * process looks commands up on the PATH it started with), and `fail` set
+   * to make the fake refuse the create: its exit code, stderr and op's log.
+   */
+  const store = async (fail = false) => {
     const dir = await mkdtemp(join(tmpdir(), "fake-op-"));
     dirs.push(dir);
     await writeFile(join(dir, "op"), fakeOp);
     await chmod(join(dir, "op"), 0o755);
-    process.env["PATH"] = `${dir}:${path ?? ""}`;
     const log = join(dir, "log");
     await writeFile(log, "");
-    process.env["FAKE_OP_LOG"] = log;
-    return log;
+    const script = new URL("../scripts/login-role.ts", import.meta.url)
+      .pathname;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { storeItem } from ${JSON.stringify(script)};
+        await storeItem({ value: "a-new-password", item: "allthings test", vault: "allthings", notes: "made by the test" });`,
+      ],
+      {
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env["PATH"] ?? ""}`,
+          FAKE_OP_LOG: log,
+          ...(fail ? { FAKE_OP_FAIL: "1" } : {}),
+        },
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    );
+    const [code, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stderr).text(),
+    ]);
+    return { code, stderr, log: await readFile(log, "utf8") };
   };
   /** The pipes' directories left in the temporary directory. */
   const leftovers = async () =>
     (await readdir(tmpdir())).filter((name) => name.startsWith("login-role-"));
 
   test("hands op the template through a named pipe, never a file, then archives the item it replaces", async () => {
-    const log = await withFakeOp();
     const before = await leftovers();
-    await storeItem({
-      value: "a-new-password",
-      item: "allthings test",
-      vault: "allthings",
-      notes: "made by the test",
-    });
-    const [create, ...deletes] = (await readFile(log, "utf8"))
-      .trim()
-      .split("\n");
+    const { code, stderr, log } = await store();
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    const [create, ...deletes] = log.trim().split("\n");
     expect(create?.startsWith("create pipe ")).toBe(true);
     const template = JSON.parse(create?.slice("create pipe ".length) ?? "") as {
       title: string;
@@ -148,18 +167,12 @@ describe("storing a credential in 1Password", () => {
   });
 
   test("fails with op's refusal, archiving nothing, and leaves no pipe behind", async () => {
-    const log = await withFakeOp();
-    process.env["FAKE_OP_FAIL"] = "1";
     const before = await leftovers();
-    await expect(
-      storeItem({
-        value: "a-new-password",
-        item: "allthings test",
-        vault: "allthings",
-        notes: "made by the test",
-      }),
-    ).rejects.toThrow("op item create failed: refused");
-    expect((await readFile(log, "utf8")).includes("delete")).toBe(false);
+    const { code, stderr, log } = await store(true);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("op item create failed: refused");
+    expect(stderr).not.toContain("a-new-password");
+    expect(log.includes("delete")).toBe(false);
     expect(await leftovers()).toEqual(before);
   });
 
@@ -171,6 +184,25 @@ describe("storing a credential in 1Password", () => {
         throw new Error("failed first");
       }),
     ).rejects.toThrow("failed first");
+    expect(await leftovers()).toEqual(before);
+  });
+
+  test("lets the writer go when nothing reads text larger than the pipe holds", async () => {
+    const before = await leftovers();
+    const large = "x".repeat(200_000);
+    expect(await throughPipe(large, async () => "done")).toBe("done");
+    expect(
+      await throughPipe(large, async (path) => {
+        // A reader that reads only the start, then leaves.
+        const handle = await open(path, "r");
+        try {
+          await handle.read(new Uint8Array(1_024), 0, 1_024, null);
+        } finally {
+          await handle.close();
+        }
+        return "read some";
+      }),
+    ).toBe("read some");
     expect(await leftovers()).toEqual(before);
   });
 });

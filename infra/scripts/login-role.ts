@@ -253,9 +253,9 @@ export async function storeConnectionString(options: {
  * opens it to read: `op`, given the path as `--template`, reads it as it
  * reads a file, but the text passes through the kernel and is never written
  * to disk. The pipe is in a directory only this user can open, and is
- * removed with it after. Had `use` failed before opening the pipe, the
- * writer, which waits for a reader, is let go by opening it once more to
- * read, and what it wrote is dropped.
+ * removed with it after. Had `use` left before reading it all, the writer,
+ * which waits for a reader and for room in the pipe, is let go by reading
+ * the rest and dropping it.
  */
 export async function throughPipe<A>(
   text: string,
@@ -266,26 +266,50 @@ export async function throughPipe<A>(
     const path = join(dir, "item.json");
     await run(["mkfifo", "-m", "600", path]);
     // Opening a pipe to write waits until something opens it to read.
-    const writing = open(path, "w").then(async (handle) => {
+    const write = async () => {
+      const handle = await open(path, "w");
       try {
         await handle.writeFile(text);
       } finally {
         await handle.close();
       }
-    });
+    };
+    let settled = false;
+    // A reader that leaves early only fails the writer: `use` says why.
+    const writing = write()
+      .catch(() => undefined)
+      .finally(() => {
+        settled = true;
+      });
     try {
       return await use(path);
     } finally {
-      const reader = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
-      try {
-        // A reader that left early only fails the writer: `use` said why.
-        await writing.catch(() => undefined);
-      } finally {
-        await reader.close();
-      }
+      await drain(path, () => settled);
+      await writing;
     }
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Reads the pipe at `path` without waiting, dropping what it reads, until
+ * `settled`: so a writer waiting for a reader, or for room in the pipe,
+ * finishes.
+ */
+async function drain(path: string, settled: () => boolean): Promise<void> {
+  const reader = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const buffer = new Uint8Array(65_536);
+    while (!settled()) {
+      // Nothing to read yet (EAGAIN) is waited out, briefly.
+      const read = await reader
+        .read(buffer, 0, buffer.length, null)
+        .catch(() => ({ bytesRead: 0 }));
+      if (read.bytesRead === 0) await Bun.sleep(1);
+    }
+  } finally {
+    await reader.close();
   }
 }
 
