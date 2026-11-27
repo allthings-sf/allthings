@@ -24,7 +24,9 @@ import { orDataSourceError } from "./sql.ts";
  * for the day (`x_holds`), under a lock, if the day's spend and it fit in
  * the budget; otherwise nothing is sent, and the caller skips X with why
  * ("X daily budget spent: $1.80 of $2.00"). Once spent, X is skipped until
- * 00:00 UTC, when the day starts over, as X's billing day does. After X
+ * 00:00 UTC, when the day starts over, as X's billing day does; a request
+ * held in the minute before it is held, and recorded, on both days, since X
+ * may bill it on either. After X
  * answers, each post and user the answer holds is recorded for the day in
  * `x_reads`, once, as X bills it, and the hold is let go. A request
  * unanswered, cut short, or whose answer can't be recorded keeps its hold,
@@ -206,6 +208,13 @@ export const dryRunReason = "a dry run never reads X, which bills each read";
 /** The UTC day of now, as `YYYY-MM-DD`. */
 const today = Effect.map(DateTime.now, DateTime.formatIsoDateUtc);
 
+/**
+ * How near midnight (UTC), in minutes, a request may be billed on the next
+ * day instead: longer than one takes from its hold to X's answer (15 to 20
+ * seconds at most, by its callers' timeouts).
+ */
+export const midnightMinutes = 1;
+
 /** `day`'s spend in `sql`: its reads, priced, and its open holds. */
 const spentOn = (sql: SqlClient, day: string) =>
   orDataSourceError(
@@ -236,6 +245,20 @@ const spendToday = (sql: SqlClient, budget: number) =>
  */
 const holdLock = 430043;
 
+/**
+ * The days (UTC, `YYYY-MM-DD`) X may bill a request held at `now` on: its
+ * own, and the next one too within {@link midnightMinutes} of midnight, since
+ * the request reaches X after it is held. Its holds and its reads are on
+ * each, so whichever day X bills it on has counted it.
+ */
+export const billingDays = (now: DateTime.Utc): ReadonlyArray<string> => {
+  const day = DateTime.formatIsoDateUtc(now);
+  const later = DateTime.formatIsoDateUtc(
+    DateTime.add(now, { minutes: midnightMinutes }),
+  );
+  return later === day ? [day] : [day, later];
+};
+
 /** The budget X's callers share. */
 export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
   "allthings/XBudget",
@@ -253,8 +276,9 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
         const client = yield* HttpClient.HttpClient;
 
         /**
-         * `most` held for today, if the day's spend and every other hold
-         * leave room for it: its hold, or the spend that refused it. One
+         * `most` held for each day X may bill the request on
+         * ({@link billingDays}), if each day's spend and every other hold
+         * leave room for it: its holds, or the spend that refused it. One
          * hold at a time, across every process, so none takes what another
          * just took.
          */
@@ -263,29 +287,36 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
             .withTransaction(
               Effect.gen(function* () {
                 yield* sql`SELECT pg_advisory_xact_lock(${sql.literal(String(holdLock))})`;
-                const day = yield* today;
-                const spent = yield* spentOn(sql, day);
-                // Once spent, nothing is sent, not even what bills nothing.
-                if (spent >= budget || spent + most > budget) {
-                  return { _tag: "Refused", spent } as const;
+                const days = billingDays(yield* DateTime.now);
+                for (const day of days) {
+                  const spent = yield* spentOn(sql, day);
+                  // Once spent, nothing is sent, not even what bills nothing.
+                  if (spent >= budget || spent + most > budget) {
+                    return { _tag: "Refused", spent } as const;
+                  }
                 }
-                const [held] = yield* sql<{ id: string }>`
-                  INSERT INTO x_holds ${sql.insert({ day, mills: most })}
-                  RETURNING id`;
-                if (held === undefined)
-                  return yield* Effect.fail(spendUnread());
-                return { _tag: "Held", id: held.id, day } as const;
+                const ids: Array<string> = [];
+                for (const day of days) {
+                  const [held] = yield* sql<{ id: string }>`
+                    INSERT INTO x_holds ${sql.insert({ day, mills: most })}
+                    RETURNING id`;
+                  if (held === undefined) {
+                    return yield* Effect.fail(spendUnread());
+                  }
+                  ids.push(held.id);
+                }
+                return { _tag: "Held", ids, days } as const;
               }),
             )
             .pipe(Effect.mapError(spendUnread));
 
         /**
-         * Lets hold `id` go, recording `rows`, what X billed for its
-         * answer. One that fails keeps the hold, counted at its most: the
+         * Lets holds `ids` go, recording `rows`, what X billed for their
+         * answer. One that fails keeps the holds, counted at their most: the
          * day's spend errs high, never low.
          */
         const settle = (
-          id: string,
+          ids: ReadonlyArray<string>,
           rows: ReadonlyArray<{ day: string; kind: string; id: string }>,
         ) =>
           sql
@@ -294,7 +325,7 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
                 if (rows.length > 0) {
                   yield* sql`INSERT INTO x_reads ${sql.insert(rows)} ON CONFLICT DO NOTHING`;
                 }
-                yield* sql`UPDATE x_holds SET settled = true WHERE id = ${id}`;
+                yield* sql`UPDATE x_holds SET settled = true WHERE id IN ${sql.in(ids)}`;
               }),
             )
             .pipe(Effect.ignore);
@@ -307,13 +338,7 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
             const most =
               Math.max(0, atMost.posts ?? 0) * xPrice.post +
               Math.max(0, atMost.users ?? 0) * xPrice.user;
-            let held = yield* hold(most);
-            // Held on one day, sent on the next: held again on the day X
-            // bills it.
-            if (held._tag === "Held" && held.day !== (yield* today)) {
-              yield* settle(held.id, []);
-              held = yield* hold(most);
-            }
+            const held = yield* hold(most);
             if (held._tag === "Refused") {
               const { spent } = held;
               return yield* new XBudgetRefused({
@@ -324,21 +349,24 @@ export class XBudget extends Context.Service<XBudget, XBudgetShape>()(
             // request that fails or is cut short stays counted at its most.
             const response = yield* client.execute(request);
             if (response.status !== 200) {
-              yield* settle(held.id, []);
+              yield* settle(held.ids, []);
               return response;
             }
             // Read once, to record what X billed; the caller reads its copy.
             const text = yield* response.text;
             const answer = parsed(text);
             // An answer that isn't JSON doesn't say what X billed for it:
-            // its hold stays.
+            // its holds stay.
             if (answer !== undefined) {
               const { posts, users } = billedIn(answer);
-              const { day } = held;
-              yield* settle(held.id, [
-                ...[...posts].map((id) => ({ day, kind: "post", id })),
-                ...[...users].map((id) => ({ day, kind: "user", id })),
-              ]);
+              // On each day X may have billed it, so neither counts low.
+              yield* settle(
+                held.ids,
+                held.days.flatMap((day) => [
+                  ...[...posts].map((id) => ({ day, kind: "post", id })),
+                  ...[...users].map((id) => ({ day, kind: "user", id })),
+                ]),
+              );
             }
             return HttpClientResponse.fromWeb(
               request,

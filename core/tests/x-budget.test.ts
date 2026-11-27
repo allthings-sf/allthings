@@ -29,6 +29,7 @@ import {
 } from "../src/posts/candidates.ts";
 import {
   billedIn,
+  billingDays,
   dailyBudget,
   dollars,
   dryRunReason,
@@ -471,6 +472,50 @@ describe("a request to X", () => {
 });
 
 describe("the day", () => {
+  test("is either, for a request held in the minute before midnight: held on both, refused if either is spent, recorded on both", async () => {
+    expect(billingDays(DateTime.makeUnsafe("2026-11-26T23:58:59Z"))).toEqual([
+      "2026-11-26",
+    ]);
+    expect(billingDays(DateTime.makeUnsafe("2026-11-26T23:59:30Z"))).toEqual([
+      "2026-11-26",
+      "2026-11-27",
+    ]);
+    expect(billingDays(DateTime.makeUnsafe("2026-11-27T00:00:00Z"))).toEqual([
+      "2026-11-27",
+    ]);
+    const nearMidnight = clockAt(DateTime.makeUnsafe("2026-11-26T23:59:30Z"));
+
+    // Nov 27 already spent: a request X may bill on it isn't sent.
+    const spentTomorrow = await fresh();
+    await spentTomorrow.exec(
+      `INSERT INTO x_reads (day, kind, id) SELECT '2026-11-27', 'post', g::text FROM generate_series(1, 100) g`,
+    );
+    const x = fakeX();
+    const refused = await Effect.runPromiseExit(
+      lookUp(["1"]).pipe(
+        Effect.provide(budgetOf(spentTomorrow, x)),
+        Effect.provide(nearMidnight),
+      ),
+    );
+    expect(outcome(refused)).toBe("X daily budget spent: $0.50 of $0.50");
+    expect(x.asked).toEqual([]);
+
+    // Both days with room: sent, and counted on both, whichever X bills.
+    const db = await fresh();
+    const y = fakeX();
+    const sent = await Effect.runPromiseExit(
+      lookUp(["1"]).pipe(
+        Effect.provide(budgetOf(db, y)),
+        Effect.provide(nearMidnight),
+      ),
+    );
+    expect(Exit.isSuccess(sent)).toBe(true);
+    expect(await recorded(db, "2026-11-26")).toEqual({ user: 1 });
+    expect(await recorded(db, "2026-11-27")).toEqual({ user: 1 });
+    expect(await open(db, "2026-11-26")).toEqual([]);
+    expect(await open(db, "2026-11-27")).toEqual([]);
+  });
+
   test("starts over at 00:00 UTC, as X's billing day does", async () => {
     const db = await fresh();
     // Nov 26 spent: 100 posts, $0.50.

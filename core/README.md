@@ -317,7 +317,8 @@ all in the database, so the Worker and the CLI spend one budget
   room for it in `X_DAILY_BUDGET_USD`, $2.00. Otherwise X isn't asked, and
   the step says why (`X daily budget spent: $1.80 of $2.00`) until 00:00
   UTC, when the day starts over. Two callers at once never both take the
-  last of it.
+  last of it. A request held in the minute before midnight is held, and its
+  reads recorded, on both days, since X may bill it on either.
 - After each answer, its posts and users are recorded in `x_reads`, once a
   day each, as X bills them, and the hold is let go. A request unanswered,
   cut short, or whose answer can't be read or recorded keeps its hold,
