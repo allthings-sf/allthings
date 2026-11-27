@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { searchOf } from "../src/search/bindings.ts";
 import {
+  answer,
   type BudgetState,
   type DayCounts,
   QUERIES_IN_WINDOW,
-  SearchBudget,
   secondsUntilRoom,
   take,
   type Taken,
@@ -17,10 +17,12 @@ import {
   pagePath,
   type Passage,
   resultsMarkdown,
+  searchFrom,
   type SearchOptions,
   searchPath,
   searchRequest,
 } from "../src/search/route.ts";
+import { SearchBudget } from "../src/worker.ts";
 
 /**
  * Search for agents (src/search/): the budget that caps it under AI
@@ -44,7 +46,15 @@ const memory = (): BudgetState & { readonly held: Map<string, unknown> } => {
   };
 };
 
-const takeFrom = async (budget: SearchBudget): Promise<Taken> =>
+/** The object over `state`, as the Worker's class hands it each request. */
+type Budget = { readonly fetch: (request: Request) => Promise<Response> };
+const object = (
+  state: BudgetState,
+  now?: () => number,
+  limit?: number,
+): Budget => ({ fetch: (request) => answer(state, request, now, limit) });
+
+const takeFrom = async (budget: Budget): Promise<Taken> =>
   (await (
     await budget.fetch(
       new Request(`https://budget${takePath}`, { method: "POST" }),
@@ -118,7 +128,7 @@ describe("the search budget", () => {
   test("the object answers its 901st search in a window with a refusal, and keeps its count", async () => {
     const state = memory();
     const now = () => at("2026-12-10");
-    const budget = new SearchBudget(state, {}, now, 900);
+    const budget = object(state, now, 900);
     for (let n = 1; n <= 900; n++) {
       expect((await takeFrom(budget)).ok).toBe(true);
     }
@@ -130,14 +140,19 @@ describe("the search budget", () => {
       retryAfter: 31 * 24 * 3600 + 12 * 3600,
     });
     // A new object on the same storage, as after an eviction, still refuses.
-    expect((await takeFrom(new SearchBudget(state, {}, now, 900))).ok).toBe(
-      false,
-    );
+    expect((await takeFrom(object(state, now, 900))).ok).toBe(false);
     expect(state.held.get("queries")).toEqual({ "2026-12-10": 900 });
   });
 
+  test("is the Worker's Durable Object class, which hands each request to the budget", async () => {
+    const state = memory();
+    const first = await takeFrom(new SearchBudget(state));
+    expect(first).toMatchObject({ ok: true, used: 1, limit: 900 });
+    expect((await takeFrom(new SearchBudget(state))).used).toBe(2);
+  });
+
   test("the object answers only its one path", async () => {
-    const budget = new SearchBudget(memory());
+    const budget = object(memory());
     const get = await budget.fetch(new Request(`https://budget${takePath}`));
     expect(get.status).toBe(404);
     const other = await budget.fetch(
@@ -438,6 +453,51 @@ describe("the search route", () => {
   });
 });
 
+describe("the search on a Worker", () => {
+  const request = new Request(`${endpoint}?q=effect`);
+  const page = async () => new Response("a page", { status: 404 });
+
+  test("is the stage's page where the Worker has no search, as on every stage but prod", async () => {
+    const response = await searchFrom(
+      { ORIGIN: "https://allthings.dev" },
+      request,
+      page,
+    );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("a page");
+  });
+
+  test("searches where it has every binding, naming the site's origin", async () => {
+    const response = await searchFrom(
+      {
+        ORIGIN: "https://allthings.dev",
+        SEARCH: {
+          get: () => ({
+            search: async () => ({
+              chunks: [passage("about.md", 0.5, "Who we are.")],
+            }),
+          }),
+        },
+        SEARCH_INSTANCE: "pages",
+        SEARCH_BUDGET: {
+          idFromName: () => "site",
+          get: () => ({
+            fetch: (url: string, init: RequestInit) =>
+              answer(memory(), new Request(url, init)),
+          }),
+        },
+        SEARCH_LIMIT: { limit: async () => ({ success: true }) },
+      },
+      request,
+      page,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      "## https://allthings.dev/about (score: 0.500)",
+    );
+  });
+});
+
 describe("the search's bindings", () => {
   const namespace = {
     get: (instance: string) => ({
@@ -455,7 +515,7 @@ describe("the search's bindings", () => {
     },
   };
   /** A Durable Object namespace whose one object is `budget`. */
-  const objects = (budget: SearchBudget) => ({
+  const objects = (budget: Budget) => ({
     idFromName: (name: string) => name,
     get: (id: unknown) => ({
       fetch: async (url: string, init: RequestInit) => {
@@ -469,7 +529,7 @@ describe("the search's bindings", () => {
     const all = {
       SEARCH: namespace,
       SEARCH_INSTANCE: "pages",
-      SEARCH_BUDGET: objects(new SearchBudget(memory())),
+      SEARCH_BUDGET: objects(object(memory())),
       SEARCH_LIMIT: limit,
     };
     expect(searchOf(all)).toBeDefined();
@@ -485,7 +545,7 @@ describe("the search's bindings", () => {
     const search = searchOf({
       SEARCH: namespace,
       SEARCH_INSTANCE: "pages",
-      SEARCH_BUDGET: objects(new SearchBudget(memory())),
+      SEARCH_BUDGET: objects(object(memory())),
       SEARCH_LIMIT: limit,
     });
     expect(await search?.allow("192.0.2.7")).toBe(true);
@@ -496,9 +556,7 @@ describe("the search's bindings", () => {
     const search = searchOf({
       SEARCH: namespace,
       SEARCH_INSTANCE: "pages",
-      SEARCH_BUDGET: objects(
-        new SearchBudget(memory(), {}, () => at("2026-12-10"), 1),
-      ),
+      SEARCH_BUDGET: objects(object(memory(), () => at("2026-12-10"), 1)),
       SEARCH_LIMIT: limit,
     });
     expect(

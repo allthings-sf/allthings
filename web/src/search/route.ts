@@ -5,6 +5,7 @@ import {
   perMinute,
   type Search,
   type SearchIndex,
+  searchOf,
   searchPath,
 } from "./bindings.ts";
 import { WINDOW_DAYS } from "./budget.ts";
@@ -211,4 +212,21 @@ export async function searchRequest(
     // without counting it again.
     "cache-control": CacheControl.publicData,
   });
+}
+
+/**
+ * The answer to a request at {@link searchPath} on a Worker with `env`'s
+ * bindings: the search, where the Worker has every one it needs
+ * (bindings.ts), and `otherwise` where it doesn't, as on every stage but
+ * prod.
+ */
+export function searchFrom(
+  env: Readonly<Record<string, unknown>>,
+  request: Request,
+  otherwise: () => Promise<Response>,
+): Promise<Response> {
+  const search = searchOf(env);
+  if (search === undefined) return otherwise();
+  const origin = typeof env["ORIGIN"] === "string" ? env["ORIGIN"] : "";
+  return searchRequest(request, { ...search, origin });
 }

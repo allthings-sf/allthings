@@ -14,14 +14,14 @@
  * passed when a search comes lies within the window ending on that day:
  * no period can hold more searches than the window lets through.
  *
- * One Durable Object ({@link SearchBudget}) holds the count for the whole
+ * One Durable Object ({@link answer}) holds the count for the whole
  * site: every location's searches are counted in the same place, one at a
  * time, so two at once can't both take the last one. A search is counted
  * when it is taken, before the index is asked, so one that then fails
  * still counts: the count can only be above what Cloudflare bills.
  *
- * This module is loaded on every cold start (worker.ts exports the class),
- * so it imports nothing.
+ * The object loads this module on its first request (worker.ts), and the
+ * route on its first search, so a cold start parses none of it.
  */
 
 /** The most searches answered in any {@link WINDOW_DAYS} days: under the 1,000 included. */
@@ -135,39 +135,26 @@ const countsKey = "queries";
 
 /**
  * The site's one search budget, a Durable Object (infra/src/web.ts binds
- * it as `SEARCH_BUDGET` on prod). `POST /take` takes a search and answers
- * {@link Taken} as JSON, 200 either way. Requests run one at a time, and
- * nothing is awaited between reading the counts and writing them but the
- * storage itself, which holds other requests back meanwhile, so each one
- * sees the last one's count.
+ * it as `SEARCH_BUDGET` on prod): the answer to each of its requests. Its
+ * class is worker.ts's `SearchBudget`, which loads this module on its first
+ * request. `POST /take` takes a search and answers {@link Taken} as JSON,
+ * 200 either way. Requests run one at a time, and nothing is awaited
+ * between reading the counts and writing them but the storage itself,
+ * which holds other requests back meanwhile, so each one sees the last
+ * one's count.
  */
-export class SearchBudget {
-  readonly #state: BudgetState;
-  readonly #now: () => number;
-  readonly #limit: number;
-
-  constructor(
-    state: BudgetState,
-    _env?: unknown,
-    // Tests give a clock and a low limit; the runtime gives neither.
-    now: () => number = Date.now,
-    limit = QUERIES_IN_WINDOW,
-  ) {
-    this.#state = state;
-    this.#now = now;
-    this.#limit = limit;
+export async function answer(
+  state: BudgetState,
+  request: Request,
+  // Tests give a clock and a low limit; the object gives neither.
+  now: () => number = Date.now,
+  limit = QUERIES_IN_WINDOW,
+): Promise<Response> {
+  if (request.method !== "POST" || new URL(request.url).pathname !== takePath) {
+    return new Response("Not found", { status: 404 });
   }
-
-  async fetch(request: Request): Promise<Response> {
-    if (
-      request.method !== "POST" ||
-      new URL(request.url).pathname !== takePath
-    ) {
-      return new Response("Not found", { status: 404 });
-    }
-    const counts = (await this.#state.storage.get<DayCounts>(countsKey)) ?? {};
-    const { taken, counts: next } = take(counts, this.#now(), this.#limit);
-    if (taken.ok) await this.#state.storage.put(countsKey, next);
-    return Response.json(taken);
-  }
+  const counts = (await state.storage.get<DayCounts>(countsKey)) ?? {};
+  const { taken, counts: next } = take(counts, now(), limit);
+  if (taken.ok) await state.storage.put(countsKey, next);
+  return Response.json(taken);
 }

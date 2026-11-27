@@ -8,12 +8,12 @@ import { type Taken, takePath } from "./budget.ts";
  * limit on each address. Every other stage has none of them, so it has no
  * search: the path is a page like any other there, not found.
  *
- * worker.ts reads them on each cold start, and infra/src/web.ts reads its
- * rate, so this module imports only the budget, which imports nothing.
+ * The route reads them on the first search (worker.ts), and
+ * infra/src/web.ts reads the rate, so this module imports only the budget,
+ * which imports nothing.
  */
 
-/** Where the site answers searches. */
-export const searchPath = "/.well-known/search";
+export { searchPath } from "./path.ts";
 
 /**
  * Searches one address may make a minute, as `SEARCH_LIMIT` counts them in
