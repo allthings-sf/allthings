@@ -216,4 +216,6 @@ export const prewarmPlan = {
     when: "the sitemap was read and no path failed",
   },
   edgePurge: "would purge",
+  thenIndex:
+    "on prod, after the purge: each page that came back, made into Markdown, whose Markdown changed since it was indexed, uploaded in key order while the search's window has room (4,000,000 bytes in any 32 UTC days, counted before each is sent); nothing removed",
 } as const;
