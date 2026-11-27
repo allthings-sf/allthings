@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { searchOf } from "../src/search/bindings.ts";
+import { ogCards } from "../src/og/cards.ts";
+import { lockup, Metadata } from "../src/pages/metadata.tsx";
+import {
+  agentFrontMatter,
+  agentInstructions,
+} from "../src/search/discovery.ts";
 import {
   answer,
   type BudgetState,
@@ -237,7 +243,8 @@ describe("the search route", () => {
     );
     expect(asked).toEqual(["effect talks"]);
     expect(await response.text()).toBe(
-      '# Search results for: "effect talks"\n\n## https://allthings.dev/effect (score: 0.912)\n\nState of Effect 2026, at /effect.\n',
+      `---\nagent:\n  instructions: ${JSON.stringify(agentInstructions)}\n  endpoint: "https://allthings.dev/.well-known/search?q={query}"\n  method: "GET"\n  documentation: "https://allthings.dev/.well-known/search"\n---\n` +
+        '# Search results for: "effect talks"\n\n## https://allthings.dev/effect (score: 0.912)\n\nState of Effect 2026, at /effect.\n',
     );
   });
 
@@ -268,7 +275,7 @@ describe("the search route", () => {
     const { asked, options, taken } = route();
     const statuses = await Promise.all(
       [
-        new Request(endpoint),
+        new Request(`${endpoint}?q=`),
         new Request(`${endpoint}?q=%20%20`),
         new Request(`${endpoint}?q=${"a".repeat(501)}`),
         new Request(endpoint, { method: "POST", body: "effect" }),
@@ -296,6 +303,27 @@ describe("the search route", () => {
       ].map(async (request) => (await searchRequest(request, options)).status),
     );
     expect(statuses).toEqual([400, 400, 400, 405, 405, 400, 400, 415, 413]);
+    expect(taken()).toBe(0);
+    expect(asked).toEqual([]);
+  });
+
+  test("describes itself, asked with no q, and counts nothing", async () => {
+    const { asked, options, taken } = route();
+    const response = await searchRequest(new Request(endpoint), options);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "text/markdown; charset=utf-8",
+    );
+    const text = await response.text();
+    expect(text).toStartWith("---\nagent:\n");
+    expect(text).toContain("# Search allthings.dev");
+    expect(text).toContain(
+      "`GET https://allthings.dev/.well-known/search?q=<words>`",
+    );
+    expect(text).toContain("at most 900 searches in any 32 UTC days");
+    expect(text).toContain(
+      "https://developers.cloudflare.com/ai-search/how-to/search-for-agents/",
+    );
     expect(taken()).toBe(0);
     expect(asked).toEqual([]);
   });
@@ -581,5 +609,42 @@ describe("the search's bindings", () => {
     await expect(search?.take() ?? Promise.resolve()).rejects.toThrow(
       "the search budget answered 503",
     );
+  });
+});
+
+describe("where agents are told to search", () => {
+  test("is the front matter every search answer starts with", () => {
+    expect(agentFrontMatter("https://allthings.dev")).toStartWith(
+      '---\nagent:\n  instructions: "Use this search API',
+    );
+    expect(agentFrontMatter("https://allthings.dev")).toContain(
+      '  endpoint: "https://allthings.dev/.well-known/search?q={query}"\n  method: "GET"\n',
+    );
+  });
+
+  test("is in every indexed page's head, and no page kept from search engines", async () => {
+    const meta = {
+      title: lockup("about"),
+      description: "About.",
+      path: "/about",
+      image: ogCards.home,
+    } as const;
+    const indexed = await Metadata({
+      meta,
+      origin: "https://allthings.dev",
+      theme: undefined,
+    });
+    expect(indexed).toContain(
+      '<meta name="agent:endpoint" content="https://allthings.dev/.well-known/search?q={query}"/>',
+    );
+    expect(indexed).toContain(
+      '<meta name="agent:documentation" content="https://allthings.dev/.well-known/search"/>',
+    );
+    const hidden = await Metadata({
+      meta: { ...meta, noindex: true },
+      origin: "https://allthings.dev",
+      theme: undefined,
+    });
+    expect(hidden).not.toContain("agent:");
   });
 });
