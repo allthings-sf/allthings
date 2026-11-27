@@ -20,6 +20,17 @@ import { pageKey } from "./route.ts";
 /** The longest item key the Items API takes. */
 export const keyLimit = 128;
 
+/**
+ * `plan`, the prewarm's dry run (cache.ts's `prewarmPlan`), with what
+ * indexing would then do. It lives here rather than in cache.ts, which
+ * every cold start parses, so a dry run loads it with this module.
+ */
+export const withIndexPlan = <Plan extends object>(plan: Plan) => ({
+  ...plan,
+  thenIndex:
+    "on prod, after the purge: each page that came back, made into Markdown, whose Markdown changed since it was indexed, uploaded in key order while the search's window has room (4,000,000 bytes in any 32 UTC days, counted before each is sent); nothing removed",
+});
+
 /** A prewarm's report, with what indexing did where the Worker indexes. */
 export type IndexedPrewarm<Report> = Report & {
   readonly search?:

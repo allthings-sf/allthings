@@ -197,6 +197,20 @@ describe("a dry run of the prewarm and its purge", () => {
     expect(warmed).toBe(0);
     expect(prewarmPlan.thenPurge.tags).toEqual([siteDataTag]);
   });
+  it("answers a plan that has to be loaded first, once it is", async () => {
+    const response = await prewarmRequest(
+      at("?dry-run", "Bearer t"),
+      "t",
+      async () => {
+        throw new Error("a dry run must not prewarm");
+      },
+      async () => ({ ...prewarmPlan, loaded: true }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(
+      JSON.parse(JSON.stringify({ ...prewarmPlan, loaded: true })),
+    );
+  });
   it("still refuses without the token", async () => {
     const response = await prewarmRequest(
       at("?dry-run", "Bearer wrong"),

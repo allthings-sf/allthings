@@ -223,8 +223,12 @@ export default {
             writers === undefined
               ? noStore
               : () => writers.prewarm(incomingContext),
-            // `?dry-run` answers the plan, and does nothing (cache.ts).
-            () => prewarmPlan,
+            // `?dry-run` answers the plan, and does nothing (cache.ts),
+            // with indexing's part, loaded only then (search/ingest.ts).
+            () =>
+              import("./search/ingest.ts").then(({ withIndexPlan }) =>
+                withIndexPlan(prewarmPlan),
+              ),
           );
         }
         if (pathname === variantsCheckPath) {
