@@ -1,5 +1,10 @@
 import type { ExecutionContext } from "./app.ts";
-import { forWorkersCache, prewarmPlan, withEdgePurge } from "./cache.ts";
+import {
+  forWorkersCache,
+  prewarmPlan,
+  withEdgePurge,
+  type WorkersCachePurge,
+} from "./cache.ts";
 import { buildId } from "./build-id.ts";
 import {
   dataCenterCache,
@@ -173,22 +178,26 @@ export default {
               // answers that show the data (cache.ts), so visitors get them now
               // rather than within the edge lifetime. The report says how it went.
               // On prod the pages it reads are indexed for search too
-              // (search/ingest.ts, loaded only when a prewarm runs).
-              prewarm: withEdgePurge(() =>
-                import("./search/ingest.ts").then(({ withIndex }) =>
-                  withIndex(env, (onPage) =>
-                    prewarm({
-                      build: buildId,
-                      serve: site,
-                      pointer: () => readSitePointer(pages),
-                      now: Date.now,
-                      sleep: (ms) =>
-                        new Promise((resolve) => setTimeout(resolve, ms)),
-                      onPage,
-                    }),
-                  ),
-                ),
-              ),
+              // (search/ingest.ts, loaded only when a prewarm runs), once
+              // the edge is purged, so visitors never wait on indexing.
+              prewarm: async (prewarmContext: {
+                readonly cache?: WorkersCachePurge;
+              }) => {
+                const { indexerOf } = await import("./search/ingest.ts");
+                const indexer = indexerOf(env);
+                const report = await withEdgePurge(() =>
+                  prewarm({
+                    build: buildId,
+                    serve: site,
+                    pointer: () => readSitePointer(pages),
+                    now: Date.now,
+                    sleep: (ms) =>
+                      new Promise((resolve) => setTimeout(resolve, ms)),
+                    onPage: indexer?.onPage,
+                  }),
+                )(prewarmContext);
+                return indexer === undefined ? report : indexer.finish(report);
+              },
             };
       const noStore = () => Promise.reject(new Error("no store"));
       handle = (incoming, incomingContext) => {

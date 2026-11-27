@@ -9,8 +9,12 @@ import {
   planIndex,
   type Run,
 } from "../src/search/indexer.ts";
-import { planWithIndex, withIndex } from "../src/search/ingest.ts";
-import { objectAnswer } from "../src/search/object.ts";
+import {
+  type IndexedPrewarm,
+  indexerOf,
+  planWithIndex,
+} from "../src/search/ingest.ts";
+import { type Lock, objectAnswer } from "../src/search/object.ts";
 
 /**
  * Indexing the site for search: each page as Markdown (document.ts), and
@@ -242,6 +246,30 @@ describe("what indexing may send", () => {
     });
   });
 
+  test("gives back a changed page's bytes when its old item couldn't be removed, since nothing was sent", async () => {
+    const { api, markdownOf } = itemsIn();
+    const state = memory();
+    await indexSite(state, api, run({ "a.md": "# old" }));
+    const stuck = await indexSite(
+      state,
+      {
+        ...api,
+        delete: async () => {
+          throw new Error("timeout");
+        },
+      },
+      run({ "a.md": "# new" }),
+    );
+    expect(stuck).toMatchObject({ uploaded: 0, failed: ["a.md"] });
+    expect(stuck.used).toBe(bytes("# old"));
+    expect(markdownOf("a.md")).toBe("# old");
+    const next = await indexSite(state, api, run({ "a.md": "# new" }));
+    expect(next).toMatchObject({
+      uploaded: 1,
+      used: bytes("# old") + bytes("# new"),
+    });
+  });
+
   test("counts a failed upload all the same", async () => {
     const { api } = itemsIn();
     const state = memory();
@@ -417,6 +445,37 @@ describe("indexing the site's pages", () => {
     expect(state.held.get("indexed")).toEqual({});
   });
 
+  test("keeps a pending page's item while its listed page fails to come back", async () => {
+    const { api, keys } = itemsIn();
+    const state = memory();
+    await indexSite(
+      state,
+      {
+        ...api,
+        upload: async (key, markdown) => {
+          await api.upload(key, markdown);
+          throw new Error("the object was restarted");
+        },
+      },
+      run({ "people/new.md": "# new" }),
+    );
+    // Listed, but it answered 503: nothing to put in its place, so it stays.
+    const failing = await indexSite(
+      state,
+      api,
+      run({}, true, { listed: ["people/new.md"] }),
+    );
+    expect(failing).toMatchObject({ reset: 0, removed: 0 });
+    expect(keys()).toEqual(["people/new.md"]);
+    expect(state.held.get("indexed")).toEqual({
+      "people/new.md": { pending: expect.any(String) },
+    });
+    // Back, it's put right and uploaded anew.
+    const back = await indexSite(state, api, run({ "people/new.md": "# new" }));
+    expect(back).toMatchObject({ reset: 1, uploaded: 1 });
+    expect(keys()).toEqual(["people/new.md"]);
+  });
+
   test("uploads anew a page a stopped run left, when it's still listed", async () => {
     const { api, keys, markdownOf } = itemsIn();
     const state = memory();
@@ -497,19 +556,24 @@ describe("the object that indexes", () => {
   test("indexes one run at a time: a run while another holds the lock does nothing", async () => {
     const { api, keys } = itemsIn();
     const state = memory();
-    const lock = { running: false };
+    const lock: Lock = { running: false };
     let release = () => {};
+    let held = false;
     let entered = () => {};
     const uploadEntered = new Promise<void>((resolve) => {
       entered = resolve;
     });
     const slow: Items = {
       ...api,
+      // Only the first upload waits; the run kept meanwhile goes straight on.
       upload: async (key, markdown) => {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-          entered();
-        });
+        if (!held) {
+          held = true;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+            entered();
+          });
+        }
         return api.upload(key, markdown);
       },
     };
@@ -517,12 +581,17 @@ describe("the object that indexes", () => {
     const first = post(state, envFor(slow), lock, body);
     // The first run holds the lock once it's in its upload.
     await uploadEntered;
-    const second = await (await post(state, envFor(api), lock, body)).json();
+    // A newer run while it holds the lock is kept, and indexed next.
+    const newer = run({ "index.md": "# home", "about.md": "# about" });
+    const second = await (await post(state, envFor(api), lock, newer)).json();
     expect(second).toMatchObject({ busy: true, uploaded: 0 });
     release();
-    expect(await (await first).json()).toMatchObject({ uploaded: 1 });
-    expect(lock.running).toBe(false);
-    expect(keys()).toEqual(["index.md"]);
+    expect(await (await first).json()).toMatchObject({
+      uploaded: 1,
+      unchanged: 1,
+    });
+    expect(lock).toEqual({ running: false, next: undefined });
+    expect(keys()).toEqual(["about.md", "index.md"]);
   });
 
   test("lets go of the lock when a run fails", async () => {
@@ -543,21 +612,24 @@ describe("the object that indexes", () => {
 
   test("refuses what isn't an index, and answers 503 with no index bound", async () => {
     const lock = { running: false };
+    // Each starts from a valid run and breaks only the field under test.
+    const valid = run({ "a.md": "# a" });
     const statuses = await Promise.all(
       [
-        { pages: [{ key: "a.md" }], complete: true },
-        { pages: [{ key: "", markdown: "x" }], complete: true },
-        { pages: [{ key: "a".repeat(129), markdown: "x" }], complete: true },
-        { pages: [], complete: "yes" },
+        valid,
+        { ...valid, pages: [{ key: "a.md" }] },
+        { ...valid, pages: [{ key: "", markdown: "x" }] },
+        { ...valid, pages: [{ key: "a".repeat(129), markdown: "x" }] },
+        { ...valid, complete: "yes" },
+        { ...valid, listed: "a.md" },
+        { ...valid, bare: [1] },
       ].map(
         async (body) =>
           (await post(memory(), envFor(itemsIn().api), lock, body)).status,
       ),
     );
-    expect(statuses).toEqual([400, 400, 400, 400]);
-    expect(
-      (await post(memory(), {}, lock, run({}))).status,
-    ).toBe(503);
+    expect(statuses).toEqual([200, 400, 400, 400, 400, 400, 400]);
+    expect((await post(memory(), {}, lock, run({}))).status).toBe(503);
   });
 
   test("still takes searches at its other path", async () => {
@@ -570,6 +642,21 @@ describe("the object that indexes", () => {
     expect(await response.json()).toMatchObject({ ok: true, used: 1 });
   });
 });
+
+/** A prewarm through its indexer, as worker.ts runs it: `warm`, then `finish`. */
+async function withIndex<Report extends PrewarmReport>(
+  env: Readonly<Record<string, unknown>>,
+  warm: (
+    onPage: ((path: string, html: string | undefined) => void) | undefined,
+  ) => Promise<Report>,
+  make?: typeof pageDocument,
+) {
+  const indexer = indexerOf(env, make);
+  const report = await warm(indexer?.onPage);
+  return indexer === undefined
+    ? (report as IndexedPrewarm<Report>)
+    : indexer.finish(report);
+}
 
 describe("a prewarm that indexes", () => {
   const report: PrewarmReport = {
@@ -674,7 +761,7 @@ describe("a prewarm that indexes", () => {
     });
     expect(plan).toMatchObject({
       dryRun: true,
-      search: { dryRun: true, upload: ["index.md", "about.md"] },
+      search: { dryRun: true, upload: ["about.md", "index.md"] },
     });
     expect(rendered.toSorted()).toEqual(["/", "/about", "/sitemap.xml"]);
     expect(keys()).toEqual([]);
@@ -684,18 +771,27 @@ describe("a prewarm that indexes", () => {
   test("removes nothing when a page couldn't be made into a document", async () => {
     const { api, keys } = itemsIn();
     const env = envWith(api, memory());
-    const both = async (onPage?: (path: string, html: string) => void) => {
+    await withIndex(env, async (onPage) => {
       onPage?.("/", html("home"));
       onPage?.("/about", html("about"));
+      onPage?.("/gone", html("gone"));
       return report;
-    };
-    await withIndex(env, both);
-    const result = await withIndex(env, both, async (page, url) => {
-      if (url.endsWith("/about")) throw new Error("couldn't read it");
-      return pageDocument(page, url);
     });
+    // /gone has left the sitemap, but /about couldn't be converted: nothing goes.
+    const result = await withIndex(
+      env,
+      async (onPage) => {
+        onPage?.("/", html("home"));
+        onPage?.("/about", html("about"));
+        return report;
+      },
+      async (page, url) => {
+        if (url.endsWith("/about")) throw new Error("couldn't read it");
+        return pageDocument(page, url);
+      },
+    );
     expect(result.search).toMatchObject({ removed: 0 });
-    expect(keys()).toEqual(["about.md", "index.md"]);
+    expect(keys()).toEqual(["about.md", "gone.md", "index.md"]);
   });
 
   test("never fails the prewarm when indexing does", async () => {

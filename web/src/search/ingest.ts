@@ -64,6 +64,10 @@ async function runOf(
     if (markdown !== undefined) documents.push({ key, markdown });
     else if (!unmade) bare.push(key);
   }
+  // By key: the object lets pages through the window in the order given,
+  // and pages arrive in whatever order they're built, so both a run and its
+  // dry run take them in one order and let the same ones through.
+  documents.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return {
     run: {
       pages: documents,
@@ -78,41 +82,58 @@ async function runOf(
 const originOf = (env: Readonly<Record<string, unknown>>) =>
   typeof env["ORIGIN"] === "string" ? env["ORIGIN"] : "";
 
+/** What the prewarm indexes with: each page it reads, then its report. */
+export interface Indexer {
+  /** Hands over each listed page as it comes back (prewarm.ts's `onPage`). */
+  readonly onPage: (path: string, html: string | undefined) => void;
+  /**
+   * `report` with what indexing the pages handed over did. Indexing never
+   * fails the prewarm: what went wrong is in the report's `search`.
+   */
+  readonly finish: <Report extends PrewarmReport>(
+    report: Report,
+  ) => Promise<IndexedPrewarm<Report>>;
+}
+
 /**
- * `warm` (a prewarm, handed each page it reads), then the pages it read
- * indexed, where the Worker has the index. Indexing never fails the
- * prewarm: what went wrong is in the report's `search`.
+ * The prewarm's indexer, where the Worker has the index. worker.ts hands it
+ * each page as the prewarm reads it, and finishes with the prewarm's report
+ * once the edge has been purged, so visitors never wait on indexing.
  */
-export async function withIndex<Report extends PrewarmReport>(
+export function indexerOf(
   env: Readonly<Record<string, unknown>>,
-  warm: (
-    onPage: ((path: string, html: string | undefined) => void) | undefined,
-  ) => Promise<Report>,
   // Tests make documents their own way; the Worker makes them as document.ts does.
   make: typeof pageDocument = pageDocument,
-): Promise<IndexedPrewarm<Report>> {
+): Indexer | undefined {
   const indexing = indexingOf(env);
-  if (indexing === undefined) return warm(undefined);
+  if (indexing === undefined) return undefined;
   const pages: Pages = new Map();
-  const report = await warm((path, html) => {
-    if (path !== "/sitemap.xml") pages.set(path, html);
-  });
-  try {
-    const { run, skipped } = await runOf(
-      pages,
-      originOf(env),
-      report.sitemapRead,
-      make,
-    );
-    return { ...report, search: { ...(await indexing.index(run)), skipped } };
-  } catch (error) {
-    return {
-      ...report,
-      search: {
-        error: error instanceof Error ? error.message : "indexing failed",
-      },
-    };
-  }
+  return {
+    onPage: (path, html) => {
+      if (path !== "/sitemap.xml") pages.set(path, html);
+    },
+    finish: async (report) => {
+      try {
+        const { run, skipped } = await runOf(
+          pages,
+          originOf(env),
+          report.sitemapRead,
+          make,
+        );
+        return {
+          ...report,
+          search: { ...(await indexing.index(run)), skipped },
+        };
+      } catch (error) {
+        return {
+          ...report,
+          search: {
+            error: error instanceof Error ? error.message : "indexing failed",
+          },
+        };
+      }
+    },
+  };
 }
 
 /** Pages asked for at once by a dry run. */
@@ -154,6 +175,13 @@ export async function planWithIndex<Base extends object>(
         }
       }),
     );
+    // As the prewarm does, a page that failed in the crowd is asked for
+    // once more, alone.
+    for (const [path, html] of pages) {
+      if (html !== undefined || path === "/sitemap.xml") continue;
+      const response = await render(path).catch(() => undefined);
+      if (response?.ok === true) pages.set(path, await response.text());
+    }
     const { run } = await runOf(pages, originOf(env), sitemapRead, make);
     return { ...base, search: await indexing.plan(run) };
   } catch (error) {

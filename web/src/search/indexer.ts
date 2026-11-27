@@ -104,7 +104,7 @@ export interface IndexReport {
   /** Bytes sent in the window, this run's included, and its limit. */
   readonly used: number;
   readonly limit: number;
-  /** Another run was indexing, so this one did nothing. */
+  /** Another run was indexing: it indexes this one's pages next. */
   readonly busy?: true;
 }
 
@@ -170,6 +170,16 @@ const leaving = (record: Readonly<Record<string, Entry>>, run: Run) => {
   );
 };
 
+/**
+ * Whether a page a stopped run left pending can be put right now: this
+ * run has its document to upload in its place, or it's a complete run and
+ * the page is no longer listed, or answered with no document. A listed page
+ * that failed to come back keeps its pending item until one of those.
+ */
+const resettable = (run: Run, key: string) =>
+  run.pages.some((page) => page.key === key) ||
+  (run.complete && (!run.listed.includes(key) || run.bare.includes(key)));
+
 /** Each item Cloudflare holds under exactly `key`, through every page of its list. */
 async function heldUnder(items: Items, key: string): Promise<Array<string>> {
   const ids: Array<string> = [];
@@ -215,7 +225,7 @@ export async function planIndex(
   const counts = (await state.storage.get<DayCounts>(ingestedKey)) ?? {};
   const at = now();
   const reset = Object.keys(record).filter(
-    (key) => "pending" in (record[key] ?? {}),
+    (key) => "pending" in (record[key] ?? {}) && resettable(run, key),
   );
   let room = limit - used(counts, at);
   const upload: Array<string> = [];
@@ -283,7 +293,7 @@ export async function indexSite(
   // A run that stopped part-way left pages pending: whatever their keys
   // hold now is removed, so each is uploaded anew below.
   const pending = Object.entries(record).filter(
-    ([, entry]) => "pending" in entry,
+    ([key, entry]) => "pending" in entry && resettable(run, key),
   );
   await each(pending, async ([key]) => {
     try {
@@ -321,8 +331,19 @@ export async function indexSite(
     const day = utcDay(at);
     counts[day] = (counts[day] ?? 0) + page.bytes;
     await state.storage.put(ingestedKey, counts);
+    if (entry !== undefined) {
+      try {
+        await remove(items, entry.id);
+      } catch {
+        // Nothing of the page was sent: its bytes go back, and it waits for
+        // the next run with its old item in place.
+        counts[day] = (counts[day] ?? 0) - page.bytes;
+        await state.storage.put(ingestedKey, counts);
+        failed.push(page.key);
+        return;
+      }
+    }
     try {
-      if (entry !== undefined) await remove(items, entry.id);
       record[page.key] = { pending: page.hash };
       await keep();
       // The count goes on the day the upload is sent: past midnight since

@@ -18,9 +18,13 @@ import {
  * parses none of it.
  */
 
-/** The object's one lock: whether a run is indexing now. */
+/**
+ * The object's one lock: whether a run is indexing now, and the latest run
+ * handed over meanwhile, which the running one takes up once it's done.
+ */
 export interface Lock {
   running: boolean;
+  next?: Run | undefined;
 }
 
 /** The most pages one run takes: far past the site's. */
@@ -39,7 +43,7 @@ const isPage = (value: unknown): value is Page =>
   new TextEncoder().encode((value as Page).markdown).byteLength <=
     documentLimit;
 
-/** What a run that found another indexing did: nothing. */
+/** What a run that found another indexing did: nothing yet; that run does it next. */
 const busy = (limit: number): IndexReport => ({
   uploaded: 0,
   unchanged: 0,
@@ -106,12 +110,24 @@ export async function objectAnswer(
     return Response.json({ error: "no index is bound" }, { status: 503 });
   }
   // Checked and taken with nothing awaited between, so two runs can't both
-  // find it free.
-  if (lock.running) return Response.json(busy(INGEST_BYTES_IN_WINDOW));
+  // find it free. A run that finds it held is kept, the latest in place of
+  // any earlier one, and the run holding it indexes that one next, so the
+  // newest pages are never dropped (and every run before them is covered
+  // by them).
+  if (lock.running) {
+    lock.next = run;
+    return Response.json(busy(INGEST_BYTES_IN_WINDOW));
+  }
   lock.running = true;
   try {
-    return Response.json(await indexSite(state, items, run));
+    let report = await indexSite(state, items, run);
+    for (let next = lock.next; next !== undefined; next = lock.next) {
+      lock.next = undefined;
+      report = await indexSite(state, items, next);
+    }
+    return Response.json(report);
   } finally {
     lock.running = false;
+    lock.next = undefined;
   }
 }
