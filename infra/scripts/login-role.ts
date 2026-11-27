@@ -6,7 +6,8 @@
  * without ever being printed.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -189,9 +190,8 @@ export async function requireMainOnly(
  * workflow still reads the repository's), then to a new 1Password item
  * `item` in `vault`, and only then
  * archives the items it replaces, so 1Password always holds a working value
- * (1Password's own API Credential template, passed as a file only this user
- * can read and removed right after: op ignores the values of a template
- * piped on stdin). The role's password has already changed when this runs,
+ * (1Password's own API Credential template, through a named pipe only this
+ * user can open: see {@link storeItem}). The role's password has already changed when this runs,
  * so it tries every store, whatever fails before it, and then names each
  * one still holding the old value and says to rerun the script.
  */
@@ -249,11 +249,54 @@ export async function storeConnectionString(options: {
 }
 
 /**
+ * Runs `use` with the path of a named pipe that hands `text` to whoever
+ * opens it to read: `op`, given the path as `--template`, reads it as it
+ * reads a file, but the text passes through the kernel and is never written
+ * to disk. The pipe is in a directory only this user can open, and is
+ * removed with it after. Had `use` failed before opening the pipe, the
+ * writer, which waits for a reader, is let go by opening it once more to
+ * read, and what it wrote is dropped.
+ */
+export async function throughPipe<A>(
+  text: string,
+  use: (path: string) => Promise<A>,
+): Promise<A> {
+  const dir = await mkdtemp(join(tmpdir(), "login-role-"));
+  try {
+    const path = join(dir, "item.json");
+    await run(["mkfifo", "-m", "600", path]);
+    // Opening a pipe to write waits until something opens it to read.
+    const writing = open(path, "w").then(async (handle) => {
+      try {
+        await handle.writeFile(text);
+      } finally {
+        await handle.close();
+      }
+    });
+    try {
+      return await use(path);
+    } finally {
+      const reader = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        // A reader that left early only fails the writer: `use` said why.
+        await writing.catch(() => undefined);
+      } finally {
+        await reader.close();
+      }
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Stores `value` as the credential of a new 1Password item `item` in `vault`,
  * then archives the items it replaces, so 1Password always holds a working
- * value. 1Password's own API Credential template is passed as a file only
- * this user can read, removed right after: op ignores the values of a
- * template piped on stdin. The value is never an argument or printed.
+ * value. 1Password's own API Credential template goes to `op item create
+ * --template` through a named pipe ({@link throughPipe}), so it is never
+ * written to a file. op reads it as it read the file this used before,
+ * through `--template`: piped on stdin instead, a template's values were
+ * found to be ignored. The value is never an argument or printed.
  */
 export async function storeItem(options: {
   value: string;
@@ -282,22 +325,9 @@ export async function storeItem(options: {
     if (field.id === "credential") field.value = options.value;
     if (field.id === "notesPlain") field.value = options.notes;
   }
-  const dir = await mkdtemp(join(tmpdir(), "login-role-"));
-  try {
-    const file = join(dir, "item.json");
-    await writeFile(file, JSON.stringify(template), { mode: 0o600 });
-    await run([
-      "op",
-      "item",
-      "create",
-      "--vault",
-      options.vault,
-      "--template",
-      file,
-    ]);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  await throughPipe(JSON.stringify(template), (path) =>
+    run(["op", "item", "create", "--vault", options.vault, "--template", path]),
+  );
   for (const { id } of replaced) {
     await run([
       "op",
