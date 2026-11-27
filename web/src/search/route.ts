@@ -1,6 +1,13 @@
+import { boundedBody } from "../bounded-body.ts";
 import { CacheControl } from "../cache.ts";
-import { type Passage, type SearchIndex, searchPath } from "./bindings.ts";
-import { type Taken, WINDOW_DAYS } from "./budget.ts";
+import {
+  type Passage,
+  perMinute,
+  type Search,
+  type SearchIndex,
+  searchPath,
+} from "./bindings.ts";
+import { WINDOW_DAYS } from "./budget.ts";
 
 /**
  * Search for agents: `/.well-known/search`, as Cloudflare's guide describes
@@ -19,7 +26,9 @@ import { type Taken, WINDOW_DAYS } from "./budget.ts";
  * The answer is Markdown, as Cloudflare's endpoint answers: the passages
  * the index retrieved, each under its page's address and its score, never
  * a generated answer. A search with nothing to search for is refused
- * before it is counted.
+ * before it is counted, and so is one past its address's rate
+ * ({@link perMinute} a minute), so no one client can spend the budget in a
+ * burst.
  */
 
 export { searchPath };
@@ -34,14 +43,15 @@ export const bodyLimit = 4_096;
 /** The media types a QUERY's body may have (`Accept-Query`). */
 export const acceptQuery = "text/plain, application/json";
 
-/** What the route needs: the index, the budget, and the site's origin. */
-export interface SearchOptions {
-  readonly index: SearchIndex;
-  /** Takes one search from the budget (budget.ts); a failure refuses it. */
-  readonly take: () => Promise<Taken>;
+/** What the route needs: the bindings (bindings.ts) and the site's origin. */
+export interface SearchOptions extends Search {
   /** The site's origin, which the passages' addresses name. */
   readonly origin: string;
 }
+
+/** The address a request came from, as Cloudflare names it; "unknown" without one (tests). */
+const clientOf = (request: Request): string =>
+  request.headers.get("cf-connecting-ip") ?? "unknown";
 
 /**
  * The item key a page is indexed under: its path without the leading
@@ -94,13 +104,16 @@ async function queryOf(request: Request): Promise<string | Response> {
   if (type !== "text/plain" && type !== "application/json") {
     return usage(415, `A QUERY body must be ${acceptQuery}.`);
   }
-  const length = Number(request.headers.get("content-length") ?? "0");
-  if (length > bodyLimit) {
+  // Read no further than the limit, whatever the body says its length is.
+  const bytes = await boundedBody(request, bodyLimit);
+  if (bytes === undefined) {
     return usage(413, `A QUERY body may be at most ${bodyLimit} bytes.`);
   }
-  const body = await request.text();
-  if (new TextEncoder().encode(body).byteLength > bodyLimit) {
-    return usage(413, `A QUERY body may be at most ${bodyLimit} bytes.`);
+  let body: string;
+  try {
+    body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return usage(400, "A QUERY body must be UTF-8.");
   }
   if (type === "text/plain") return body;
   try {
@@ -138,7 +151,7 @@ export function resultsMarkdown(
 /** The answer to a request at {@link searchPath}. */
 export async function searchRequest(
   request: Request,
-  { index, take, origin }: SearchOptions,
+  { index, take, allow, origin }: SearchOptions,
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "QUERY") {
     return usage(405, `${request.method} isn't a search.`, {
@@ -153,6 +166,20 @@ export async function searchRequest(
   if (query.length > queryLimit) {
     return usage(400, `A search may be at most ${queryLimit} characters.`);
   }
+  // An address past its rate is refused before it counts; a rate limit
+  // that can't be read refuses too.
+  const allowed = await allow(clientOf(request)).catch(
+    (): undefined => undefined,
+  );
+  if (allowed !== true) {
+    return markdown(
+      allowed === false ? 429 : 503,
+      allowed === false
+        ? `# Too many searches\n\nOne address may search allthings.dev ${perMinute} times a minute. Try again in a minute.\n`
+        : "# Search is resting\n\nThe search's rate limit couldn't be read, so it isn't searching. Try again in a minute.\n",
+      { "retry-after": "60" },
+    );
+  }
   // A budget that can't be read refuses: the index is never asked uncounted.
   const taken = await take().catch((): undefined => undefined);
   if (taken === undefined) {
@@ -165,7 +192,7 @@ export async function searchRequest(
   if (!taken.ok) {
     return markdown(
       503,
-      `# Search is resting\n\nallthings.dev answers at most ${taken.limit} searches in any ${WINDOW_DAYS} days, and it has answered them, so it isn't searching again for about ${Math.ceil(taken.retryAfter / 3600)} hours. Every page is still there: ${origin}/sitemap.xml lists them.\n`,
+      `# Search is resting\n\nallthings.dev answers at most ${taken.limit} searches in any ${WINDOW_DAYS} UTC days (today and the ${WINDOW_DAYS - 1} before it), and it has answered them, so it isn't searching again for about ${Math.ceil(taken.retryAfter / 3600)} hours. Every page is still there: ${origin}/sitemap.xml lists them.\n`,
       { "retry-after": String(taken.retryAfter) },
     );
   }

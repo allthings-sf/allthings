@@ -6,6 +6,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import { variantsCheckPath } from "../../core/src/refresh-path.ts";
 import { compatibility } from "../../web/src/compatibility.ts";
+import { perMinute as searchesPerMinute } from "../../web/src/search/bindings.ts";
 import { readerCaching } from "../../web/src/reader-caching.ts";
 import {
   REQUESTS_DATASET,
@@ -50,6 +51,17 @@ export const IntakeDatabase = Cloudflare.Hyperdrive.Connection("Intake", {
  * `namespaceId` names the limit's counters in the account.
  */
 export const proposalsLimit = { namespaceId: 1001, perMinute: 5 } as const;
+
+/**
+ * The search's rate limit (web/src/search/route.ts), by address, on prod
+ * alone: `perMinute` a minute in each Cloudflare location, counted before
+ * a search is counted against the budget, so one client can't spend it in
+ * a burst. Its counters are apart from the proposals'.
+ */
+export const searchLimit = {
+  namespaceId: 1002,
+  perMinute: searchesPerMinute,
+} as const;
 
 /**
  * The page store's namespace: each stage has its own, named after it and
@@ -113,7 +125,8 @@ export const SITE_ORIGIN = `https://${SITE_HOST}`;
  * `SEARCH` is the namespace that holds the site's index and
  * `SEARCH_INSTANCE` the index's name there; `SEARCH_BUDGET` is the Durable
  * Object that counts every search before the index is asked
- * (web/src/search/budget.ts), whose class the Worker's module exports.
+ * (web/src/search/budget.ts), whose class the Worker's module exports;
+ * `SEARCH_LIMIT` is each address's rate ({@link searchLimit}).
  */
 export const makeWeb = (
   domain?: Cloudflare.WorkerDomainConfig,
@@ -171,6 +184,10 @@ export const makeWeb = (
               SEARCH: search.namespace,
               SEARCH_INSTANCE: search.instance,
               SEARCH_BUDGET: Cloudflare.DurableObject("SearchBudget"),
+              SEARCH_LIMIT: Cloudflare.RateLimit("SEARCH_LIMIT", {
+                namespaceId: searchLimit.namespaceId,
+                simple: { limit: searchLimit.perMinute, period: 60 },
+              }),
             }),
       },
       ...(domain === undefined ? {} : { domain }),

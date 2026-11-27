@@ -3,7 +3,8 @@
  * included 1,000 semantic queries (and 1,000 full-text ones), $0.75 per
  * 1,000 more from December 1, 2026, and no spending limit on the account
  * covers it (infra/README.md, "Search for agents"). So the site answers at
- * most {@link QUERIES_IN_WINDOW} searches in any {@link WINDOW_DAYS} days,
+ * most {@link QUERIES_IN_WINDOW} searches in any {@link WINDOW_DAYS} UTC
+ * days (today and the 31 before it),
  * and past that answers 503 without asking the index: the search goes
  * unavailable rather than billing.
  *
@@ -122,7 +123,7 @@ export function secondsUntilRoom(
 export interface BudgetState {
   readonly storage: {
     get<T>(key: string): Promise<T | undefined>;
-    put<T>(key: string, value: T): Promise<void>;
+    put(key: string, value: unknown): Promise<void>;
   };
 }
 

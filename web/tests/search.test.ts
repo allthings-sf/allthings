@@ -37,7 +37,7 @@ const memory = (): BudgetState & { readonly held: Map<string, unknown> } => {
     held,
     storage: {
       get: async <T>(key: string) => held.get(key) as T | undefined,
-      put: async <T>(key: string, value: T) => {
+      put: async (key: string, value: unknown) => {
         held.set(key, structuredClone(value));
       },
     },
@@ -153,16 +153,25 @@ const passage = (key: string, score: number, text: string): Passage => ({
   text,
 });
 
-/** The route with an index that records what it was asked, and a budget of `limit`. */
+/**
+ * The route with an index that records what it was asked, a budget of
+ * `limit`, and a rate limit that lets `rate` searches through.
+ */
 const route = (
   limit = 900,
   passages: ReadonlyArray<Passage> = [
     passage("effect.md", 0.91234, "State of Effect 2026, at /effect."),
   ],
+  rate = Number.POSITIVE_INFINITY,
 ) => {
   const asked: Array<string> = [];
+  const clients: Array<string> = [];
   let taken = 0;
   const options: SearchOptions = {
+    allow: async (client) => {
+      clients.push(client);
+      return clients.length <= rate;
+    },
     origin: "https://allthings.dev",
     index: {
       search: async ({ query }) => {
@@ -175,8 +184,17 @@ const route = (
         ? { ok: true, used: ++taken, limit }
         : { ok: false, used: taken, limit, retryAfter: 7200 },
   };
-  return { asked, options, taken: () => taken };
+  return { asked, clients, options, taken: () => taken };
 };
+
+/** A QUERY body that arrives in pieces, with no length said up front. */
+const streamed = (...pieces: ReadonlyArray<Uint8Array>) =>
+  new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const piece of pieces) controller.enqueue(piece);
+      controller.close();
+    },
+  });
 
 const endpoint = `https://allthings.dev${searchPath}`;
 
@@ -287,8 +305,75 @@ describe("the search route", () => {
     expect(refused.status).toBe(503);
     expect(refused.headers.get("retry-after")).toBe("7200");
     expect(refused.headers.get("cache-control")).toBe("no-store");
-    expect(await refused.text()).toContain("at most 1 searches in any 32 days");
+    expect(await refused.text()).toContain(
+      "at most 1 searches in any 32 UTC days (today and the 31 before it)",
+    );
     expect(asked).toEqual(["one"]);
+  });
+
+  test("reads a QUERY body no further than its limit, whatever it says of its length", async () => {
+    const { asked, options, taken } = route();
+    const piece = new TextEncoder().encode("a".repeat(1_500));
+    const long = await searchRequest(
+      new Request(endpoint, {
+        method: "QUERY",
+        headers: { "content-type": "text/plain" },
+        body: streamed(piece, piece, piece),
+      }),
+      options,
+    );
+    expect(long.status).toBe(413);
+    const fits = await searchRequest(
+      new Request(endpoint, {
+        method: "QUERY",
+        headers: { "content-type": "text/plain" },
+        body: streamed(new TextEncoder().encode("effect "), piece.slice(0, 3)),
+      }),
+      options,
+    );
+    expect(fits.status).toBe(200);
+    const notUtf8 = await searchRequest(
+      new Request(endpoint, {
+        method: "QUERY",
+        headers: { "content-type": "text/plain" },
+        body: streamed(new Uint8Array([0x65, 0xff, 0x66])),
+      }),
+      options,
+    );
+    expect(notUtf8.status).toBe(400);
+    expect(taken()).toBe(1);
+    expect(asked).toEqual(["effect aaa"]);
+  });
+
+  test("answers 429 past an address's rate, before counting it or asking the index", async () => {
+    const { asked, clients, options, taken } = route(900, undefined, 1);
+    const from = (address: string) =>
+      new Request(`${endpoint}?q=effect`, {
+        headers: { "cf-connecting-ip": address },
+      });
+    expect((await searchRequest(from("192.0.2.1"), options)).status).toBe(200);
+    const limited = await searchRequest(from("192.0.2.1"), options);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(limited.headers.get("cache-control")).toBe("no-store");
+    expect(await limited.text()).toContain("10 times a minute");
+    expect(clients).toEqual(["192.0.2.1", "192.0.2.1"]);
+    expect(taken()).toBe(1);
+    expect(asked).toEqual(["effect"]);
+  });
+
+  test("answers 503 when the rate limit can't be read, before counting it", async () => {
+    const { asked, options, taken } = route();
+    const response = await searchRequest(new Request(`${endpoint}?q=effect`), {
+      ...options,
+      allow: async () => {
+        throw new Error("the limiter is unreachable");
+      },
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(taken()).toBe(0);
+    expect(asked).toEqual([]);
   });
 
   test("answers 503 when the budget can't be read, without asking the index", async () => {
@@ -361,6 +446,14 @@ describe("the search's bindings", () => {
       }),
     }),
   };
+  /** A rate limit that records the keys it was asked for, letting all through. */
+  const keys: Array<string> = [];
+  const limit = {
+    limit: async ({ key }: { readonly key: string }) => {
+      keys.push(key);
+      return { success: true };
+    },
+  };
   /** A Durable Object namespace whose one object is `budget`. */
   const objects = (budget: SearchBudget) => ({
     idFromName: (name: string) => name,
@@ -372,29 +465,31 @@ describe("the search's bindings", () => {
     }),
   });
 
-  test("are there only with the namespace, the instance and the budget", () => {
-    const budget = objects(new SearchBudget(memory()));
+  test("are there only with the namespace, the instance, the budget and the rate limit", () => {
+    const all = {
+      SEARCH: namespace,
+      SEARCH_INSTANCE: "pages",
+      SEARCH_BUDGET: objects(new SearchBudget(memory())),
+      SEARCH_LIMIT: limit,
+    };
+    expect(searchOf(all)).toBeDefined();
     expect(searchOf({})).toBeUndefined();
-    expect(
-      searchOf({ SEARCH: namespace, SEARCH_INSTANCE: "pages" }),
-    ).toBeUndefined();
-    expect(
-      searchOf({
-        SEARCH: namespace,
-        SEARCH_INSTANCE: "",
-        SEARCH_BUDGET: budget,
-      }),
-    ).toBeUndefined();
-    expect(
-      searchOf({ SEARCH_INSTANCE: "pages", SEARCH_BUDGET: budget }),
-    ).toBeUndefined();
-    expect(
-      searchOf({
-        SEARCH: namespace,
-        SEARCH_INSTANCE: "pages",
-        SEARCH_BUDGET: budget,
-      }),
-    ).toBeDefined();
+    expect(searchOf({ ...all, SEARCH_INSTANCE: "" })).toBeUndefined();
+    for (const name of Object.keys(all)) {
+      const { [name as keyof typeof all]: _left, ...rest } = all;
+      expect(searchOf(rest)).toBeUndefined();
+    }
+  });
+
+  test("limit each address by its own key", async () => {
+    const search = searchOf({
+      SEARCH: namespace,
+      SEARCH_INSTANCE: "pages",
+      SEARCH_BUDGET: objects(new SearchBudget(memory())),
+      SEARCH_LIMIT: limit,
+    });
+    expect(await search?.allow("192.0.2.7")).toBe(true);
+    expect(keys.at(-1)).toBe("search:192.0.2.7");
   });
 
   test("search the named instance, and take every search from the one object", async () => {
@@ -404,6 +499,7 @@ describe("the search's bindings", () => {
       SEARCH_BUDGET: objects(
         new SearchBudget(memory(), {}, () => at("2026-12-10"), 1),
       ),
+      SEARCH_LIMIT: limit,
     });
     expect(
       (await search?.index.search({ query: "x" }))?.chunks[0]?.item.key,
@@ -422,6 +518,7 @@ describe("the search's bindings", () => {
           fetch: async () => new Response("overloaded", { status: 503 }),
         }),
       },
+      SEARCH_LIMIT: limit,
     });
     await expect(search?.take() ?? Promise.resolve()).rejects.toThrow(
       "the search budget answered 503",
