@@ -12,6 +12,7 @@ import {
   type RequestsDataset,
 } from "../../web/src/metrics.ts";
 import { Intaker, Reader } from "./reader.ts";
+import type { makeSearch } from "./search.ts";
 import { requiredSecret } from "./sync.ts";
 
 /**
@@ -107,6 +108,12 @@ export const SITE_ORIGIN = `https://${SITE_HOST}`;
  * originals on the media origin; it has no resource of its own, and
  * transformations are billed to the account. `VARIANTS` keeps each one
  * made ({@link Variants}), so it is made once, not once per data center.
+ *
+ * `search`, on prod alone, answers `/.well-known/search` (search.ts):
+ * `SEARCH` is the namespace that holds the site's index and
+ * `SEARCH_INSTANCE` the index's name there; `SEARCH_BUDGET` is the Durable
+ * Object that counts every search before the index is asked
+ * (web/src/search/budget.ts), whose class the Worker's module exports.
  */
 export const makeWeb = (
   domain?: Cloudflare.WorkerDomainConfig,
@@ -115,6 +122,8 @@ export const makeWeb = (
   analyticsToken?: Output.Output<string>,
   /** Whether this stage takes talk proposals: prod alone ({@link IntakeDatabase}). */
   intake = false,
+  /** Prod's search (search.ts's `makeSearch`). */
+  search?: Effect.Success<typeof makeSearch>,
 ) =>
   Effect.flatMap(Effect.all([Pages, Variants]), ([pages, variants]) =>
     Cloudflare.Worker("Web", {
@@ -155,6 +164,14 @@ export const makeWeb = (
         }),
         // Prod keeps proposals, as proposal_intake (web/src/proposals.ts).
         ...(intake ? { INTAKE: IntakeDatabase } : {}),
+        // Prod searches its own pages for agents (web/src/search/).
+        ...(search === undefined
+          ? {}
+          : {
+              SEARCH: search.namespace,
+              SEARCH_INSTANCE: search.instance,
+              SEARCH_BUDGET: Cloudflare.DurableObject("SearchBudget"),
+            }),
       },
       ...(domain === undefined ? {} : { domain }),
     }),

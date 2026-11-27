@@ -19,6 +19,7 @@ import {
   variantsCheckPath,
   variantsCheckRequest,
 } from "./refresh.ts";
+import { searchOf, searchPath } from "./search/bindings.ts";
 import { withoutTrailingSlash } from "./trailing-slash.ts";
 import { siteTokenOf, withBeacon } from "./web-analytics.ts";
 import {
@@ -83,6 +84,9 @@ const pagesOf = (
     ? (pages as PageNamespace)
     : undefined;
 };
+
+/** The search's count, a Durable Object on prod (search/budget.ts). */
+export { SearchBudget } from "./search/budget.ts";
 
 /**
  * The allthings Worker. Bindings are fixed for an isolate's lifetime, so the
@@ -158,8 +162,17 @@ export default {
               ),
             };
       const noStore = () => Promise.reject(new Error("no store"));
+      // Prod alone searches (search/bindings.ts); its module loads on the
+      // first search, so a cold start parses none of it.
+      const search = searchOf(env);
+      const origin = typeof env["ORIGIN"] === "string" ? env["ORIGIN"] : "";
       handle = (incoming, incomingContext) => {
         const { pathname } = new URL(incoming.url);
+        if (pathname === searchPath && search !== undefined) {
+          return import("./search/route.ts").then(({ searchRequest }) =>
+            searchRequest(incoming, { ...search, origin }),
+          );
+        }
         if (pathname === refreshPath) {
           return refreshRequest(
             incoming,
